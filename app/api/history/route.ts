@@ -45,10 +45,10 @@ function sanitizeIncomingRecord(raw: unknown): SignalHistoryRecord | null {
     entryTriggerNote: String(r.entryTriggerNote || '').slice(0, 500),
     invalidationCondition: String(r.invalidationCondition || '').slice(0, 500),
     technicalRationale: Array.isArray(r.technicalRationale)
-      ? r.technicalRationale.slice(0, 6).map((s) => String(s).slice(0, 400))
+      ? r.technicalRationale.slice(0, 8).map((s) => String(s).slice(0, 400))
       : [],
     keyLevels: Array.isArray(r.keyLevels)
-      ? (r.keyLevels as SignalHistoryRecord['keyLevels']).slice(0, 6)
+      ? (r.keyLevels as SignalHistoryRecord['keyLevels']).slice(0, 16)
       : [],
     chartMarkup:
       r.chartMarkup && typeof r.chartMarkup === 'object'

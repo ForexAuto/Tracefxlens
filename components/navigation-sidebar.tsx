@@ -7,6 +7,8 @@ import {
   X,
   ScanLine,
   History,
+  MonitorPlay,
+  Download,
   ChevronRight,
 } from 'lucide-react';
 import {
@@ -14,9 +16,10 @@ import {
   loadLocalHistory,
 } from '@/lib/history-storage';
 import type { SignalHistoryRecord } from '@/lib/trading-data';
+import { usePWA } from '@/components/pwa-provider';
 
 interface AppHeaderWithSidebarProps {
-  activeRoute: 'analyze' | 'history';
+  activeRoute: 'analyze' | 'history' | 'tv-engine';
   rightAction?: React.ReactNode;
 }
 
@@ -55,6 +58,14 @@ export function AppHeaderWithSidebar({
     lost: 0,
     pending: 0,
   });
+
+  const {
+    isInstalled,
+    isInstallable,
+    bannerDismissed,
+    triggerInstallOrGuide,
+    dismissMobileBanner,
+  } = usePWA();
 
   const refreshStats = useCallback(() => {
     loadLocalHistory()
@@ -98,7 +109,7 @@ export function AppHeaderWithSidebar({
     <>
       {/* Sticky Top Header (< 15% Mobile Viewport Cap) */}
       <header className="sticky top-0 z-30 h-14 border-b border-slate-800/80 bg-[#090D16]/85 backdrop-blur-md">
-        <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto flex h-full max-w-6xl items-center justify-between gap-8 px-4 sm:px-6 lg:px-8">
           {/* Left Zone: Sidebar Trigger + Brand Wordmark */}
           <div className="flex items-center gap-2.5 shrink-0">
             <button
@@ -109,27 +120,27 @@ export function AppHeaderWithSidebar({
               }}
               aria-label="Open navigation sidebar"
               aria-expanded={sidebarOpen}
-              className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-200 hover:border-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-200 hover:border-slate-700 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
             >
               <PanelLeft className="h-4 w-4 text-sky-400" />
             </button>
 
             <Link
               href="/"
-              className="font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-white whitespace-nowrap"
+              className="font-[family-name:var(--font-display)] text-lg font-bold tracking-tight text-white whitespace-nowrap shrink-0"
             >
               TraceFX Lens
             </Link>
           </div>
 
-          {/* Center Zone: Clean Unboxed Desktop Route Links */}
+          {/* Center Zone: Clean Unboxed Desktop Route Links (4 single-line items max) */}
           <nav
             aria-label="Primary navigation"
             className="hidden md:flex items-center gap-7 text-xs font-medium"
           >
             <Link
               href="/"
-              className={`py-1 transition-colors border-b-2 ${
+              className={`py-1 transition-colors border-b-2 whitespace-nowrap shrink-0 ${
                 activeRoute === 'analyze'
                   ? 'border-sky-400 text-white'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -139,7 +150,7 @@ export function AppHeaderWithSidebar({
             </Link>
             <Link
               href="/history"
-              className={`flex items-center gap-1.5 py-1 transition-colors border-b-2 ${
+              className={`flex items-center gap-1.5 py-1 transition-colors border-b-2 whitespace-nowrap shrink-0 ${
                 activeRoute === 'history'
                   ? 'border-sky-400 text-white'
                   : 'border-transparent text-slate-400 hover:text-slate-200'
@@ -152,12 +163,60 @@ export function AppHeaderWithSidebar({
                 </span>
               )}
             </Link>
+            <Link
+              href="/tv-engine"
+              className={`py-1 transition-colors border-b-2 whitespace-nowrap shrink-0 ${
+                activeRoute === 'tv-engine'
+                  ? 'border-sky-400 text-white'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              TradingView Engine
+            </Link>
+            {!isInstalled && (
+              <button
+                type="button"
+                onClick={() => void triggerInstallOrGuide()}
+                className="py-1 text-sky-400 hover:text-sky-300 transition-colors border-b-2 border-transparent hover:border-sky-400/50 whitespace-nowrap shrink-0"
+              >
+                Install App
+              </button>
+            )}
           </nav>
 
           {/* Right Zone: Contextual Page Action */}
           <div className="flex items-center shrink-0">{rightAction}</div>
         </div>
       </header>
+
+      {/* Non-Sticky Mobile Install Strip (0% sticky height impact; auto-hidden when installed or dismissed) */}
+      {!isInstalled && !bannerDismissed && (
+        <div className="md:hidden border-b border-slate-800/80 bg-[#0E1422] px-4 py-2">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-2">
+            <span className="truncate text-xs text-slate-300">
+              Install TraceFX on your phone home screen
+            </span>
+            <div className="flex items-center gap-1 shrink-0">
+              <button
+                type="button"
+                onClick={() => void triggerInstallOrGuide()}
+                className="flex min-h-[40px] items-center gap-1.5 rounded-lg bg-sky-500/15 border border-sky-500/35 px-3 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500/25 whitespace-nowrap"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Install</span>
+              </button>
+              <button
+                type="button"
+                onClick={dismissMobileBanner}
+                aria-label="Dismiss install prompt"
+                className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg text-slate-500 hover:text-slate-300"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Instant Navigation Sidebar Drawer */}
       {sidebarOpen && (
@@ -188,7 +247,7 @@ export function AppHeaderWithSidebar({
                   type="button"
                   onClick={() => setSidebarOpen(false)}
                   aria-label="Close navigation sidebar"
-                  className="flex min-h-[40px] min-w-[40px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -277,6 +336,69 @@ export function AppHeaderWithSidebar({
                       }`}
                     />
                   </Link>
+
+                <Link
+                  href="/tv-engine"
+                  onClick={() => setSidebarOpen(false)}
+                  className={`group flex min-h-[52px] items-center justify-between rounded-xl border px-3.5 py-2.5 ${
+                    activeRoute === 'tv-engine'
+                      ? 'border-sky-500/35 bg-sky-500/10 text-white'
+                      : 'border-transparent bg-transparent text-slate-300 hover:border-slate-800/90 hover:bg-[#111726] hover:text-white'
+                  }`}
+                >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div
+                        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
+                          activeRoute === 'tv-engine'
+                            ? 'border-sky-500/40 bg-sky-500/15 text-sky-400'
+                            : 'border-slate-800 bg-[#111726] text-slate-400 group-hover:text-sky-400'
+                        }`}
+                      >
+                        <MonitorPlay className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">
+                          TradingView Engine
+                        </div>
+                        <div className="truncate text-xs text-slate-400">
+                          Live Playwright AI browser control
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight
+                      className={`h-4 w-4 shrink-0 ${
+                        activeRoute === 'tv-engine'
+                          ? 'text-sky-400'
+                          : 'text-slate-600 group-hover:text-slate-400'
+                      }`}
+                    />
+                  </Link>
+
+                {!isInstalled && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarOpen(false);
+                      void triggerInstallOrGuide();
+                    }}
+                    className="group flex w-full min-h-[52px] items-center justify-between rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2.5 text-left text-white hover:bg-sky-500/15 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-sky-500/40 bg-sky-500/20 text-sky-300">
+                        <Download className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold">Install App</div>
+                        <div className="truncate text-xs text-sky-200/80">
+                          {isInstallable
+                            ? 'Ready for one-tap install'
+                            : 'OPPO, Android & iOS setup'}
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 shrink-0 text-sky-400" />
+                  </button>
+                )}
                 </div>
               </div>
 

@@ -20,6 +20,7 @@ import {
   SignalType,
   TradingSignalResponse,
 } from '@/lib/trading-data';
+import { getStructureLayerCounts } from '@/lib/chart-markup';
 import { AnalysisProgress } from '@/components/analysis-progress';
 
 interface SignalResultProps {
@@ -100,6 +101,12 @@ export function SignalResult({
 }: SignalResultProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
+  const [showAllLevels, setShowAllLevels] = useState<boolean>(false);
+
+  const structureCounts = useMemo(
+    () => getStructureLayerCounts(signal),
+    [signal]
+  );
 
   const handleCopyValue = async (key: string, text: string) => {
     try {
@@ -585,30 +592,90 @@ export function SignalResult({
           </ul>
         </div>
 
-        {signal.keyLevels.length > 0 && (
+        {(signal.keyLevels.length > 0 || structureCounts.total > 0) && (
           <div className="border-t border-slate-800/70 pt-4">
-            <h3 className="mb-2.5 text-xs font-semibold text-slate-300">
-              Observed Structure Zones
-            </h3>
-            <div className="divide-y divide-slate-800/60">
-              {signal.keyLevels.map((lvl, idx) => (
-                <div
-                  key={idx}
-                  className="flex items-center justify-between py-2 text-xs"
-                >
-                  <div className="min-w-0 pr-3">
-                    <span className="text-slate-200">{lvl.label}</span>
-                    <span className="mx-1.5 text-slate-600" aria-hidden="true">
-                      ·
-                    </span>
-                    <span className="text-slate-500">{lvl.role}</span>
-                  </div>
-                  <span className="font-[family-name:var(--font-mono)] font-medium text-slate-200 tabular-nums shrink-0">
-                    {lvl.price}
-                  </span>
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-slate-300">
+                Mapped Market Structure &amp; SMC Zones
+              </h3>
+              {structureCounts.total > 0 && (
+                <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-slate-400 tabular-nums">
+                  {structureCounts.zones > 0 && (
+                    <span>{structureCounts.zones} Zones/OB</span>
+                  )}
+                  {structureCounts.fvg > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{structureCounts.fvg} FVG</span>
+                    </>
+                  )}
+                  {structureCounts.bosSwings > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{structureCounts.bosSwings} BOS/Swings</span>
+                    </>
+                  )}
+                  {structureCounts.liquidity > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{structureCounts.liquidity} Liquidity</span>
+                    </>
+                  )}
+                  {structureCounts.trendlines > 0 && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span>{structureCounts.trendlines} Trend</span>
+                    </>
+                  )}
                 </div>
-              ))}
+              )}
             </div>
+
+            {signal.keyLevels.length > 0 && (
+              <>
+                <div className="divide-y divide-slate-800/60">
+                  {(showAllLevels
+                    ? signal.keyLevels
+                    : signal.keyLevels.slice(0, 6)
+                  ).map((lvl, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-center justify-between py-2 text-xs"
+                    >
+                      <div className="min-w-0 pr-3">
+                        <span className="text-slate-200">{lvl.label}</span>
+                        <span className="mx-1.5 text-slate-600" aria-hidden="true">
+                          ·
+                        </span>
+                        <span className="text-slate-500">{lvl.role}</span>
+                      </div>
+                      <span className="font-[family-name:var(--font-mono)] font-medium text-slate-200 tabular-nums shrink-0">
+                        {lvl.price}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {signal.keyLevels.length > 6 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowAllLevels((prev) => !prev)}
+                    className="mt-2 inline-flex min-h-[36px] items-center gap-1 text-xs font-medium text-sky-400 transition-colors hover:text-sky-300 whitespace-nowrap"
+                  >
+                    <span>
+                      {showAllLevels
+                        ? 'Show fewer levels'
+                        : `Show all ${signal.keyLevels.length} mapped levels`}
+                    </span>
+                    <ChevronDown
+                      className={`h-3.5 w-3.5 transition-transform duration-150 ${
+                        showAllLevels ? 'rotate-180' : ''
+                      }`}
+                    />
+                  </button>
+                )}
+              </>
+            )}
           </div>
         )}
 

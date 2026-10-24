@@ -1,22 +1,83 @@
 import type {
+  ChartMarkupLiquidity,
   ChartMarkupSwing,
   ChartMarkupTrendline,
+  ChartMarkupZone,
   SignalType,
   TradingSignalResponse,
 } from '@/lib/trading-data';
 
-export type MarkupLayerFilter = 'all' | 'setup' | 'structure';
+export type MarkupLayerFilter = 'primary' | 'all' | 'setup' | 'structure';
+
+export type StructureSubLayer =
+  | 'all'
+  | 'zones'
+  | 'fvg'
+  | 'bos_swings'
+  | 'liquidity'
+  | 'trendlines';
+
+export interface StructureLayerCounts {
+  total: number;
+  zones: number;
+  fvg: number;
+  bosSwings: number;
+  liquidity: number;
+  trendlines: number;
+}
 
 export interface ResolvedZoneRect {
   id: string;
   label: string;
-  role: 'Support' | 'Resistance' | 'Supply Zone' | 'Demand Zone' | 'Liquidity';
+  role: ChartMarkupZone['role'];
   tone: 'bullish' | 'bearish' | 'neutral';
+  isOrderBlock: boolean;
+  mitigated: boolean;
+  isPrimary: boolean;
   x: number;
   width: number;
   topY: number;
   height: number;
   priceText: string;
+}
+
+export interface ResolvedFvgRect {
+  id: string;
+  label: string;
+  tone: 'bullish' | 'bearish';
+  mitigated: boolean;
+  isPrimary: boolean;
+  x: number;
+  width: number;
+  topY: number;
+  height: number;
+  midY: number;
+  priceText: string;
+}
+
+export interface ResolvedStructureBreak {
+  id: string;
+  kind: 'BOS' | 'CHoCH';
+  label: string;
+  tone: 'bullish' | 'bearish';
+  x1: number;
+  x2: number;
+  y: number;
+  priceText: string;
+  isPrimary: boolean;
+}
+
+export interface ResolvedLiquidityLine {
+  id: string;
+  kind: ChartMarkupLiquidity['kind'];
+  label: string;
+  tone: 'bullish' | 'bearish' | 'neutral';
+  x1: number;
+  x2: number;
+  y: number;
+  priceText: string;
+  swept: boolean;
+  isPrimary: boolean;
 }
 
 export interface ResolvedLevelLine {
@@ -68,6 +129,9 @@ export interface ResolvedChartMarkup {
   };
   stampAnchor: 'bottom-left' | 'top-right';
   zones: ResolvedZoneRect[];
+  fairValueGaps: ResolvedFvgRect[];
+  structureBreaks: ResolvedStructureBreak[];
+  liquidityLevels: ResolvedLiquidityLine[];
   trendlines: ChartMarkupTrendline[];
   swings: ChartMarkupSwing[];
   positionBox: ResolvedPositionBox | null;
@@ -103,9 +167,44 @@ function clamp(val: number, min: number, max: number): number {
 
 export function parseChartPrice(raw?: string | null): number | null {
   if (!raw) return null;
-  const cleaned = String(raw).replace(/[^0-9.-]/g, '');
+  const firstPart = String(raw).split(/[–—-]/)[0] || String(raw);
+  const cleaned = firstPart.replace(/[^0-9.]/g, '');
   const parsed = Number.parseFloat(cleaned);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function getStructureLayerCounts(
+  signal: TradingSignalResponse | null | undefined
+): StructureLayerCounts {
+  if (!signal || !signal.isValidChart) {
+    return {
+      total: 0,
+      zones: 0,
+      fvg: 0,
+      bosSwings: 0,
+      liquidity: 0,
+      trendlines: 0,
+    };
+  }
+  const m = signal.chartMarkup;
+  const zones =
+    m?.zones && m.zones.length > 0
+      ? m.zones.length
+      : Math.min(6, signal.keyLevels?.length ?? 0);
+  const fvg = m?.fairValueGaps?.length ?? 0;
+  const bosSwings =
+    (m?.structureBreaks?.length ?? 0) + (m?.swings?.length ?? 0);
+  const liquidity = m?.liquidityLevels?.length ?? 0;
+  const trendlines = m?.trendlines?.length ?? 0;
+
+  return {
+    total: zones + fvg + bosSwings + liquidity + trendlines,
+    zones,
+    fvg,
+    bosSwings,
+    liquidity,
+    trendlines,
+  };
 }
 
 function isBullishSignal(signalType: SignalType): boolean {
@@ -114,8 +213,22 @@ function isBullishSignal(signalType: SignalType): boolean {
 
 function getZoneTone(role: string): 'bullish' | 'bearish' | 'neutral' {
   const lower = role.toLowerCase();
-  if (lower.includes('demand') || lower.includes('support')) return 'bullish';
-  if (lower.includes('supply') || lower.includes('resistance')) return 'bearish';
+  if (
+    lower.includes('demand') ||
+    lower.includes('support') ||
+    lower.includes('bullish ob') ||
+    lower.includes('bull ob')
+  ) {
+    return 'bullish';
+  }
+  if (
+    lower.includes('supply') ||
+    lower.includes('resistance') ||
+    lower.includes('bearish ob') ||
+    lower.includes('bear ob')
+  ) {
+    return 'bearish';
+  }
   return 'neutral';
 }
 
@@ -890,23 +1003,29 @@ export function computeResolvedChartMarkup(
   const tp2Y = tp2Mapped.y;
   const tp3Y = tp3Mapped.y;
 
-  // Resolve Supply / Demand / Liquidity Zones directly on true calibrated scale
+  // Resolve Supply / Demand / S&R / Order Block Zones across full left-to-right chart
   const resolvedZones: ResolvedZoneRect[] = [];
-  if (rawMarkup?.zones && rawMarkup.zones.length > 0) {
-    rawMarkup.zones.slice(0, 3).forEach((z, idx) => {
+  const rawZones = rawMarkup?.zones ?? [];
+  const rawFvgs = rawMarkup?.fairValueGaps ?? [];
+  const anyExplicitPrimaryZone =
+    rawZones.some((z) => Boolean(z.isPrimary)) ||
+    rawFvgs.some((f) => Boolean(f.isPrimary));
+
+  if (rawZones.length > 0) {
+    rawZones.slice(0, 12).forEach((z, idx) => {
       const topPriceNum = parseChartPrice(z.topPrice);
       const botPriceNum = parseChartPrice(z.bottomPrice);
 
       let zTop =
         topPriceNum !== null
-          ? clamp(rawPriceToY(topPriceNum), topY + 6, bottomY - 18)
-          : clamp(Number(z.topY ?? 450), topY + 8, bottomY - 26);
+          ? clamp(rawPriceToY(topPriceNum), topY + 6, bottomY - 16)
+          : clamp(Number(z.topY ?? 450), topY + 8, bottomY - 24);
       let zBot =
         botPriceNum !== null
           ? clamp(rawPriceToY(botPriceNum), topY + 14, bottomY - 6)
           : topPriceNum !== null
-          ? clamp(zTop + 24, topY + 18, bottomY - 6)
-          : clamp(Number(z.bottomY ?? zTop + 28), topY + 18, bottomY - 6);
+          ? clamp(zTop + 20, topY + 16, bottomY - 6)
+          : clamp(Number(z.bottomY ?? zTop + 26), topY + 16, bottomY - 6);
 
       if (zTop > zBot) {
         const tmp = zTop;
@@ -914,42 +1033,64 @@ export function computeResolvedChartMarkup(
         zBot = tmp;
       }
 
-      const height = clamp(zBot - zTop, 14, 78);
+      const height = clamp(zBot - zTop, 12, 72);
       const startX = clamp(
-        Number(z.startX ?? leftX + 140),
-        leftX + 8,
-        Math.max(leftX + 60, lastCandleX - 35)
+        Number(z.startX ?? leftX + 60),
+        leftX + 6,
+        Math.max(leftX + 50, lastCandleX - 28)
       );
+      const rawEndX = Number(z.endX);
+      const effectiveEndX =
+        z.mitigated && Number.isFinite(rawEndX) && rawEndX > startX + 35
+          ? clamp(rawEndX, startX + 45, rightX)
+          : rightX;
+
+      const isOrderBlock =
+        z.role === 'Bullish OB' ||
+        z.role === 'Bearish OB' ||
+        z.label.toLowerCase().includes('ob') ||
+        z.label.toLowerCase().includes('order block');
+
       resolvedZones.push({
         id: `zone-${idx}`,
         label: z.label || z.role,
         role: z.role,
         tone: getZoneTone(z.role),
+        isOrderBlock,
+        mitigated: Boolean(z.mitigated),
+        isPrimary: anyExplicitPrimaryZone ? Boolean(z.isPrimary) : idx === 0,
         x: startX,
-        width: Math.max(80, rightX - startX),
-        topY: clamp(zTop, topY + 6, bottomY - height - 6),
+        width: Math.max(55, effectiveEndX - startX),
+        topY: clamp(zTop, topY + 5, bottomY - height - 5),
         height,
         priceText: z.topPrice || z.bottomPrice || '',
       });
     });
   } else if (signal.keyLevels.length > 0) {
-    signal.keyLevels.slice(0, 3).forEach((lvl, idx) => {
+    signal.keyLevels.slice(0, 8).forEach((lvl, idx) => {
       const pNum = parseChartPrice(lvl.price);
       if (pNum === null) return;
       const centerY = clamp(rawPriceToY(pNum), topY + 16, bottomY - 16);
-      const height = 22;
+      const height = 20;
       const startX = clamp(
-        leftX + 160 + idx * 55,
-        leftX + 20,
+        leftX + 80 + (idx % 4) * 55,
+        leftX + 12,
         Math.max(leftX + 60, lastCandleX - 40)
       );
+      const role: ChartMarkupZone['role'] =
+        lvl.role === 'Fair Value Gap' || lvl.role === 'Structure Break'
+          ? 'Support'
+          : lvl.role;
       resolvedZones.push({
         id: `fallback-zone-${idx}`,
         label: lvl.label,
-        role: lvl.role,
+        role,
         tone: getZoneTone(lvl.role),
+        isOrderBlock: role === 'Bullish OB' || role === 'Bearish OB',
+        mitigated: false,
+        isPrimary: idx === 0,
         x: startX,
-        width: Math.max(80, rightX - startX),
+        width: Math.max(70, rightX - startX),
         topY: clamp(centerY - height / 2, topY + 6, bottomY - height - 6),
         height,
         priceText: lvl.price,
@@ -957,9 +1098,167 @@ export function computeResolvedChartMarkup(
     });
   }
 
-  // Snap Trendlines & BOS/CHoCH directly onto real candle wick tips
+  // Resolve Fair Value Gaps (FVG / Imbalances) with 50% Consequent Encroachment midline
+  const fairValueGaps: ResolvedFvgRect[] = rawFvgs
+    .slice(0, 8)
+    .map((f, idx): ResolvedFvgRect => {
+      const topP = parseChartPrice(f.topPrice);
+      const botP = parseChartPrice(f.bottomPrice);
+
+      let fTop =
+        topP !== null
+          ? clamp(rawPriceToY(topP), topY + 6, bottomY - 16)
+          : clamp(Number(f.topY ?? 460), topY + 8, bottomY - 22);
+      let fBot =
+        botP !== null
+          ? clamp(rawPriceToY(botP), topY + 14, bottomY - 6)
+          : topP !== null
+          ? clamp(fTop + 18, topY + 16, bottomY - 6)
+          : clamp(Number(f.bottomY ?? fTop + 22), topY + 16, bottomY - 6);
+
+      if (fTop > fBot) {
+        const tmp = fTop;
+        fTop = fBot;
+        fBot = tmp;
+      }
+
+      const height = clamp(fBot - fTop, 11, 64);
+      const startX = clamp(
+        Number(f.startX ?? leftX + 120),
+        leftX + 8,
+        Math.max(leftX + 50, lastCandleX - 22)
+      );
+      const rawEndX = Number(f.endX);
+      const effectiveEndX =
+        f.mitigated && Number.isFinite(rawEndX) && rawEndX > startX + 30
+          ? clamp(rawEndX, startX + 38, rightX)
+          : rightX;
+
+      const clampedTop = clamp(fTop, topY + 5, bottomY - height - 5);
+      return {
+        id: `fvg-${idx}`,
+        label: f.label || (f.tone === 'bearish' ? 'Bearish FVG' : 'Bullish FVG'),
+        tone: f.tone === 'bearish' ? 'bearish' : 'bullish',
+        mitigated: Boolean(f.mitigated),
+        isPrimary: Boolean(f.isPrimary),
+        x: startX,
+        width: Math.max(45, effectiveEndX - startX),
+        topY: clampedTop,
+        height,
+        midY: clampedTop + height / 2,
+        priceText: f.topPrice || f.bottomPrice || '',
+      };
+    });
+
+  // Resolve Horizontal BOS & CHoCH Market Structure Breaks (snapped to origin swing wick)
+  const rawBreaks = rawMarkup?.structureBreaks ?? [];
+  const anyExplicitPrimaryBreak = rawBreaks.some((b) => Boolean(b.isPrimary));
+  const structureBreaks: ResolvedStructureBreak[] = rawBreaks
+    .slice(0, 10)
+    .map((sb, idx): ResolvedStructureBreak => {
+      const pNum = parseChartPrice(sb.price);
+      let y =
+        pNum !== null
+          ? clamp(rawPriceToY(pNum), topY + 10, bottomY - 10)
+          : clamp(Number(sb.y ?? 450), topY + 10, bottomY - 10);
+
+      let x1 = clamp(Number(sb.startX ?? leftX + 80), leftX + 8, lastCandleX - 24);
+      let x2 = clamp(
+        Number(sb.endX ?? x1 + 140),
+        x1 + 32,
+        Math.min(rightX - 8, lastCandleX + 18)
+      );
+
+      if (pixelGeo) {
+        const wickSnap = pixelGeo.snapToCandleWick(
+          x1,
+          y,
+          sb.tone === 'bullish' ? 'high' : 'low',
+          40,
+          pNum !== null ? 24 : 75
+        );
+        if (wickSnap) {
+          x1 = clamp(wickSnap.x, leftX + 8, lastCandleX - 20);
+          if (pNum === null || Math.abs(wickSnap.y - y) <= 20) {
+            y = wickSnap.y;
+          }
+          x2 = Math.max(x2, x1 + 36);
+        }
+      }
+
+      return {
+        id: `sb-${idx}`,
+        kind: sb.kind === 'CHoCH' ? 'CHoCH' : 'BOS',
+        label: sb.label || sb.kind,
+        tone: sb.tone === 'bearish' ? 'bearish' : 'bullish',
+        x1,
+        x2,
+        y,
+        priceText: sb.price || '',
+        isPrimary: anyExplicitPrimaryBreak
+          ? Boolean(sb.isPrimary)
+          : idx === rawBreaks.length - 1,
+      };
+    });
+
+  // Resolve Liquidity Pools & Sweeps (EQH, EQL, BSL, SSL, Sweep)
+  const liquidityLevels: ResolvedLiquidityLine[] = (
+    rawMarkup?.liquidityLevels ?? []
+  )
+    .slice(0, 8)
+    .map((lq, idx): ResolvedLiquidityLine => {
+      const pNum = parseChartPrice(lq.price);
+      let y =
+        pNum !== null
+          ? clamp(rawPriceToY(pNum), topY + 8, bottomY - 8)
+          : clamp(Number(lq.y ?? 350), topY + 8, bottomY - 8);
+
+      let x1 = clamp(Number(lq.startX ?? leftX + 70), leftX + 8, lastCandleX - 20);
+      let x2 = clamp(
+        Number(lq.endX ?? lastCandleX),
+        x1 + 36,
+        rightX - 6
+      );
+
+      const isUpperLiq =
+        lq.kind === 'EQH' ||
+        lq.kind === 'BSL' ||
+        (lq.kind === 'Sweep' && lq.tone === 'bearish');
+
+      if (pixelGeo) {
+        const snap = pixelGeo.snapToCandleWick(
+          x1,
+          y,
+          isUpperLiq ? 'high' : 'low',
+          42,
+          pNum !== null ? 22 : 70
+        );
+        if (snap) {
+          x1 = clamp(snap.x, leftX + 8, lastCandleX - 18);
+          if (pNum === null || Math.abs(snap.y - y) <= 18) {
+            y = snap.y;
+          }
+          x2 = Math.max(x2, x1 + 36);
+        }
+      }
+
+      return {
+        id: `liq-${idx}`,
+        kind: lq.kind,
+        label: lq.label || lq.kind,
+        tone: lq.tone,
+        x1,
+        x2,
+        y,
+        priceText: lq.price || '',
+        swept: Boolean(lq.swept || lq.kind === 'Sweep'),
+        isPrimary: Boolean(lq.isPrimary),
+      };
+    });
+
+  // Snap Trendlines & Parallel Price Channels onto real candle wick tips
   const trendlines: ChartMarkupTrendline[] = (rawMarkup?.trendlines || [])
-    .slice(0, 3)
+    .slice(0, 6)
     .map((tl): ChartMarkupTrendline => {
       let x1 = clamp(Number(tl.x1 ?? leftX + 80), leftX + 8, rightX - 20);
       let y1 = clamp(Number(tl.y1 ?? 500), topY + 10, bottomY - 10);
@@ -967,16 +1266,16 @@ export function computeResolvedChartMarkup(
       let y2 = clamp(Number(tl.y2 ?? 460), topY + 10, bottomY - 10);
       const tone: 'bullish' | 'bearish' | 'neutral' =
         tl.tone === 'bullish' || tl.tone === 'bearish' ? tl.tone : 'neutral';
-      const isHorizontalStruct = Math.abs(y2 - y1) <= 18;
+      const isHorizontalStruct = Math.abs(y2 - y1) <= 16;
 
       if (pixelGeo) {
         const wickMode: 'high' | 'low' | 'nearest' =
-          tone === 'bearish'
+          tl.role === 'Channel Upper' || tone === 'bearish'
             ? 'high'
-            : tone === 'bullish'
+            : tl.role === 'Channel Lower' || tone === 'bullish'
             ? 'low'
             : 'nearest';
-        const snap1 = pixelGeo.snapToCandleWick(x1, y1, wickMode, 56, 115);
+        const snap1 = pixelGeo.snapToCandleWick(x1, y1, wickMode, 52, 105);
         if (snap1) {
           x1 = snap1.x;
           y1 = snap1.y;
@@ -989,13 +1288,12 @@ export function computeResolvedChartMarkup(
             Math.min(x2, lastCandleX),
             y2,
             wickMode,
-            48,
-            105
+            46,
+            95
           );
-          if (snap2 && Math.abs(snap2.x - x1) >= 45) {
-            // Extend ray cleanly to latest candle along exact wick-to-wick slope
+          if (snap2 && Math.abs(snap2.x - x1) >= 42) {
             const slope = (snap2.y - y1) / (snap2.x - x1);
-            const targetX2 = clamp(Math.max(snap2.x, lastCandleX), x1 + 45, rightX - 8);
+            const targetX2 = clamp(Math.max(snap2.x, lastCandleX), x1 + 42, rightX - 8);
             const projectedY2 = y1 + slope * (targetX2 - x1);
             if (projectedY2 >= topY + 8 && projectedY2 <= bottomY - 8) {
               x2 = targetX2;
@@ -1010,48 +1308,69 @@ export function computeResolvedChartMarkup(
 
       return {
         label: String(tl.label || ''),
+        role: tl.role,
         x1,
         y1,
         x2,
         y2,
         style: tl.style === 'dashed' ? 'dashed' : 'solid',
         tone,
+        isPrimary: Boolean(tl.isPrimary),
       };
     })
-    .filter((tl) => Math.hypot(tl.x2 - tl.x1, tl.y2 - tl.y1) >= 42);
+    .filter((tl) => Math.hypot(tl.x2 - tl.x1, tl.y2 - tl.y1) >= 40);
 
-  // Snap Swing Structure Pivot Tags (HH, HL, LH, LL, Sweep) onto exact local candle wick tips
-  const swings: ChartMarkupSwing[] = (rawMarkup?.swings || [])
-    .slice(0, 5)
-    .map((sw): ChartMarkupSwing => {
-      const position: 'above' | 'below' =
-        sw.position === 'below' ? 'below' : 'above';
-      let x = clamp(Number(sw.x ?? 450), leftX + 20, lastCandleX + 4);
-      let y = clamp(Number(sw.y ?? 450), topY + 22, bottomY - 22);
+  // Snap Full Left-to-Right Swing Structure Pivot Tags (HH, HL, LH, LL, EH, EL, Sweep)
+  const rawSwings = (rawMarkup?.swings || []).slice(0, 18);
+  const candidateSwings: ChartMarkupSwing[] = rawSwings.map((sw): ChartMarkupSwing => {
+    const position: 'above' | 'below' =
+      sw.position === 'below' ? 'below' : 'above';
+    const pNum = parseChartPrice(sw.price);
+    let x = clamp(Number(sw.x ?? 450), leftX + 12, lastCandleX + 6);
+    let y =
+      pNum !== null
+        ? clamp(rawPriceToY(pNum), topY + 18, bottomY - 18)
+        : clamp(Number(sw.y ?? 450), topY + 18, bottomY - 18);
 
-      if (pixelGeo) {
-        const snapped = pixelGeo.snapToCandleWick(
-          x,
-          y,
-          position === 'above' ? 'high' : 'low',
-          46,
-          100
-        );
-        if (snapped) {
-          x = clamp(snapped.x, leftX + 16, rightX - 16);
-          y = clamp(snapped.y, topY + 20, bottomY - 20);
-        }
-      }
-
-      return {
-        tag: String(sw.tag || 'Pivot').slice(0, 8),
+    if (pixelGeo) {
+      const snapped = pixelGeo.snapToCandleWick(
         x,
         y,
-        position,
-        tone:
-          sw.tone === 'bullish' || sw.tone === 'bearish' ? sw.tone : 'neutral',
-      };
-    });
+        position === 'above' ? 'high' : 'low',
+        40,
+        pNum !== null ? 55 : 95
+      );
+      if (snapped) {
+        x = clamp(snapped.x, leftX + 12, rightX - 14);
+        y = clamp(snapped.y, topY + 16, bottomY - 16);
+      }
+    }
+
+    return {
+      tag: String(sw.tag || 'Pivot').slice(0, 8),
+      x,
+      y,
+      position,
+      tone:
+        sw.tone === 'bullish' || sw.tone === 'bearish' ? sw.tone : 'neutral',
+      price: sw.price,
+      isPrimary: Boolean(sw.isPrimary),
+    };
+  });
+
+  // Deduplicate swings that snapped onto the exact same candle wick side
+  const swings: ChartMarkupSwing[] = [];
+  for (const sw of candidateSwings) {
+    const duplicate = swings.some(
+      (existing) =>
+        existing.position === sw.position &&
+        Math.abs(existing.x - sw.x) < 15 &&
+        Math.abs(existing.y - sw.y) < 18
+    );
+    if (!duplicate) {
+      swings.push(sw);
+    }
+  }
 
   // Position Box anchored directly on latest candle X extending into future space up to rightX
   const posStartX = Math.min(lastCandleX, rightX - 36);
@@ -1219,6 +1538,9 @@ export function computeResolvedChartMarkup(
     anchorPoint: { x: lastCandleX, y: currentY },
     stampAnchor: pixelGeo?.stampAnchor ?? 'bottom-left',
     zones: resolvedZones,
+    fairValueGaps,
+    structureBreaks,
+    liquidityLevels,
     trendlines,
     swings,
     positionBox,
@@ -1270,14 +1592,31 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
+interface PlacedLabelBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function boxesOverlap(a: PlacedLabelBox, b: PlacedLabelBox, pad = 3): boolean {
+  return !(
+    a.x + a.w + pad <= b.x ||
+    b.x + b.w + pad <= a.x ||
+    a.y + a.h + pad <= b.y ||
+    b.y + b.h + pad <= a.y
+  );
+}
+
 export interface RenderMarkedChartOptions {
   layerFilter?: MarkupLayerFilter;
+  subLayer?: StructureSubLayer;
   includeStamp?: boolean;
 }
 
 /**
- * Single unified high-DPI Canvas renderer shared by both live in-app preview,
- * fullscreen lightbox, and exported PNG so visual alignment is 100% identical.
+ * Single unified high-DPI Canvas renderer shared by live in-app preview,
+ * fullscreen lightbox, History inspector, and exported PNG.
  */
 export function renderMarkedChartToCanvas(
   canvas: HTMLCanvasElement,
@@ -1285,7 +1624,11 @@ export function renderMarkedChartToCanvas(
   signal: TradingSignalResponse,
   options: RenderMarkedChartOptions = {}
 ): void {
-  const { layerFilter = 'all', includeStamp = false } = options;
+  const {
+    layerFilter = 'primary',
+    subLayer = 'all',
+    includeStamp = false,
+  } = options;
 
   const natW = img.naturalWidth || img.width || 1280;
   const natH = img.naturalHeight || img.height || 800;
@@ -1312,189 +1655,536 @@ export function renderMarkedChartToCanvas(
   const sy = (ny: number) => (ny / 1000) * H;
   const unit = Math.max(1.05, Math.min(W, H) / 960);
 
-  const showStructure = layerFilter === 'all' || layerFilter === 'structure';
-  const showSetup = layerFilter === 'all' || layerFilter === 'setup';
+  const isPrimaryOnly = layerFilter === 'primary';
+  const showSetup =
+    layerFilter === 'primary' || layerFilter === 'all' || layerFilter === 'setup';
+  const showAnyStructure =
+    layerFilter === 'primary' || layerFilter === 'all' || layerFilter === 'structure';
+
+  const activeSub: StructureSubLayer = isPrimaryOnly ? 'all' : subLayer;
+  const allowZones = activeSub === 'all' || activeSub === 'zones';
+  const allowFvg = activeSub === 'all' || activeSub === 'fvg';
+  const allowBosSwings = activeSub === 'all' || activeSub === 'bos_swings';
+  const allowLiquidity = activeSub === 'all' || activeSub === 'liquidity';
+  const allowTrendlines = activeSub === 'all' || activeSub === 'trendlines';
+
   const light = markup.isLightBg;
+  const plotLeftPx = sx(markup.plotBox.leftX) + 4 * unit;
+  const plotRightPx = sx(markup.plotBox.rightX) - 4 * unit;
+  const plotTopPx = sy(markup.plotBox.topY) + 4 * unit;
+  const plotBottomPx = sy(markup.plotBox.bottomY) - 4 * unit;
 
-  // 1. Supply / Demand / Liquidity Zones
-  if (showStructure) {
-    for (const z of markup.zones) {
-      const zx = sx(z.x);
-      const zy = sy(z.topY);
-      const zw = sx(z.width);
-      const zh = Math.max(12 * unit, sy(z.height));
+  // 2D Anti-Collision Label Tracker (pre-reserve right-edge execution pills so structure labels never collide)
+  const placedLabels: PlacedLabelBox[] = [];
 
-      ctx.save();
-      ctx.fillStyle =
-        z.tone === 'bullish'
-          ? light
-            ? 'rgba(16, 185, 129, 0.15)'
-            : 'rgba(16, 185, 129, 0.17)'
-          : z.tone === 'bearish'
-          ? light
-            ? 'rgba(244, 63, 94, 0.14)'
-            : 'rgba(244, 63, 94, 0.17)'
-          : 'rgba(245, 158, 11, 0.15)';
-      ctx.fillRect(zx, zy, zw, zh);
+  const placeLabelBox = (
+    prefX: number,
+    prefY: number,
+    w: number,
+    h: number,
+    offsets: Array<[number, number]> = [
+      [0, 0],
+      [34 * unit, 0],
+      [72 * unit, 0],
+      [0, -15 * unit],
+      [0, 15 * unit],
+      [-36 * unit, 0],
+    ]
+  ): { x: number; y: number } => {
+    for (const [dx, dy] of offsets) {
+      const cx = clamp(prefX + dx, plotLeftPx, Math.max(plotLeftPx, plotRightPx - w));
+      const cy = clamp(prefY + dy, plotTopPx, Math.max(plotTopPx, plotBottomPx - h));
+      const candidate: PlacedLabelBox = { x: cx, y: cy, w, h };
+      if (!placedLabels.some((existing) => boxesOverlap(existing, candidate, 2.5 * unit))) {
+        placedLabels.push(candidate);
+        return { x: cx, y: cy };
+      }
+    }
+    const fallbackX = clamp(prefX, plotLeftPx, Math.max(plotLeftPx, plotRightPx - w));
+    const fallbackY = clamp(prefY, plotTopPx, Math.max(plotTopPx, plotBottomPx - h));
+    placedLabels.push({ x: fallbackX, y: fallbackY, w, h });
+    return { x: fallbackX, y: fallbackY };
+  };
 
-      ctx.strokeStyle =
-        z.tone === 'bullish'
-          ? light
-            ? 'rgba(5, 150, 105, 0.82)'
-            : 'rgba(52, 211, 153, 0.78)'
-          : z.tone === 'bearish'
-          ? light
-            ? 'rgba(225, 29, 72, 0.82)'
-            : 'rgba(251, 113, 133, 0.78)'
-          : 'rgba(217, 119, 6, 0.82)';
-      ctx.lineWidth = 1.4 * unit;
-      if (z.tone === 'neutral') ctx.setLineDash([5 * unit, 4 * unit]);
-      ctx.beginPath();
-      ctx.moveTo(zx, zy);
-      ctx.lineTo(zx + zw, zy);
-      ctx.moveTo(zx, zy + zh);
-      ctx.lineTo(zx + zw, zy + zh);
-      ctx.stroke();
-
-      // High-contrast readable zone micro-label on both white and dark charts
-      ctx.setLineDash([]);
-      ctx.font = `700 ${Math.round(10.5 * unit)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
-      const zoneLabel = `${z.role.toUpperCase()}${z.priceText ? ` · ${z.priceText}` : ''}`;
-      const ztw = ctx.measureText(zoneLabel).width;
-      const labelX = zx + 6 * unit;
-      const labelBaselineY = zy + Math.min(zh - 4 * unit, 13.5 * unit);
-
-      drawRoundedRect(
-        ctx,
-        labelX - 4 * unit,
-        labelBaselineY - 10.5 * unit,
-        ztw + 8 * unit,
-        14 * unit,
-        3.5 * unit
+  if (showSetup) {
+    ctx.save();
+    ctx.font = `700 ${Math.round(10 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+    for (const lvl of markup.levelLines) {
+      const tagText = `${lvl.shortTag} ${lvl.priceText}`;
+      const tw = ctx.measureText(tagText).width;
+      const pillH = 16.5 * unit;
+      const pillW = tw + 11 * unit;
+      const pillX = Math.max(
+        plotLeftPx,
+        Math.min(W - pillW - 4 * unit, sx(markup.plotBox.rightX) - pillW - 6 * unit)
       );
-      ctx.fillStyle = light ? 'rgba(255, 255, 255, 0.88)' : 'rgba(9, 13, 22, 0.82)';
-      ctx.fill();
+      const pillY = sy(lvl.labelY) - pillH / 2;
+      placedLabels.push({ x: pillX, y: pillY, w: pillW, h: pillH });
+    }
+    ctx.restore();
+  }
 
-      ctx.fillStyle =
-        z.tone === 'bullish'
-          ? light
-            ? '#047857'
-            : '#6EE7B7'
-          : z.tone === 'bearish'
-          ? light
-            ? '#BE123C'
-            : '#FDA4AF'
-          : light
-          ? '#B45309'
-          : '#FCD34D';
-      ctx.fillText(zoneLabel, labelX, labelBaselineY);
-      ctx.restore();
+  if (showAnyStructure) {
+    // 1. Supply / Demand / S&R / Order Block Zones
+    if (allowZones) {
+      const visibleZones = isPrimaryOnly
+        ? markup.zones.filter((z) => z.isPrimary)
+        : markup.zones;
+
+      for (const z of visibleZones) {
+        const zx = sx(z.x);
+        const zy = sy(z.topY);
+        const zw = sx(z.width);
+        const zh = Math.max(11 * unit, sy(z.height));
+        const alphaScale = z.mitigated ? 0.55 : 1;
+
+        ctx.save();
+        ctx.fillStyle =
+          z.tone === 'bullish'
+            ? `rgba(16, 185, 129, ${(light ? 0.14 : 0.16) * alphaScale})`
+            : z.tone === 'bearish'
+            ? `rgba(244, 63, 94, ${(light ? 0.13 : 0.16) * alphaScale})`
+            : `rgba(245, 158, 11, ${0.14 * alphaScale})`;
+        ctx.fillRect(zx, zy, zw, zh);
+
+        const borderColor =
+          z.tone === 'bullish'
+            ? light
+              ? 'rgba(5, 150, 105, 0.84)'
+              : 'rgba(52, 211, 153, 0.78)'
+            : z.tone === 'bearish'
+            ? light
+              ? 'rgba(225, 29, 72, 0.84)'
+              : 'rgba(251, 113, 133, 0.78)'
+            : 'rgba(217, 119, 6, 0.82)';
+
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = (z.isOrderBlock ? 1.65 : 1.3) * unit;
+        if (z.mitigated || z.tone === 'neutral') {
+          ctx.setLineDash([5 * unit, 4 * unit]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(zx, zy);
+        ctx.lineTo(zx + zw, zy);
+        ctx.moveTo(zx, zy + zh);
+        ctx.lineTo(zx + zw, zy + zh);
+        if (z.isOrderBlock) {
+          // Order Block origin anchor bar on left candle edge
+          ctx.moveTo(zx, zy);
+          ctx.lineTo(zx, zy + zh);
+        }
+        ctx.stroke();
+
+        ctx.setLineDash([]);
+        ctx.font = `700 ${Math.round(9.8 * unit)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        const shortRole = z.isOrderBlock
+          ? z.tone === 'bullish'
+            ? 'BULL OB'
+            : 'BEAR OB'
+          : z.role.toUpperCase();
+        const zoneLabel = `${shortRole}${z.priceText ? ` · ${z.priceText}` : ''}${
+          z.mitigated ? ' (MIT)' : ''
+        }`;
+        const ztw = ctx.measureText(zoneLabel).width;
+        const boxW = ztw + 8 * unit;
+        const boxH = 13.5 * unit;
+        const placed = placeLabelBox(
+          zx + 5 * unit,
+          zy + 2 * unit,
+          boxW,
+          boxH,
+          [
+            [0, 0],
+            [48 * unit, 0],
+            [96 * unit, 0],
+            [0, Math.max(0, zh - boxH - 2 * unit)],
+          ]
+        );
+
+        drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 3.5 * unit);
+        ctx.fillStyle = light ? 'rgba(255, 255, 255, 0.90)' : 'rgba(9, 13, 22, 0.84)';
+        ctx.fill();
+
+        ctx.fillStyle =
+          z.tone === 'bullish'
+            ? light
+              ? '#047857'
+              : '#6EE7B7'
+            : z.tone === 'bearish'
+            ? light
+              ? '#BE123C'
+              : '#FDA4AF'
+            : light
+            ? '#B45309'
+            : '#FCD34D';
+        ctx.fillText(zoneLabel, placed.x + 4 * unit, placed.y + 10 * unit);
+        ctx.restore();
+      }
     }
 
-    // 2. Trendlines & BOS / CHoCH Rays (wick-anchored)
-    for (const tl of markup.trendlines) {
-      ctx.save();
-      const stroke =
-        tl.tone === 'bullish'
-          ? light
-            ? '#059669'
-            : '#34D399'
-          : tl.tone === 'bearish'
-          ? light
-            ? '#E11D48'
-            : '#FB7185'
-          : light
-          ? '#0284C7'
-          : '#38BDF8';
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = 1.9 * unit;
-      if (tl.style === 'dashed') {
-        ctx.setLineDash([6 * unit, 4 * unit]);
-      }
-      ctx.beginPath();
-      ctx.moveTo(sx(tl.x1), sy(tl.y1));
-      ctx.lineTo(sx(tl.x2), sy(tl.y2));
-      ctx.stroke();
+    // 2. Fair Value Gaps (FVG / Imbalances with 50% Consequent Encroachment Midline)
+    if (allowFvg) {
+      const visibleFvgs = isPrimaryOnly
+        ? markup.fairValueGaps.filter((f) => f.isPrimary)
+        : markup.fairValueGaps;
 
-      if (tl.label) {
-        const mx = (sx(tl.x1) + sx(tl.x2)) / 2;
-        const my = (sy(tl.y1) + sy(tl.y2)) / 2 - 7 * unit;
+      for (const fvg of visibleFvgs) {
+        const fx = sx(fvg.x);
+        const fy = sy(fvg.topY);
+        const fw = sx(fvg.width);
+        const fh = Math.max(10 * unit, sy(fvg.height));
+        const midPy = sy(fvg.midY);
+
+        ctx.save();
+        // Distinct Violet (Bullish FVG) / Amber (Bearish FVG) tint so FVGs never blend into Supply/Demand zones
+        const isBull = fvg.tone === 'bullish';
+        ctx.fillStyle = isBull
+          ? light
+            ? 'rgba(139, 92, 246, 0.13)'
+            : 'rgba(168, 85, 247, 0.16)'
+          : light
+          ? 'rgba(245, 158, 11, 0.13)'
+          : 'rgba(245, 158, 11, 0.16)';
+        ctx.fillRect(fx, fy, fw, fh);
+
+        const strokeCol = isBull
+          ? light
+            ? 'rgba(109, 40, 217, 0.82)'
+            : 'rgba(192, 132, 252, 0.80)'
+          : light
+          ? 'rgba(180, 83, 9, 0.82)'
+          : 'rgba(251, 191, 36, 0.80)';
+
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 1.15 * unit;
+        ctx.beginPath();
+        ctx.moveTo(fx, fy);
+        ctx.lineTo(fx + fw, fy);
+        ctx.moveTo(fx, fy + fh);
+        ctx.lineTo(fx + fw, fy + fh);
+        ctx.stroke();
+
+        // 50% Consequent Encroachment (CE) dashed midline
+        ctx.setLineDash([3.5 * unit, 3.5 * unit]);
+        ctx.lineWidth = 0.95 * unit;
+        ctx.beginPath();
+        ctx.moveTo(fx, midPy);
+        ctx.lineTo(fx + fw, midPy);
+        ctx.stroke();
+
         ctx.setLineDash([]);
-        ctx.font = `700 ${Math.round(10 * unit)}px ui-monospace, SFMono-Regular, monospace`;
-        const tw = ctx.measureText(tl.label).width;
-        drawRoundedRect(
-          ctx,
-          mx - tw / 2 - 5 * unit,
-          my - 10.5 * unit,
-          tw + 10 * unit,
-          14.5 * unit,
-          4 * unit
+        ctx.font = `700 ${Math.round(9.5 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+        const fvgTag = `${isBull ? 'FVG +' : 'FVG −'}${
+          fvg.priceText ? ` · ${fvg.priceText}` : ''
+        }`;
+        const ftw = ctx.measureText(fvgTag).width;
+        const boxW = ftw + 8 * unit;
+        const boxH = 13 * unit;
+        const placed = placeLabelBox(
+          fx + 6 * unit,
+          midPy - boxH / 2,
+          boxW,
+          boxH,
+          [
+            [0, 0],
+            [46 * unit, 0],
+            [92 * unit, 0],
+            [0, -12 * unit],
+          ]
         );
+
+        drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 3.5 * unit);
+        ctx.fillStyle = light ? 'rgba(255, 255, 255, 0.90)' : 'rgba(9, 13, 22, 0.86)';
+        ctx.fill();
+        ctx.strokeStyle = strokeCol;
+        ctx.lineWidth = 0.9 * unit;
+        ctx.stroke();
+        ctx.fillStyle = isBull
+          ? light
+            ? '#6D28D9'
+            : '#D8B4FE'
+          : light
+          ? '#B45309'
+          : '#FDE68A';
+        ctx.fillText(fvgTag, placed.x + 4 * unit, placed.y + 9.6 * unit);
+        ctx.restore();
+      }
+    }
+
+    // 3. Liquidity Pools & Sweeps (EQH, EQL, BSL, SSL, Sweep)
+    if (allowLiquidity) {
+      const visibleLiq = isPrimaryOnly
+        ? markup.liquidityLevels.filter((lq) => lq.isPrimary)
+        : markup.liquidityLevels;
+
+      for (const lq of visibleLiq) {
+        const lx1 = sx(lq.x1);
+        const lx2 = sx(lq.x2);
+        const ly = sy(lq.y);
+
+        ctx.save();
+        const liqColor = light ? '#B45309' : '#FBBF24';
+        ctx.strokeStyle = liqColor;
+        ctx.lineWidth = 1.45 * unit;
+        ctx.setLineDash([2.8 * unit, 3.2 * unit]);
+        ctx.beginPath();
+        ctx.moveTo(lx1, ly);
+        ctx.lineTo(lx2, ly);
+        ctx.stroke();
+
+        // Origin & Sweep terminal markers
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(lx1, ly, 2.4 * unit, 0, Math.PI * 2);
+        ctx.fillStyle = liqColor;
+        ctx.fill();
+
+        if (lq.swept) {
+          const r = 3.5 * unit;
+          ctx.lineWidth = 1.5 * unit;
+          ctx.beginPath();
+          ctx.moveTo(lx2 - r, ly - r);
+          ctx.lineTo(lx2 + r, ly + r);
+          ctx.moveTo(lx2 + r, ly - r);
+          ctx.lineTo(lx2 - r, ly + r);
+          ctx.stroke();
+        }
+
+        ctx.font = `700 ${Math.round(9.5 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+        const liqTag = `$ ${lq.kind}${lq.swept && lq.kind !== 'Sweep' ? ' SWEPT' : ''}${
+          lq.priceText ? ` · ${lq.priceText}` : ''
+        }`;
+        const tw = ctx.measureText(liqTag).width;
+        const boxW = tw + 9 * unit;
+        const boxH = 13.5 * unit;
+        const midX = (lx1 + lx2) / 2 - boxW / 2;
+        const placed = placeLabelBox(
+          midX,
+          ly - boxH - 3 * unit,
+          boxW,
+          boxH,
+          [
+            [0, 0],
+            [0, boxH + 6 * unit],
+            [-40 * unit, 0],
+            [40 * unit, 0],
+          ]
+        );
+
+        drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 3.5 * unit);
         ctx.fillStyle = 'rgba(9, 13, 22, 0.90)';
+        ctx.fill();
+        ctx.strokeStyle = liqColor;
+        ctx.lineWidth = 1 * unit;
+        ctx.stroke();
+        ctx.fillStyle = '#FDE68A';
+        ctx.fillText(liqTag, placed.x + 4.5 * unit, placed.y + 10 * unit);
+        ctx.restore();
+      }
+    }
+
+    // 4. Trendlines & Parallel Price Channels (wick-anchored)
+    if (allowTrendlines) {
+      const visibleTls = isPrimaryOnly
+        ? markup.trendlines.filter((t) => t.isPrimary)
+        : markup.trendlines;
+
+      for (const tl of visibleTls) {
+        ctx.save();
+        const stroke =
+          tl.tone === 'bullish'
+            ? light
+              ? '#059669'
+              : '#34D399'
+            : tl.tone === 'bearish'
+            ? light
+              ? '#E11D48'
+              : '#FB7185'
+            : light
+            ? '#0284C7'
+            : '#38BDF8';
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = 1.85 * unit;
+        if (tl.style === 'dashed') {
+          ctx.setLineDash([6 * unit, 4 * unit]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(sx(tl.x1), sy(tl.y1));
+        ctx.lineTo(sx(tl.x2), sy(tl.y2));
+        ctx.stroke();
+
+        if (tl.label) {
+          const mx = (sx(tl.x1) + sx(tl.x2)) / 2;
+          const my = (sy(tl.y1) + sy(tl.y2)) / 2;
+          ctx.setLineDash([]);
+          ctx.font = `700 ${Math.round(9.8 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+          const tw = ctx.measureText(tl.label).width;
+          const boxW = tw + 10 * unit;
+          const boxH = 14 * unit;
+          const placed = placeLabelBox(
+            mx - boxW / 2,
+            my - boxH - 4 * unit,
+            boxW,
+            boxH,
+            [
+              [0, 0],
+              [0, boxH + 8 * unit],
+              [-36 * unit, -6 * unit],
+              [36 * unit, 6 * unit],
+            ]
+          );
+
+          drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 4 * unit);
+          ctx.fillStyle = 'rgba(9, 13, 22, 0.90)';
+          ctx.fill();
+          ctx.strokeStyle = stroke;
+          ctx.lineWidth = 1 * unit;
+          ctx.stroke();
+          ctx.fillStyle =
+            tl.tone === 'bullish'
+              ? '#6EE7B7'
+              : tl.tone === 'bearish'
+              ? '#FDA4AF'
+              : '#7DD3FC';
+          ctx.fillText(tl.label, placed.x + 5 * unit, placed.y + 10.2 * unit);
+        }
+        ctx.restore();
+      }
+    }
+
+    // 5. Horizontal BOS & CHoCH Market Structure Breaks + Chronological Swing Pivots
+    if (allowBosSwings) {
+      const visibleBreaks = isPrimaryOnly
+        ? markup.structureBreaks.filter((sb) => sb.isPrimary)
+        : markup.structureBreaks;
+
+      for (const sb of visibleBreaks) {
+        const bx1 = sx(sb.x1);
+        const bx2 = sx(sb.x2);
+        const by = sy(sb.y);
+        const isChoch = sb.kind === 'CHoCH';
+        const stroke =
+          sb.tone === 'bullish'
+            ? light
+              ? '#059669'
+              : '#34D399'
+            : light
+            ? '#E11D48'
+            : '#FB7185';
+
+        ctx.save();
+        ctx.strokeStyle = stroke;
+        ctx.lineWidth = (isChoch ? 1.75 : 1.55) * unit;
+        if (isChoch) {
+          ctx.setLineDash([5 * unit, 3.5 * unit]);
+        }
+        ctx.beginPath();
+        ctx.moveTo(bx1, by);
+        ctx.lineTo(bx2, by);
+        ctx.stroke();
+
+        // Small break-direction tick at break candle bx2
+        ctx.setLineDash([]);
+        const tickDir = sb.tone === 'bullish' ? -5 * unit : 5 * unit;
+        ctx.beginPath();
+        ctx.moveTo(bx2, by);
+        ctx.lineTo(bx2, by + tickDir);
+        ctx.stroke();
+
+        ctx.font = `700 ${Math.round(9.5 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+        const sbTag = sb.kind;
+        const tw = ctx.measureText(sbTag).width;
+        const boxW = tw + 9 * unit;
+        const boxH = 13.5 * unit;
+        const prefY = sb.tone === 'bullish' ? by - boxH - 2 * unit : by + 2 * unit;
+        const placed = placeLabelBox(
+          (bx1 + bx2) / 2 - boxW / 2,
+          prefY,
+          boxW,
+          boxH,
+          [
+            [0, 0],
+            [-28 * unit, 0],
+            [28 * unit, 0],
+            [0, sb.tone === 'bullish' ? boxH + 4 * unit : -boxH - 4 * unit],
+          ]
+        );
+
+        drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 3.5 * unit);
+        ctx.fillStyle = 'rgba(9, 13, 22, 0.92)';
         ctx.fill();
         ctx.strokeStyle = stroke;
         ctx.lineWidth = 1 * unit;
         ctx.stroke();
-        ctx.fillStyle =
-          tl.tone === 'bullish'
-            ? '#6EE7B7'
-            : tl.tone === 'bearish'
-            ? '#FDA4AF'
-            : '#7DD3FC';
-        ctx.fillText(tl.label, mx - tw / 2, my);
+        ctx.fillStyle = sb.tone === 'bullish' ? '#6EE7B7' : '#FDA4AF';
+        ctx.fillText(sbTag, placed.x + 4.5 * unit, placed.y + 10 * unit);
+        ctx.restore();
       }
-      ctx.restore();
-    }
 
-    // 3. Swing Structure Pivot Tags (HH, HL, LH, LL) snapped onto exact candle wicks
-    for (const sw of markup.swings) {
-      ctx.save();
-      const px = sx(sw.x);
-      const py = sy(sw.y);
-      const offsetY = sw.position === 'above' ? -14 * unit : 16 * unit;
-      const dotColor =
-        sw.tone === 'bullish'
-          ? '#10B981'
-          : sw.tone === 'bearish'
-          ? '#F43F5E'
-          : '#64748B';
-      const textColor =
-        sw.tone === 'bullish'
-          ? '#6EE7B7'
-          : sw.tone === 'bearish'
-          ? '#FDA4AF'
-          : '#E2E8F0';
+      const visibleSwings = isPrimaryOnly
+        ? markup.swings.filter((sw) => sw.isPrimary)
+        : markup.swings;
 
-      ctx.beginPath();
-      ctx.arc(px, py, 3.2 * unit, 0, Math.PI * 2);
-      ctx.fillStyle = dotColor;
-      ctx.fill();
-      ctx.lineWidth = 1.2 * unit;
-      ctx.strokeStyle = light ? '#FFFFFF' : '#090D16';
-      ctx.stroke();
+      for (const sw of visibleSwings) {
+        ctx.save();
+        const px = sx(sw.x);
+        const py = sy(sw.y);
+        const dotColor =
+          sw.tone === 'bullish'
+            ? '#10B981'
+            : sw.tone === 'bearish'
+            ? '#F43F5E'
+            : '#64748B';
+        const textColor =
+          sw.tone === 'bullish'
+            ? '#6EE7B7'
+            : sw.tone === 'bearish'
+            ? '#FDA4AF'
+            : '#E2E8F0';
 
-      ctx.font = `700 ${Math.round(10 * unit)}px ui-monospace, SFMono-Regular, monospace`;
-      const tw = ctx.measureText(sw.tag).width;
-      drawRoundedRect(
-        ctx,
-        px - tw / 2 - 5 * unit,
-        py + offsetY - 10.5 * unit,
-        tw + 10 * unit,
-        14 * unit,
-        4 * unit
-      );
-      ctx.fillStyle = 'rgba(9, 13, 22, 0.90)';
-      ctx.fill();
-      ctx.strokeStyle = dotColor;
-      ctx.lineWidth = 1 * unit;
-      ctx.stroke();
-      ctx.fillStyle = textColor;
-      ctx.fillText(sw.tag, px - tw / 2, py + offsetY);
-      ctx.restore();
+        ctx.beginPath();
+        ctx.arc(px, py, 3 * unit, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.fill();
+        ctx.lineWidth = 1.15 * unit;
+        ctx.strokeStyle = light ? '#FFFFFF' : '#090D16';
+        ctx.stroke();
+
+        ctx.font = `700 ${Math.round(9.6 * unit)}px ui-monospace, SFMono-Regular, monospace`;
+        const tw = ctx.measureText(sw.tag).width;
+        const boxW = tw + 9 * unit;
+        const boxH = 13.5 * unit;
+        const baseBoxY =
+          sw.position === 'above' ? py - boxH - 6 * unit : py + 6 * unit;
+        const dirSign = sw.position === 'above' ? -1 : 1;
+
+        const placed = placeLabelBox(
+          px - boxW / 2,
+          baseBoxY,
+          boxW,
+          boxH,
+          [
+            [0, 0],
+            [0, dirSign * 14 * unit],
+            [-18 * unit, dirSign * 4 * unit],
+            [18 * unit, dirSign * 4 * unit],
+          ]
+        );
+
+        drawRoundedRect(ctx, placed.x, placed.y, boxW, boxH, 3.5 * unit);
+        ctx.fillStyle = 'rgba(9, 13, 22, 0.90)';
+        ctx.fill();
+        ctx.strokeStyle = dotColor;
+        ctx.lineWidth = 1 * unit;
+        ctx.stroke();
+        ctx.fillStyle = textColor;
+        ctx.fillText(sw.tag, placed.x + 4.5 * unit, placed.y + 10 * unit);
+        ctx.restore();
+      }
     }
   }
 
-  // 4. TradingView Long / Short Position Tool + Undistorted Price Lines + Trajectory
+  // 6. TradingView Long / Short Position Tool + Undistorted Price Lines + Trajectory
   if (showSetup) {
     if (markup.positionBox) {
       const pb = markup.positionBox;
@@ -1710,7 +2400,13 @@ export function renderMarkedChartToCanvas(
   // Exported PNG signature stamp placed cleanly inside plotBox (never overlapping OS status bar)
   if (includeStamp) {
     ctx.save();
-    const stampText = `TraceFX Lens · ${signal.detectedPair} ${signal.detectedTimeframe} · ${signal.signalType}`;
+    const modeLabel =
+      layerFilter === 'all'
+        ? 'Full SMC Structure'
+        : layerFilter === 'structure'
+        ? 'Structure Map'
+        : 'Primary Setup';
+    const stampText = `TraceFX Lens · ${signal.detectedPair} ${signal.detectedTimeframe} · ${signal.signalType} · ${modeLabel}`;
     ctx.font = `600 ${Math.round(10.5 * unit)}px system-ui, -apple-system, sans-serif`;
     const stW = ctx.measureText(stampText).width;
     const boxW = stW + 16 * unit;
@@ -1743,7 +2439,8 @@ export function renderMarkedChartToCanvas(
 export async function exportMarkedChartPng(
   imageDataUrl: string,
   signal: TradingSignalResponse,
-  layerFilter: MarkupLayerFilter = 'all'
+  layerFilter: MarkupLayerFilter = 'primary',
+  subLayer: StructureSubLayer = 'all'
 ): Promise<void> {
   const img = await new Promise<HTMLImageElement>((resolve, reject) => {
     const el = new window.Image();
@@ -1756,6 +2453,7 @@ export async function exportMarkedChartPng(
   const canvas = document.createElement('canvas');
   renderMarkedChartToCanvas(canvas, img, signal, {
     layerFilter,
+    subLayer,
     includeStamp: true,
   });
 
@@ -1763,7 +2461,13 @@ export async function exportMarkedChartPng(
   const link = document.createElement('a');
   const cleanPair = signal.detectedPair.replace(/[^a-zA-Z0-9]/g, '');
   const cleanType = signal.signalType.replace(/\s+/g, '-');
-  link.download = `TraceFX-${cleanPair}-${signal.detectedTimeframe}-${cleanType}.png`;
+  const modeSuffix =
+    layerFilter === 'all'
+      ? '-FullStructure'
+      : layerFilter === 'structure'
+      ? '-StructureOnly'
+      : '';
+  link.download = `TraceFX-${cleanPair}-${signal.detectedTimeframe}-${cleanType}${modeSuffix}.png`;
   link.href = dataUrl;
   document.body.appendChild(link);
   link.click();

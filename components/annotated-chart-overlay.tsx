@@ -5,12 +5,14 @@ import type { TradingSignalResponse } from '@/lib/trading-data';
 import {
   MarkupLayerFilter,
   renderMarkedChartToCanvas,
+  StructureSubLayer,
 } from '@/lib/chart-markup';
 
 interface AnnotatedChartOverlayProps {
   imageDataUrl: string;
   signal: TradingSignalResponse;
   layerFilter: MarkupLayerFilter;
+  subLayer?: StructureSubLayer;
   visible: boolean;
 }
 
@@ -23,6 +25,7 @@ export function AnnotatedChartOverlay({
   imageDataUrl,
   signal,
   layerFilter,
+  subLayer = 'all',
   visible,
 }: AnnotatedChartOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -41,6 +44,7 @@ export function AnnotatedChartOverlay({
       drawn = true;
       renderMarkedChartToCanvas(canvasRef.current, img, signal, {
         layerFilter,
+        subLayer,
         includeStamp: false,
       });
     };
@@ -55,7 +59,7 @@ export function AnnotatedChartOverlay({
     return () => {
       cancelled = true;
     };
-  }, [imageDataUrl, signal, layerFilter]);
+  }, [imageDataUrl, signal, layerFilter, subLayer]);
 
   if (!signal.isValidChart) return null;
 

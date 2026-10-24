@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Upload,
   Maximize2,
@@ -10,12 +10,15 @@ import {
   Download,
   Eye,
   EyeOff,
+  Layers,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { TradingSignalResponse } from '@/lib/trading-data';
 import {
   exportMarkedChartPng,
+  getStructureLayerCounts,
   MarkupLayerFilter,
+  StructureSubLayer,
 } from '@/lib/chart-markup';
 import { AnnotatedChartOverlay } from '@/components/annotated-chart-overlay';
 
@@ -92,11 +95,103 @@ export function ChartUploader({
   const [isDragging, setIsDragging] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [showMarkup, setShowMarkup] = useState<boolean>(true);
-  const [layerFilter, setLayerFilter] = useState<MarkupLayerFilter>('all');
+  const [markupViewState, setMarkupViewState] = useState<{
+    signalRef: TradingSignalResponse | null;
+    showMarkup: boolean;
+    layerFilter: MarkupLayerFilter;
+    subLayer: StructureSubLayer;
+  }>({
+    signalRef: signal,
+    showMarkup: true,
+    layerFilter: 'primary',
+    subLayer: 'all',
+  });
   const [isExporting, setIsExporting] = useState<boolean>(false);
 
+  const isSameSignal = markupViewState.signalRef === signal;
+  const showMarkup = isSameSignal ? markupViewState.showMarkup : true;
+  const layerFilter: MarkupLayerFilter = isSameSignal
+    ? markupViewState.layerFilter
+    : 'primary';
+  const subLayer: StructureSubLayer = isSameSignal
+    ? markupViewState.subLayer
+    : 'all';
+
+  const setShowMarkup = useCallback(
+    (updater: boolean | ((prev: boolean) => boolean)) => {
+      setMarkupViewState((prev) => {
+        const base =
+          prev.signalRef === signal
+            ? prev
+            : {
+                signalRef: signal,
+                showMarkup: true,
+                layerFilter: 'primary' as MarkupLayerFilter,
+                subLayer: 'all' as StructureSubLayer,
+              };
+        return {
+          ...base,
+          showMarkup:
+            typeof updater === 'function' ? updater(base.showMarkup) : updater,
+        };
+      });
+    },
+    [signal]
+  );
+
+  const setLayerFilter = useCallback(
+    (nextFilter: MarkupLayerFilter) => {
+      setMarkupViewState((prev) => {
+        const base =
+          prev.signalRef === signal
+            ? prev
+            : {
+                signalRef: signal,
+                showMarkup: true,
+                layerFilter: 'primary' as MarkupLayerFilter,
+                subLayer: 'all' as StructureSubLayer,
+              };
+        return { ...base, layerFilter: nextFilter };
+      });
+    },
+    [signal]
+  );
+
+  const setSubLayer = useCallback(
+    (nextSubLayer: StructureSubLayer) => {
+      setMarkupViewState((prev) => {
+        const base =
+          prev.signalRef === signal
+            ? prev
+            : {
+                signalRef: signal,
+                showMarkup: true,
+                layerFilter: 'primary' as MarkupLayerFilter,
+                subLayer: 'all' as StructureSubLayer,
+              };
+        return { ...base, subLayer: nextSubLayer };
+      });
+    },
+    [signal]
+  );
+
   const hasValidSignal = Boolean(signal && signal.isValidChart && !isAnalyzing);
+  const structureCounts = useMemo(
+    () => getStructureLayerCounts(signal),
+    [signal]
+  );
+
+  const subLayerOptions = useMemo(() => {
+    const items: Array<{ id: StructureSubLayer; label: string; count: number }> = [
+      { id: 'all', label: 'All Layers', count: structureCounts.total },
+      { id: 'zones', label: 'Zones & OB', count: structureCounts.zones },
+      { id: 'fvg', label: 'FVG', count: structureCounts.fvg },
+      { id: 'bos_swings', label: 'BOS & Swings', count: structureCounts.bosSwings },
+      { id: 'liquidity', label: 'Liquidity', count: structureCounts.liquidity },
+      { id: 'trendlines', label: 'Trendlines', count: structureCounts.trendlines },
+    ];
+    return items.filter((item) => item.id === 'all' || item.count > 0);
+  }, [structureCounts]);
 
   const processFile = useCallback(
     async (file: File) => {
@@ -107,8 +202,12 @@ export function ChartUploader({
       }
       try {
         const normalized = await normalizeImageFile(file);
-        setShowMarkup(true);
-        setLayerFilter('all');
+        setMarkupViewState({
+          signalRef: null,
+          showMarkup: true,
+          layerFilter: 'primary',
+          subLayer: 'all',
+        });
         onImageChange(normalized);
       } catch {
         setFileError('Could not process screenshot. Please try another image.');
@@ -150,7 +249,7 @@ export function ChartUploader({
     if (!imageDataUrl || !signal || isExporting) return;
     setIsExporting(true);
     try {
-      await exportMarkedChartPng(imageDataUrl, signal, layerFilter);
+      await exportMarkedChartPng(imageDataUrl, signal, layerFilter, subLayer);
     } finally {
       setIsExporting(false);
     }
@@ -161,16 +260,22 @@ export function ChartUploader({
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <label className="text-xs font-medium text-slate-400">
           {hasValidSignal && showMarkup
-            ? 'AI Marked Chart'
+            ? layerFilter === 'primary'
+              ? 'AI Marked Chart · Primary Setup'
+              : layerFilter === 'structure'
+              ? 'AI Marked Chart · Structure Only'
+              : 'AI Marked Chart · Full Structure'
             : 'Chart Screenshot'}
         </label>
         {isAnalyzing ? (
           <span className="text-xs font-medium text-sky-400">
-            Scanning chart...
+            Scanning full chart...
           </span>
         ) : hasValidSignal ? (
           <span className="text-xs text-emerald-400">
-            Tap fullscreen to inspect levels
+            {structureCounts.total > 0
+              ? `${structureCounts.total} structures mapped`
+              : 'Tap Expand to inspect'}
           </span>
         ) : null}
       </div>
@@ -247,6 +352,7 @@ export function ChartUploader({
                   imageDataUrl={imageDataUrl}
                   signal={signal}
                   layerFilter={layerFilter}
+                  subLayer={subLayer}
                   visible={showMarkup}
                 />
               )}
@@ -309,15 +415,15 @@ export function ChartUploader({
             )}
           </div>
 
-          {/* Post-Analysis Interactive Drawing Toolbar (Clean Hairline Bar — Keeps Chart Drawings Unobstructed) */}
+          {/* Post-Analysis Interactive Drawing Toolbar (Primary Setup Default + Full Structure Toggle) */}
           {hasValidSignal && signal && (
             <div className="border-t border-slate-800/80 bg-[#0D1320] p-2.5 sm:px-3 space-y-2">
-              {/* Row 1: Markup Visibility + Layer Filter Segmented Control */}
-              <div className="flex items-center justify-between gap-2">
+              {/* Row 1: Markup Visibility + Primary Setup vs Full Structure Segmented Control */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => setShowMarkup((prev) => !prev)}
-                  className={`flex min-h-[40px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
+                  className={`flex min-h-[38px] items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
                     showMarkup
                       ? 'border-sky-500/40 bg-sky-500/12 text-sky-300'
                       : 'border-slate-800 bg-[#111726] text-slate-400 hover:text-slate-200'
@@ -337,30 +443,82 @@ export function ChartUploader({
                 </button>
 
                 {showMarkup && (
-                  <div className="flex items-center gap-0.5 rounded-lg border border-slate-800 bg-[#090D16] p-0.5">
-                    {(
-                      [
-                        { id: 'all', label: 'All' },
-                        { id: 'setup', label: 'Setup' },
-                        { id: 'structure', label: 'Zones' },
-                      ] as const
-                    ).map((opt) => (
+                  <div
+                    role="group"
+                    aria-label="Chart structure mode"
+                    className="flex items-center gap-0.5 rounded-lg border border-slate-800 bg-[#090D16] p-0.5 overflow-x-auto max-w-full"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setLayerFilter('primary')}
+                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        layerFilter === 'primary'
+                          ? 'bg-sky-500 text-slate-950 font-semibold'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Primary Setup
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLayerFilter('all');
+                        setSubLayer('all');
+                      }}
+                      className={`flex min-h-[34px] items-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        layerFilter === 'all'
+                          ? 'bg-sky-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      <Layers className="h-3 w-3" />
+                      <span>
+                        Full Structure
+                        {structureCounts.total > 0
+                          ? ` (${structureCounts.total})`
+                          : ''}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setLayerFilter('structure')}
+                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        layerFilter === 'structure'
+                          ? 'bg-slate-800 text-white'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      Structure Only
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* Row 1b: SMC Category Filter Bar when Full Structure or Structure Only is active */}
+              {showMarkup &&
+                (layerFilter === 'all' || layerFilter === 'structure') &&
+                subLayerOptions.length > 2 && (
+                  <div
+                    role="group"
+                    aria-label="Filter market structure categories"
+                    className="flex items-center gap-1 overflow-x-auto pb-0.5"
+                  >
+                    {subLayerOptions.map((opt) => (
                       <button
                         key={opt.id}
                         type="button"
-                        onClick={() => setLayerFilter(opt.id)}
-                        className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
-                          layerFilter === opt.id
-                            ? 'bg-slate-800 text-white'
-                            : 'text-slate-400 hover:text-slate-200'
+                        onClick={() => setSubLayer(opt.id)}
+                        className={`min-h-[32px] rounded-md border px-2 py-1 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                          subLayer === opt.id
+                            ? 'border-sky-500/45 bg-sky-500/15 text-sky-200'
+                            : 'border-slate-800/90 bg-[#090D16] text-slate-400 hover:border-slate-700 hover:text-slate-200'
                         }`}
                       >
-                        {opt.label}
+                        {opt.label} ({opt.count})
                       </button>
                     ))}
                   </div>
                 )}
-              </div>
 
               {/* Row 2: Export Marked PNG · Fullscreen Inspect · Replace · Remove */}
               <div className="flex items-center justify-between gap-1.5">
@@ -518,37 +676,69 @@ export function ChartUploader({
                   imageDataUrl={imageDataUrl}
                   signal={signal}
                   layerFilter={layerFilter}
+                  subLayer={subLayer}
                   visible={showMarkup}
                 />
               )}
             </div>
 
-            {/* Bottom Layer Switcher in Fullscreen */}
+            {/* Bottom Layer Switcher + SMC Category Filter in Fullscreen */}
             {hasValidSignal && showMarkup && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="mt-3 flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1"
+                className="mt-3 flex max-w-full flex-col items-center gap-2"
               >
-                {(
-                  [
-                    { id: 'all', label: 'All Drawings' },
-                    { id: 'setup', label: 'Position & Path' },
-                    { id: 'structure', label: 'Zones & Structure' },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setLayerFilter(opt.id)}
-                    className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                      layerFilter === opt.id
-                        ? 'bg-sky-500 text-slate-950 font-semibold'
-                        : 'text-slate-300 hover:text-white'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+                <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 overflow-x-auto max-w-[95vw]">
+                  {(
+                    [
+                      { id: 'primary', label: 'Primary Setup' },
+                      {
+                        id: 'all',
+                        label:
+                          structureCounts.total > 0
+                            ? `Full Structure (${structureCounts.total})`
+                            : 'Full Structure',
+                      },
+                      { id: 'structure', label: 'Structure Only' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setLayerFilter(opt.id);
+                        if (opt.id === 'all') setSubLayer('all');
+                      }}
+                      className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                        layerFilter === opt.id
+                          ? 'bg-sky-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {(layerFilter === 'all' || layerFilter === 'structure') &&
+                  subLayerOptions.length > 2 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto max-w-[95vw] px-1">
+                      {subLayerOptions.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setSubLayer(opt.id)}
+                          className={`min-h-[34px] rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                            subLayer === opt.id
+                              ? 'border-sky-500/50 bg-sky-500/20 text-sky-200'
+                              : 'border-slate-800 bg-slate-900/90 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {opt.label} ({opt.count})
+                        </button>
+                      ))}
+                    </div>
+                  )}
               </div>
             )}
           </motion.div>

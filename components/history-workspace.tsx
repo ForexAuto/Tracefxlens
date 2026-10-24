@@ -28,7 +28,9 @@ import { DeleteHistoryDialog } from '@/components/delete-history-dialog';
 import { AnnotatedChartOverlay } from '@/components/annotated-chart-overlay';
 import {
   exportMarkedChartPng,
+  getStructureLayerCounts,
   MarkupLayerFilter,
+  StructureSubLayer,
 } from '@/lib/chart-markup';
 import {
   deleteSingleHistoryRecord,
@@ -131,7 +133,8 @@ export function HistoryWorkspace() {
   const [inspectedRecord, setInspectedRecord] =
     useState<SignalHistoryRecord | null>(null);
   const [showMarkup, setShowMarkup] = useState(true);
-  const [layerFilter, setLayerFilter] = useState<MarkupLayerFilter>('all');
+  const [layerFilter, setLayerFilter] = useState<MarkupLayerFilter>('primary');
+  const [subLayer, setSubLayer] = useState<StructureSubLayer>('all');
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
@@ -304,7 +307,8 @@ export function HistoryWorkspace() {
       await exportMarkedChartPng(
         inspectedRecord.chartImageUrl,
         toSignalResponse(inspectedRecord),
-        layerFilter
+        layerFilter,
+        subLayer
       );
     } finally {
       setIsExporting(false);
@@ -315,6 +319,23 @@ export function HistoryWorkspace() {
     () => (inspectedRecord ? toSignalResponse(inspectedRecord) : null),
     [inspectedRecord]
   );
+
+  const inspectedCounts = useMemo(
+    () => getStructureLayerCounts(inspectedSignal),
+    [inspectedSignal]
+  );
+
+  const inspectedSubLayers = useMemo(() => {
+    const items: Array<{ id: StructureSubLayer; label: string; count: number }> = [
+      { id: 'all', label: 'All Layers', count: inspectedCounts.total },
+      { id: 'zones', label: 'Zones & OB', count: inspectedCounts.zones },
+      { id: 'fvg', label: 'FVG', count: inspectedCounts.fvg },
+      { id: 'bos_swings', label: 'BOS & Swings', count: inspectedCounts.bosSwings },
+      { id: 'liquidity', label: 'Liquidity', count: inspectedCounts.liquidity },
+      { id: 'trendlines', label: 'Trendlines', count: inspectedCounts.trendlines },
+    ];
+    return items.filter((item) => item.id === 'all' || item.count > 0);
+  }, [inspectedCounts]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -680,7 +701,8 @@ export function HistoryWorkspace() {
                           type="button"
                           onClick={() => {
                             setShowMarkup(true);
-                            setLayerFilter('all');
+                            setLayerFilter('primary');
+                            setSubLayer('all');
                             setInspectedRecord(rec);
                           }}
                           className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0D1320] px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-slate-700 hover:text-white whitespace-nowrap"
@@ -900,6 +922,7 @@ export function HistoryWorkspace() {
                 imageDataUrl={inspectedRecord.chartImageUrl}
                 signal={inspectedSignal}
                 layerFilter={layerFilter}
+                subLayer={subLayer}
                 visible={showMarkup}
               />
             </div>
@@ -907,28 +930,59 @@ export function HistoryWorkspace() {
             {showMarkup && (
               <div
                 onClick={(e) => e.stopPropagation()}
-                className="mt-3 flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1"
+                className="mt-3 flex max-w-full flex-col items-center gap-2"
               >
-                {(
-                  [
-                    { id: 'all', label: 'All Drawings' },
-                    { id: 'setup', label: 'Position & Path' },
-                    { id: 'structure', label: 'Zones & Structure' },
-                  ] as const
-                ).map((opt) => (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setLayerFilter(opt.id)}
-                    className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                      layerFilter === opt.id
-                        ? 'bg-sky-500 text-slate-950 font-semibold'
-                        : 'text-slate-300 hover:text-white'
-                    }`}
-                  >
-                    {opt.label}
-                  </button>
-                ))}
+                <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 overflow-x-auto max-w-[95vw]">
+                  {(
+                    [
+                      { id: 'primary', label: 'Primary Setup' },
+                      {
+                        id: 'all',
+                        label:
+                          inspectedCounts.total > 0
+                            ? `Full Structure (${inspectedCounts.total})`
+                            : 'Full Structure',
+                      },
+                      { id: 'structure', label: 'Structure Only' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setLayerFilter(opt.id);
+                        if (opt.id === 'all') setSubLayer('all');
+                      }}
+                      className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                        layerFilter === opt.id
+                          ? 'bg-sky-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+
+                {(layerFilter === 'all' || layerFilter === 'structure') &&
+                  inspectedSubLayers.length > 2 && (
+                    <div className="flex items-center gap-1.5 overflow-x-auto max-w-[95vw] px-1">
+                      {inspectedSubLayers.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => setSubLayer(opt.id)}
+                          className={`min-h-[34px] rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                            subLayer === opt.id
+                              ? 'border-sky-500/50 bg-sky-500/20 text-sky-200'
+                              : 'border-slate-800 bg-slate-900/90 text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {opt.label} ({opt.count})
+                        </button>
+                      ))}
+                    </div>
+                  )}
               </div>
             )}
           </motion.div>

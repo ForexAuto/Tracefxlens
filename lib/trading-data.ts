@@ -17,10 +17,21 @@ export type SignalType = 'BUY' | 'SELL' | 'HOLD';
 
 export type ExecutionCategory = 'Market Execution' | 'Stand Aside';
 
+export type ZoneRole =
+  | 'Support'
+  | 'Resistance'
+  | 'Supply Zone'
+  | 'Demand Zone'
+  | 'Bullish OB'
+  | 'Bearish OB'
+  | 'Fair Value Gap'
+  | 'Liquidity'
+  | 'Structure Break';
+
 export interface KeyPriceLevel {
   label: string;
   price: string;
-  role: 'Support' | 'Resistance' | 'Supply Zone' | 'Demand Zone' | 'Liquidity';
+  role: ZoneRole;
 }
 
 export interface ChartPlotBox {
@@ -51,22 +62,70 @@ export interface ChartAxisCalibration {
 
 export interface ChartMarkupZone {
   label: string;
-  role: 'Support' | 'Resistance' | 'Supply Zone' | 'Demand Zone' | 'Liquidity';
+  role:
+    | 'Support'
+    | 'Resistance'
+    | 'Supply Zone'
+    | 'Demand Zone'
+    | 'Bullish OB'
+    | 'Bearish OB'
+    | 'Liquidity';
   startX: number;
+  endX?: number;
   topY: number;
   bottomY: number;
   topPrice?: string;
   bottomPrice?: string;
+  mitigated?: boolean;
+  isPrimary?: boolean;
+}
+
+export interface ChartMarkupFvg {
+  label: string;
+  tone: 'bullish' | 'bearish';
+  startX: number;
+  endX?: number;
+  topY: number;
+  bottomY: number;
+  topPrice?: string;
+  bottomPrice?: string;
+  mitigated?: boolean;
+  isPrimary?: boolean;
+}
+
+export interface ChartMarkupStructureBreak {
+  kind: 'BOS' | 'CHoCH';
+  label?: string;
+  tone: 'bullish' | 'bearish';
+  startX: number;
+  endX: number;
+  y: number;
+  price?: string;
+  isPrimary?: boolean;
+}
+
+export interface ChartMarkupLiquidity {
+  kind: 'EQH' | 'EQL' | 'BSL' | 'SSL' | 'Sweep';
+  label: string;
+  tone: 'bullish' | 'bearish' | 'neutral';
+  startX: number;
+  endX: number;
+  y: number;
+  price?: string;
+  swept?: boolean;
+  isPrimary?: boolean;
 }
 
 export interface ChartMarkupTrendline {
   label: string;
+  role?: 'Trendline' | 'Channel Upper' | 'Channel Lower';
   x1: number;
   y1: number;
   x2: number;
   y2: number;
   style: 'solid' | 'dashed';
   tone: 'bullish' | 'bearish' | 'neutral';
+  isPrimary?: boolean;
 }
 
 export interface ChartMarkupSwing {
@@ -75,12 +134,17 @@ export interface ChartMarkupSwing {
   y: number;
   position: 'above' | 'below';
   tone: 'bullish' | 'bearish' | 'neutral';
+  price?: string;
+  isPrimary?: boolean;
 }
 
 export interface ChartMarkupData {
   plotBox: ChartPlotBox;
   axisCalibration: ChartAxisCalibration;
   zones: ChartMarkupZone[];
+  fairValueGaps?: ChartMarkupFvg[];
+  structureBreaks?: ChartMarkupStructureBreak[];
+  liquidityLevels?: ChartMarkupLiquidity[];
   trendlines: ChartMarkupTrendline[];
   swings: ChartMarkupSwing[];
 }

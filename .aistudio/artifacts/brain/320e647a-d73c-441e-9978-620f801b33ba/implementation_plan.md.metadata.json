@@ -1,0 +1,6 @@
+{
+  "summary":  "Implementation plan for upgrading TraceFX Lens into a universal Progressive Web App engineered specifically for older OPPO (ColorOS) and legacy Android phones as well as modern Android, iOS, and desktop Chrome, with standalone display mode, offline app shell + saved Signal History access, true raster PNG icon matrix, and smart in-app installation UI.",
+  "updatedAt":  "2026-10-24T23:15:43.725808392Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
