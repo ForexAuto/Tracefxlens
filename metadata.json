@@ -1,0 +1,6 @@
+{
+  "name": "TraceFX Lens",
+  "description": "AI-powered trading chart analysis delivering precise BUY, SELL, and HOLD signals with visual chart markup, entry, stop-loss, and take-profit levels across global currency, commodity, and cryptocurrency pairs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
