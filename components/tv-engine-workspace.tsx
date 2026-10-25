@@ -57,7 +57,7 @@ export function TvEngineWorkspace() {
     viewportHeight: 900,
     frameDataUrl: null,
     lastActionPointer: null,
-    updatedAt: Date.now(),
+    updatedAt: 0,
   });
   const [initialChecking, setInitialChecking] = useState(true);
   const [connectModalOpen, setConnectModalOpen] = useState(false);

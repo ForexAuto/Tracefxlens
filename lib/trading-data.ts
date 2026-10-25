@@ -165,6 +165,33 @@ export interface AnalysisStageItem {
   status: AnalysisStageStatus;
 }
 
+export interface DetectedPlotBounds {
+  leftX: number;
+  rightX: number;
+  topY: number;
+  bottomY: number;
+}
+
+export interface VisionEnhancementPayload {
+  rulerGridDataUrl?: string;
+  rightEdgeZoomDataUrl?: string;
+  detectedPlotBox?: DetectedPlotBounds;
+  subPaneCount?: number;
+  subPaneDividerYs?: number[];
+  isLightBg?: boolean;
+}
+
+export interface VisionVerificationMeta {
+  rulerCalibrated?: boolean;
+  rightEdgeZoomed?: boolean;
+  subPanesDetected?: number;
+  ohlcSynced?: boolean;
+  ohlcSource?: string;
+  ohlcAtr?: string;
+  selfChecked?: boolean;
+  selfCheckSummary?: string;
+}
+
 export interface TradingSignalResponse {
   isValidChart: boolean;
   validationMessage?: string;
@@ -186,6 +213,7 @@ export interface TradingSignalResponse {
   keyLevels: KeyPriceLevel[];
   invalidationCondition: string;
   chartMarkup?: ChartMarkupData;
+  visionVerification?: VisionVerificationMeta;
   auditTrail?: Array<{
     step: number;
     title: string;

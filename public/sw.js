@@ -1,6 +1,6 @@
-/* TraceFX Lens Universal Legacy-Compatible Service Worker (ES5 Safe, Instant Activation) */
-var SHELL_CACHE = 'tracefx-shell-v3';
-var STATIC_CACHE = 'tracefx-static-v3';
+/* TraceFX Lens Universal Legacy-Compatible Service Worker v7 (ES5 Safe, Hydration-Safe Network-First) */
+var SHELL_CACHE = 'tracefx-shell-v7';
+var STATIC_CACHE = 'tracefx-static-v7';
 var INLINE_OFFLINE_KEY = '/__tracefx_inline_offline__';
 
 var CORE_URLS = [
@@ -28,7 +28,7 @@ var INLINE_OFFLINE_HTML =
   '</div></body></html>';
 
 function safeCacheUrl(cache, url) {
-  return fetch(url, { credentials: 'same-origin' })
+  return fetch(url, { credentials: 'same-origin', cache: 'no-cache' })
     .then(function (response) {
       if (response && response.status === 200) {
         return cache.put(url, response.clone());
@@ -118,17 +118,7 @@ self.addEventListener('message', function (event) {
         caches.open(STATIC_CACHE).then(function (staticCache) {
           var jobs = [];
           for (var j = 0; j < assetUrls.length; j++) {
-            var assetUrl = assetUrls[j];
-            jobs.push(
-              staticCache.match(assetUrl).then(
-                (function (targetUrl) {
-                  return function (existing) {
-                    if (existing) return;
-                    return safeCacheUrl(staticCache, targetUrl);
-                  };
-                })(assetUrl)
-              )
-            );
+            jobs.push(safeCacheUrl(staticCache, assetUrls[j]));
           }
           return Promise.all(jobs);
         })
@@ -139,6 +129,9 @@ self.addEventListener('message', function (event) {
 
 function isStaticAsset(url) {
   var p = url.pathname;
+  if (p.indexOf('/_next/webpack-hmr') === 0 || p.indexOf('.hot-update.') !== -1) {
+    return false;
+  }
   if (p.indexOf('/_next/static/') === 0) return true;
   if (
     url.hostname === 'fonts.googleapis.com' ||
@@ -169,8 +162,29 @@ self.addEventListener('fetch', function (event) {
 
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
-  // Never intercept server API routes or service worker script itself
-  if (url.pathname.indexOf('/api/') === 0 || url.pathname === '/sw.js') {
+  // Never intercept server API routes, HMR endpoints, or service worker script itself
+  if (
+    url.pathname.indexOf('/api/') === 0 ||
+    url.pathname === '/sw.js' ||
+    url.pathname.indexOf('/_next/webpack-hmr') === 0 ||
+    url.pathname.indexOf('.hot-update.') !== -1
+  ) {
+    return;
+  }
+
+  var isPreviewHost =
+    url.hostname.indexOf('ais-dev-') === 0 ||
+    url.hostname.indexOf('ais-pre-') === 0 ||
+    url.hostname === 'localhost';
+
+  // On live preview/dev servers while online, let /_next/* chunks & RSC pass straight to network
+  // so unhashed Next.js dev chunks ALWAYS match fresh SSR HTML 100% of the time.
+  if (
+    isPreviewHost &&
+    self.navigator &&
+    self.navigator.onLine !== false &&
+    url.pathname.indexOf('/_next/') === 0
+  ) {
     return;
   }
 
@@ -218,6 +232,9 @@ self.addEventListener('fetch', function (event) {
 
   // 2. Next.js RSC Flight Transitions: Network-First with pathname RSC cache fallback
   if (isRscRequest) {
+    if (isPreviewHost && self.navigator && self.navigator.onLine !== false) {
+      return;
+    }
     var rscCacheKey = '/__rsc__' + url.pathname;
     event.respondWith(
       fetch(request)
@@ -242,25 +259,37 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
-  // 3. Static JS/CSS Chunks, Fonts, and Icons: Cache-First with background fill
+  // 3. Static JS/CSS Chunks, Fonts, and Icons: Network-First with Offline Cache Fallback
   if (isStaticAsset(url)) {
+    var fetchPromise =
+      url.origin === self.location.origin
+        ? fetch(request.url, { credentials: 'same-origin', cache: 'no-cache' })
+        : fetch(request);
+
     event.respondWith(
-      caches.open(STATIC_CACHE).then(function (cache) {
-        return cache.match(request).then(function (cachedAsset) {
-          if (cachedAsset) {
-            return cachedAsset;
+      fetchPromise
+        .then(function (networkAsset) {
+          if (
+            networkAsset &&
+            (networkAsset.status === 200 || networkAsset.type === 'opaque')
+          ) {
+            var assetCopy = networkAsset.clone();
+            caches.open(STATIC_CACHE).then(function (cache) {
+              cache.put(request, assetCopy);
+            });
           }
-          return fetch(request).then(function (networkAsset) {
-            if (
-              networkAsset &&
-              (networkAsset.status === 200 || networkAsset.type === 'opaque')
-            ) {
-              cache.put(request, networkAsset.clone());
-            }
-            return networkAsset;
+          return networkAsset;
+        })
+        .catch(function () {
+          return caches.open(STATIC_CACHE).then(function (cache) {
+            return cache
+              .match(request, { ignoreSearch: true })
+              .then(function (cachedAsset) {
+                if (cachedAsset) return cachedAsset;
+                return Response.error();
+              });
           });
-        });
-      })
+        })
     );
   }
 });

@@ -363,6 +363,51 @@ export function SignalResult({
           </p>
         )}
 
+        {(() => {
+          const vv = signal.visionVerification;
+          if (!vv) return null;
+          const items: Array<{ key: string; label: string; className?: string }> = [];
+          if (vv.rulerCalibrated) {
+            items.push({
+              key: 'ruler',
+              label: vv.rightEdgeZoomed
+                ? 'Ruler + 2× Axis Calibrated'
+                : '0..1000 Ruler Calibrated',
+            });
+          }
+          if ((vv.subPanesDetected ?? 0) > 0) {
+            items.push({
+              key: 'subpane',
+              label: `${vv.subPanesDetected} Sub-Pane Split`,
+            });
+          }
+          if (vv.ohlcSynced) {
+            items.push({
+              key: 'ohlc',
+              label: `Live OHLC${vv.ohlcAtr ? ` (ATR ${vv.ohlcAtr})` : ''}`,
+              className: 'text-sky-400/90',
+            });
+          }
+          if (vv.selfChecked) {
+            items.push({
+              key: 'selfcheck',
+              label: '2-Pass Verified',
+              className: 'text-emerald-400/90',
+            });
+          }
+          if (items.length === 0) return null;
+          return (
+            <div className="mt-2.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500 tabular-nums">
+              {items.map((item, idx) => (
+                <React.Fragment key={item.key}>
+                  {idx > 0 && <span aria-hidden="true">·</span>}
+                  <span className={item.className}>{item.label}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          );
+        })()}
+
         {pairMismatch && (
           <p className="mt-2.5 text-xs text-amber-400">
             Note: Chart visual displays {signal.detectedPair} while dropdown was set to {selectedPair}. Levels match the visible chart axis.

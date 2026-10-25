@@ -415,40 +415,80 @@ export function analyzeChartPixels(
   }
 
   let bottomY = hintBottomY;
-  const botSearchStart = toSY(Math.max(520, hintBottomY - 125));
+  const botSearchStart = toSY(455);
   const botSearchEnd = toSY(962);
-  let bestBotDist = Infinity;
+  const rawBotDividerSYs: number[] = [];
 
   for (let sy = botSearchStart; sy <= botSearchEnd; sy++) {
     let nonBg = 0;
     let uniform = 0;
+    let coloredChroma = 0;
     for (let sx = rowX0; sx <= rowX1; sx++) {
       const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 18) nonBg++;
+      if (distBg(idx) > 16) nonBg++;
+      if (chromaAt(idx) >= 24) coloredChroma++;
       if (sx < rowX1) {
         const idxNext = (sy * sW + sx + 1) * 4;
         const stepDiff =
           Math.abs(data[idx] - data[idxNext]) +
           Math.abs(data[idx + 1] - data[idxNext + 1]) +
           Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 15) uniform++;
+        if (stepDiff <= 14) uniform++;
       }
     }
-    if (nonBg / rowSpanX >= 0.78 && uniform / Math.max(1, rowSpanX - 1) >= 0.76) {
+    if (
+      nonBg / rowSpanX >= 0.8 &&
+      uniform / Math.max(1, rowSpanX - 1) >= 0.78 &&
+      coloredChroma / rowSpanX <= 0.28
+    ) {
       const aboveSY = Math.max(0, sy - Math.max(4, Math.round(sH * 0.015)));
       let aboveBgMatch = 0;
       for (let sx = rowX0; sx <= rowX1; sx += 3) {
-        if (distBg((aboveSY * sW + sx) * 4) <= 28) aboveBgMatch++;
+        if (distBg((aboveSY * sW + sx) * 4) <= 30) aboveBgMatch++;
       }
-      if (aboveBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.65) {
-        const candidateNY = toNY(sy) - 2;
-        const dist = Math.abs(candidateNY - hintBottomY);
-        if (dist < bestBotDist) {
-          bestBotDist = dist;
-          bottomY = clamp(candidateNY, 540, 964);
+      if (aboveBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.6) {
+        rawBotDividerSYs.push(sy);
+      }
+    }
+  }
+
+  const mergedDividersNY: number[] = [];
+  if (rawBotDividerSYs.length > 0) {
+    let grpStart = 0;
+    for (let i = 1; i <= rawBotDividerSYs.length; i++) {
+      if (
+        i === rawBotDividerSYs.length ||
+        rawBotDividerSYs[i] - rawBotDividerSYs[i - 1] > Math.max(3, Math.round(sH * 0.012))
+      ) {
+        const slice = rawBotDividerSYs.slice(grpStart, i);
+        const avgSY = slice.reduce((a, b) => a + b, 0) / slice.length;
+        const ny = toNY(avgSY);
+        if (ny - topY >= 305) {
+          mergedDividersNY.push(ny);
+        }
+        grpStart = i;
+      }
+    }
+  }
+
+  if (mergedDividersNY.length >= 2) {
+    const firstDiv = mergedDividersNY[0];
+    const lastDiv = mergedDividersNY[mergedDividersNY.length - 1];
+    if (lastDiv - firstDiv >= 65) {
+      // Sub-pane detected below firstDiv: keep main candlestick plotBox strictly above firstDiv
+      bottomY = clamp(firstDiv - 2, 460, 960);
+    } else {
+      let bestDist = Infinity;
+      for (const divNY of mergedDividersNY) {
+        const d = Math.abs(divNY - hintBottomY);
+        if (d < bestDist) {
+          bestDist = d;
+          bottomY = clamp(divNY - 2, 480, 964);
         }
       }
     }
+  } else if (mergedDividersNY.length === 1) {
+    bottomY = clamp(mergedDividersNY[0] - 2, 470, 964);
   }
 
   const leftX = hintLeftX;

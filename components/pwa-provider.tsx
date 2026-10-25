@@ -171,11 +171,36 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
       mediaQuery.addEventListener('change', handleDisplayModeChange);
     }
 
+    // Immediately purge any legacy pre-v7 caches from active browser sessions
+    if ('caches' in window) {
+      void window.caches
+        .keys()
+        .then((keys) =>
+          Promise.all(
+            keys
+              .filter(
+                (k) =>
+                  k.startsWith('tracefx-') &&
+                  k !== 'tracefx-shell-v7' &&
+                  k !== 'tracefx-static-v7'
+              )
+              .map((k) => window.caches.delete(k))
+          )
+        )
+        .catch(() => {});
+    }
+
     // Register Legacy-Compatible ES5 Service Worker and warm offline Signal History shell
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
         .register('/sw.js', { scope: '/', updateViaCache: 'none' })
         .then((reg) => {
+          try {
+            window.localStorage.setItem('__tfx_sw_v7_migrated', '1');
+          } catch {
+            // ignore
+          }
+          void reg.update().catch(() => {});
           setSwReady(true);
           const warm = () => {
             const worker = reg.active || reg.waiting || reg.installing;

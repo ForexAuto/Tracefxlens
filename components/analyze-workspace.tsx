@@ -23,6 +23,12 @@ import {
   recordSignalToHistory,
   syncHistoryWithServer,
 } from '@/lib/history-storage';
+import {
+  buildVisionEnhancementPayload,
+  renderDraftMarkupPreviewDataUrl,
+} from '@/lib/chart-vision-enhancer';
+
+const SELF_CHECK_PREF_KEY = 'tracefx_self_check_v1';
 
 export function AnalyzeWorkspace() {
   const [selectedPair, setSelectedPair] = useState<string>('XAU/USD');
@@ -40,9 +46,11 @@ export function AnalyzeWorkspace() {
   const [stopConfirmOpen, setStopConfirmOpen] = useState<boolean>(false);
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [selfCheckEnabled, setSelfCheckEnabled] = useState<boolean>(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const selfCheckEnabledRef = useRef<boolean>(true);
   const latestStateRef = useRef({
     selectedPair: 'XAU/USD',
     selectedTimeframe: 'H1',
@@ -135,6 +143,22 @@ export function AnalyzeWorkspace() {
       if (controller.signal.aborted) return;
 
       try {
+        // Pre-AI Pixel Scan: Sub-Pane Splitter + Hidden 0..1000 Ruler Grid + 2x Right-Edge Axis Crop
+        setStages((prev) =>
+          prev.map((item) =>
+            item.step === 1
+              ? {
+                  ...item,
+                  waitingText:
+                    'Calibrating 0..1000 coordinate ruler grid, sub-panes & 2× price-axis crop...',
+                }
+              : item
+          )
+        );
+
+        const visionEnhancement = await buildVisionEnhancementPayload(chartUrl);
+        if (controller.signal.aborted) return;
+
         const response = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -142,6 +166,7 @@ export function AnalyzeWorkspace() {
             imageDataUrl: chartUrl,
             pair,
             timeframe,
+            visionEnhancement,
           }),
           signal: controller.signal,
         });
@@ -254,7 +279,7 @@ export function AnalyzeWorkspace() {
 
           if (evt.event === 'result') {
             finalSignal = evt.data;
-            setProgressPct(100);
+            setProgressPct(selfCheckEnabledRef.current ? 92 : 100);
             setStages((prev) =>
               prev.map((item) =>
                 item.status === 'active' || item.status === 'locked'
@@ -349,17 +374,88 @@ export function AnalyzeWorkspace() {
         }
 
         if (finalSignal) {
+          let verifiedSignal: TradingSignalResponse = finalSignal;
+
+          // Optional Pass 2 — Two-Pass "Visual Self-Check" Mode (Draw -> Inspect -> Correct)
+          // Guaranteed non-breaking: if Pass 2 times out or fails, `verifiedSignal` seamlessly stays Draft 1!
+          if (selfCheckEnabledRef.current && verifiedSignal.isValidChart && !controller.signal.aborted) {
+            try {
+              setStages((prev) =>
+                prev.map((item) =>
+                  item.step === 5
+                    ? {
+                        ...item,
+                        status: 'active',
+                        waitingText:
+                          'Pass 2 Self-Check: inspecting drawn zones, wicks & stop-loss placement on canvas...',
+                      }
+                    : item
+                )
+              );
+
+              const markedDraftDataUrl = await renderDraftMarkupPreviewDataUrl(
+                chartUrl,
+                verifiedSignal
+              );
+
+              if (markedDraftDataUrl && !controller.signal.aborted) {
+                const verifyRes = await fetch('/api/analyze/verify', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    draftSignal: verifiedSignal,
+                    rulerOrCleanDataUrl:
+                      visionEnhancement?.rulerGridDataUrl || chartUrl,
+                    markedDraftDataUrl,
+                    rightEdgeZoomDataUrl: visionEnhancement?.rightEdgeZoomDataUrl,
+                    detectedPlotBox: visionEnhancement?.detectedPlotBox,
+                    subPaneCount: visionEnhancement?.subPaneCount ?? 0,
+                  }),
+                  signal: controller.signal,
+                });
+
+                if (verifyRes.ok) {
+                  const verifyJson = (await verifyRes.json()) as {
+                    signal?: TradingSignalResponse;
+                  };
+                  if (verifyJson?.signal && verifyJson.signal.isValidChart) {
+                    verifiedSignal = verifyJson.signal;
+                  }
+                }
+              }
+            } catch {
+              // Non-breaking fallback: retain Pass 1 `verifiedSignal` if Pass 2 is interrupted or rate-limited
+            }
+
+            if (controller.signal.aborted) return;
+
+            setProgressPct(100);
+            const finalStepFinding =
+              verifiedSignal.auditTrail?.find((a) => a.step === 5)?.finding;
+            setStages((prev) =>
+              prev.map((item) =>
+                item.step === 5
+                  ? {
+                      ...item,
+                      status: 'completed',
+                      finding: finalStepFinding || item.finding || 'Verified by Pass 2 self-check.',
+                    }
+                  : item
+              )
+            );
+          }
+
           await saveWorkspaceState({
             selectedPair: pair,
             selectedTimeframe: timeframe,
             imageDataUrl: chartUrl,
-            signal: finalSignal,
+            signal: verifiedSignal,
             rejectedFinding: null,
             wasAnalyzing: false,
           });
 
           // Automatically archive signal & marked chart into Supabase + local History
-          void recordSignalToHistory(finalSignal, chartUrl);
+          void recordSignalToHistory(verifiedSignal, chartUrl);
 
           if (controller.signal.aborted) return;
 
@@ -370,7 +466,7 @@ export function AnalyzeWorkspace() {
           if (controller.signal.aborted) return;
 
           abortControllerRef.current = null;
-          setSignal(finalSignal);
+          setSignal(verifiedSignal);
           setIsCompletingScan(false);
         } else {
           throw new Error('Analysis stream ended without a final signal ticket.');
@@ -413,6 +509,16 @@ export function AnalyzeWorkspace() {
     loadWorkspaceState()
       .then((persisted) => {
         if (cancelled) return;
+        try {
+          const savedSelfCheck = window.localStorage.getItem(SELF_CHECK_PREF_KEY);
+          if (savedSelfCheck === '0' || savedSelfCheck === '1') {
+            const enabled = savedSelfCheck === '1';
+            selfCheckEnabledRef.current = enabled;
+            setSelfCheckEnabled(enabled);
+          }
+        } catch {
+          // Ignore storage restrictions
+        }
         if (persisted) {
           setSelectedPair(persisted.selectedPair);
           setSelectedTimeframe(persisted.selectedTimeframe);
@@ -599,6 +705,18 @@ export function AnalyzeWorkspace() {
     }
   };
 
+  const handleToggleSelfCheck = () => {
+    if (isBusy) return;
+    const next = !selfCheckEnabled;
+    selfCheckEnabledRef.current = next;
+    setSelfCheckEnabled(next);
+    try {
+      window.localStorage.setItem(SELF_CHECK_PREF_KEY, next ? '1' : '0');
+    } catch {
+      // Ignore storage restrictions
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col">
       {/* Compact Sticky Top Bar with Navigation Sidebar */}
@@ -681,6 +799,39 @@ export function AnalyzeWorkspace() {
               selectedTimeframe={selectedTimeframe}
               fileInputRef={fileInputRef}
             />
+
+            {/* Two-Pass Visual Self-Check Switch (Draw -> Inspect -> Correct) */}
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800/80 bg-[#0D1320] px-3.5 py-2.5">
+              <div className="min-w-0">
+                <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
+                  Two-Pass Visual Self-Check
+                </div>
+                <p className="truncate text-[11px] text-slate-500">
+                  Ruler grid · 2× axis zoom · OHLC math · Pass 2 wick audit
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={selfCheckEnabled}
+                aria-label="Toggle Two-Pass Visual Self-Check"
+                disabled={isBusy}
+                onClick={handleToggleSelfCheck}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:opacity-50 ${
+                  selfCheckEnabled
+                    ? 'border-sky-400/50 bg-sky-500/25'
+                    : 'border-slate-700 bg-slate-800/80'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 rounded-full transition-transform duration-150 ${
+                    selfCheckEnabled
+                      ? 'translate-x-5 bg-sky-400'
+                      : 'translate-x-1 bg-slate-400'
+                  }`}
+                />
+              </button>
+            </div>
 
             {/* Primary Thumb-Zone CTA -> Transforms into Stop Analysis during active scan */}
             <div>

@@ -2,34 +2,21 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import type {
   AnalyzeStreamEvent,
-  ChartMarkupData,
-  ChartMarkupFvg,
-  ChartMarkupLiquidity,
-  ChartMarkupStructureBreak,
-  ChartMarkupSwing,
-  ChartMarkupTrendline,
-  ChartMarkupZone,
-  ExecutionCategory,
   KeyPriceLevel,
   SignalType,
   TradingSignalResponse,
+  VisionEnhancementPayload,
+  VisionVerificationMeta,
   ZoneRole,
 } from '@/lib/trading-data';
-
-const VALID_SIGNALS: SignalType[] = ['BUY', 'SELL', 'HOLD'];
-
-function normalizeSignalType(raw: unknown): SignalType {
-  const upper = String(raw || 'HOLD')
-    .trim()
-    .toUpperCase()
-    .replace(/_/g, ' ');
-  if (VALID_SIGNALS.includes(upper as SignalType)) {
-    return upper as SignalType;
-  }
-  if (upper.startsWith('BUY')) return 'BUY';
-  if (upper.startsWith('SELL')) return 'SELL';
-  return 'HOLD';
-}
+import { fetchHybridOhlcContext } from '@/lib/live-ohlc';
+import {
+  deriveExecutionCategory,
+  normalizeKeyLevelRole,
+  normalizeSignalType,
+  parseNumPrice,
+  sanitizeChartMarkup,
+} from '@/lib/signal-sanitizer';
 
 interface ModelCandidate {
   model: string;
@@ -71,300 +58,6 @@ const MODEL_CANDIDATES: ModelCandidate[] = [
     thinkingConfig: { thinkingBudget: 0 },
   },
 ];
-
-function deriveExecutionCategory(signal: SignalType): ExecutionCategory {
-  if (signal === 'BUY' || signal === 'SELL') return 'Market Execution';
-  return 'Stand Aside';
-}
-
-function normalizeZoneRole(raw: unknown, labelHint = ''): ChartMarkupZone['role'] {
-  const combined = `${String(raw || '')} ${labelHint}`.toLowerCase();
-  if (combined.includes('bullish ob') || combined.includes('bull ob') || (combined.includes('order block') && (combined.includes('bull') || combined.includes('demand')))) {
-    return 'Bullish OB';
-  }
-  if (combined.includes('bearish ob') || combined.includes('bear ob') || (combined.includes('order block') && (combined.includes('bear') || combined.includes('supply')))) {
-    return 'Bearish OB';
-  }
-  if (combined.includes('demand')) return 'Demand Zone';
-  if (combined.includes('supply')) return 'Supply Zone';
-  if (combined.includes('resist')) return 'Resistance';
-  if (combined.includes('liq')) return 'Liquidity';
-  return 'Support';
-}
-
-function normalizeKeyLevelRole(raw: unknown, labelHint = ''): ZoneRole {
-  const combined = `${String(raw || '')} ${labelHint}`.toLowerCase();
-  if (combined.includes('fvg') || combined.includes('imbalance') || combined.includes('fair value')) {
-    return 'Fair Value Gap';
-  }
-  if (combined.includes('bos') || combined.includes('choch') || combined.includes('break')) {
-    return 'Structure Break';
-  }
-  return normalizeZoneRole(raw, labelHint);
-}
-
-function parseNumPrice(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  const cleaned = String(raw).replace(/[^0-9.-]/g, '');
-  const n = Number.parseFloat(cleaned);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-function sanitizeChartMarkup(
-  raw: unknown,
-  entryPriceRaw?: unknown
-): ChartMarkupData | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const m = raw as Record<string, unknown>;
-  const pb = (m.plotBox && typeof m.plotBox === 'object'
-    ? m.plotBox
-    : {}) as Record<string, unknown>;
-  const ac = (m.axisCalibration && typeof m.axisCalibration === 'object'
-    ? m.axisCalibration
-    : {}) as Record<string, unknown>;
-
-  const lastCandleX = Number.isFinite(Number(ac.lastCandleX))
-    ? Number(ac.lastCandleX)
-    : 760;
-  const lastCandleY = Number.isFinite(Number(ac.lastCandleY))
-    ? Number(ac.lastCandleY)
-    : 500;
-
-  const zones: ChartMarkupZone[] = Array.isArray(m.zones)
-    ? m.zones.slice(0, 12).map((z) => {
-        const zr = (z && typeof z === 'object' ? z : {}) as Record<string, unknown>;
-        const labelStr = String(zr.label || zr.role || 'Zone');
-        const validRole = normalizeZoneRole(zr.role, labelStr);
-        const endXNum = Number(zr.endX);
-
-        return {
-          label: labelStr,
-          role: validRole,
-          startX: Number.isFinite(Number(zr.startX)) ? Number(zr.startX) : 180,
-          endX: Number.isFinite(endXNum) && endXNum > 0 ? endXNum : undefined,
-          topY: Number.isFinite(Number(zr.topY)) ? Number(zr.topY) : 460,
-          bottomY: Number.isFinite(Number(zr.bottomY)) ? Number(zr.bottomY) : 500,
-          topPrice: zr.topPrice ? String(zr.topPrice) : undefined,
-          bottomPrice: zr.bottomPrice ? String(zr.bottomPrice) : undefined,
-          mitigated: Boolean(zr.mitigated),
-          isPrimary: Boolean(zr.isPrimary),
-        };
-      })
-    : [];
-
-  const fairValueGaps: ChartMarkupFvg[] = Array.isArray(m.fairValueGaps)
-    ? m.fairValueGaps.slice(0, 8).map((f) => {
-        const fr = (f && typeof f === 'object' ? f : {}) as Record<string, unknown>;
-        const toneRaw = `${String(fr.tone || '')} ${String(fr.label || '')}`.toLowerCase();
-        const tone: 'bullish' | 'bearish' = toneRaw.includes('bear')
-          ? 'bearish'
-          : 'bullish';
-        const endXNum = Number(fr.endX);
-        return {
-          label: String(fr.label || (tone === 'bullish' ? 'Bullish FVG' : 'Bearish FVG')),
-          tone,
-          startX: Number.isFinite(Number(fr.startX)) ? Number(fr.startX) : 320,
-          endX: Number.isFinite(endXNum) && endXNum > 0 ? endXNum : undefined,
-          topY: Number.isFinite(Number(fr.topY)) ? Number(fr.topY) : 470,
-          bottomY: Number.isFinite(Number(fr.bottomY)) ? Number(fr.bottomY) : 505,
-          topPrice: fr.topPrice ? String(fr.topPrice) : undefined,
-          bottomPrice: fr.bottomPrice ? String(fr.bottomPrice) : undefined,
-          mitigated: Boolean(fr.mitigated),
-          isPrimary: Boolean(fr.isPrimary),
-        };
-      })
-    : [];
-
-  const structureBreaks: ChartMarkupStructureBreak[] = Array.isArray(m.structureBreaks)
-    ? m.structureBreaks.slice(0, 10).map((sb) => {
-        const sbr = (sb && typeof sb === 'object' ? sb : {}) as Record<string, unknown>;
-        const kindUpper = String(sbr.kind || sbr.label || 'BOS').toUpperCase();
-        const kind: 'BOS' | 'CHoCH' =
-          kindUpper.includes('CHOCH') || kindUpper.includes('CH') || kindUpper.includes('MSS')
-            ? 'CHoCH'
-            : 'BOS';
-        const toneRaw = String(sbr.tone || '').toLowerCase();
-        const tone: 'bullish' | 'bearish' = toneRaw.includes('bear')
-          ? 'bearish'
-          : 'bullish';
-        return {
-          kind,
-          label: sbr.label ? String(sbr.label) : kind,
-          tone,
-          startX: Number.isFinite(Number(sbr.startX)) ? Number(sbr.startX) : 260,
-          endX: Number.isFinite(Number(sbr.endX)) ? Number(sbr.endX) : 480,
-          y: Number.isFinite(Number(sbr.y)) ? Number(sbr.y) : 450,
-          price: sbr.price ? String(sbr.price) : undefined,
-          isPrimary: Boolean(sbr.isPrimary),
-        };
-      })
-    : [];
-
-  const liquidityLevels: ChartMarkupLiquidity[] = Array.isArray(m.liquidityLevels)
-    ? m.liquidityLevels.slice(0, 8).map((lq) => {
-        const lqr = (lq && typeof lq === 'object' ? lq : {}) as Record<string, unknown>;
-        const rawKind = String(lqr.kind || lqr.label || 'BSL').toUpperCase();
-        const kind: ChartMarkupLiquidity['kind'] = rawKind.includes('EQH')
-          ? 'EQH'
-          : rawKind.includes('EQL')
-          ? 'EQL'
-          : rawKind.includes('SSL')
-          ? 'SSL'
-          : rawKind.includes('SWEEP')
-          ? 'Sweep'
-          : 'BSL';
-        const toneRaw = String(lqr.tone || '').toLowerCase();
-        const tone: 'bullish' | 'bearish' | 'neutral' =
-          toneRaw === 'bullish'
-            ? 'bullish'
-            : toneRaw === 'bearish'
-            ? 'bearish'
-            : 'neutral';
-        return {
-          kind,
-          label: String(lqr.label || kind),
-          tone,
-          startX: Number.isFinite(Number(lqr.startX)) ? Number(lqr.startX) : 220,
-          endX: Number.isFinite(Number(lqr.endX)) ? Number(lqr.endX) : lastCandleX,
-          y: Number.isFinite(Number(lqr.y)) ? Number(lqr.y) : 340,
-          price: lqr.price ? String(lqr.price) : undefined,
-          swept: Boolean(lqr.swept || kind === 'Sweep'),
-          isPrimary: Boolean(lqr.isPrimary),
-        };
-      })
-    : [];
-
-  const trendlines: ChartMarkupTrendline[] = Array.isArray(m.trendlines)
-    ? m.trendlines.slice(0, 6).map((t) => {
-        const tr = (t && typeof t === 'object' ? t : {}) as Record<string, unknown>;
-        const toneRaw = String(tr.tone || 'neutral').toLowerCase();
-        const roleRaw = `${String(tr.role || '')} ${String(tr.label || '')}`.toLowerCase();
-        const role: ChartMarkupTrendline['role'] = roleRaw.includes('upper')
-          ? 'Channel Upper'
-          : roleRaw.includes('lower')
-          ? 'Channel Lower'
-          : 'Trendline';
-        return {
-          label: String(tr.label || role),
-          role,
-          x1: Number.isFinite(Number(tr.x1)) ? Number(tr.x1) : 180,
-          y1: Number.isFinite(Number(tr.y1)) ? Number(tr.y1) : 540,
-          x2: Number.isFinite(Number(tr.x2)) ? Number(tr.x2) : 680,
-          y2: Number.isFinite(Number(tr.y2)) ? Number(tr.y2) : 440,
-          style: String(tr.style || '').toLowerCase() === 'dashed' ? 'dashed' : 'solid',
-          tone:
-            toneRaw === 'bullish'
-              ? 'bullish'
-              : toneRaw === 'bearish'
-              ? 'bearish'
-              : 'neutral',
-          isPrimary: Boolean(tr.isPrimary),
-        };
-      })
-    : [];
-
-  const swings: ChartMarkupSwing[] = Array.isArray(m.swings)
-    ? m.swings.slice(0, 18).map((s) => {
-        const sr = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
-        const toneRaw = String(sr.tone || 'neutral').toLowerCase();
-        return {
-          tag: String(sr.tag || 'HH'),
-          x: Number.isFinite(Number(sr.x)) ? Number(sr.x) : 420,
-          y: Number.isFinite(Number(sr.y)) ? Number(sr.y) : 420,
-          position:
-            String(sr.position || 'above').toLowerCase() === 'below'
-              ? 'below'
-              : 'above',
-          tone:
-            toneRaw === 'bullish'
-              ? 'bullish'
-              : toneRaw === 'bearish'
-              ? 'bearish'
-              : 'neutral',
-          price: sr.price ? String(sr.price) : undefined,
-          isPrimary: Boolean(sr.isPrimary),
-        };
-      })
-    : [];
-
-  // Ensure Primary Setup view always includes the most relevant setup confluence anchor(s)
-  const entryNum = parseNumPrice(entryPriceRaw);
-  const hasPrimaryZoneOrFvg =
-    zones.some((z) => z.isPrimary) || fairValueGaps.some((f) => f.isPrimary);
-
-  if (!hasPrimaryZoneOrFvg) {
-    if (zones.length > 0) {
-      let bestIdx = 0;
-      let bestDist = Infinity;
-      zones.forEach((z, idx) => {
-        const zp = parseNumPrice(z.topPrice) ?? parseNumPrice(z.bottomPrice);
-        const dist =
-          entryNum !== null && zp !== null
-            ? Math.abs(zp - entryNum)
-            : Math.abs(((z.topY + z.bottomY) / 2) - lastCandleY);
-        const penalty = z.mitigated ? 1.6 : 1;
-        if (dist * penalty < bestDist) {
-          bestDist = dist * penalty;
-          bestIdx = idx;
-        }
-      });
-      zones[bestIdx].isPrimary = true;
-    } else if (fairValueGaps.length > 0) {
-      fairValueGaps[fairValueGaps.length - 1].isPrimary = true;
-    }
-  }
-
-  if (
-    structureBreaks.length > 0 &&
-    !structureBreaks.some((sb) => sb.isPrimary)
-  ) {
-    // Flag the right-most recent BOS/CHoCH break backing current structure
-    let latestIdx = 0;
-    let maxEndX = -Infinity;
-    structureBreaks.forEach((sb, idx) => {
-      if (sb.endX > maxEndX) {
-        maxEndX = sb.endX;
-        latestIdx = idx;
-      }
-    });
-    structureBreaks[latestIdx].isPrimary = true;
-  }
-
-  return {
-    plotBox: {
-      leftX: Number.isFinite(Number(pb.leftX)) ? Number(pb.leftX) : 28,
-      rightX: Number.isFinite(Number(pb.rightX)) ? Number(pb.rightX) : 885,
-      topY: Number.isFinite(Number(pb.topY)) ? Number(pb.topY) : 55,
-      bottomY: Number.isFinite(Number(pb.bottomY)) ? Number(pb.bottomY) : 880,
-    },
-    axisCalibration: {
-      highRefPrice: ac.highRefPrice ? String(ac.highRefPrice) : undefined,
-      highRefY: Number.isFinite(Number(ac.highRefY)) ? Number(ac.highRefY) : undefined,
-      lowRefPrice: ac.lowRefPrice ? String(ac.lowRefPrice) : undefined,
-      lowRefY: Number.isFinite(Number(ac.lowRefY)) ? Number(ac.lowRefY) : undefined,
-      axisTicks: Array.isArray(ac.axisTicks)
-        ? ac.axisTicks
-            .slice(0, 8)
-            .map((t) => {
-              const tr = (t && typeof t === 'object' ? t : {}) as Record<string, unknown>;
-              const priceStr = tr.price ? String(tr.price).trim() : '';
-              const yNum = Number(tr.y);
-              if (!priceStr || !Number.isFinite(yNum)) return null;
-              return { price: priceStr, y: yNum };
-            })
-            .filter((t): t is { price: string; y: number } => t !== null)
-        : undefined,
-      lastCandleX,
-      lastCandleY,
-    },
-    zones,
-    fairValueGaps,
-    structureBreaks,
-    liquidityLevels,
-    trendlines,
-    swings,
-  };
-}
 
 function isRetryableModelError(err: unknown): boolean {
   const raw = err instanceof Error ? `${err.name} ${err.message}` : String(err);
@@ -622,12 +315,16 @@ export async function POST(req: NextRequest) {
   let imageDataUrl = '';
   let selectedPair = 'EUR/USD';
   let selectedTimeframe = 'H1';
+  let visionEnhancement: VisionEnhancementPayload | undefined;
 
   try {
     const body = await req.json();
     imageDataUrl = typeof body.imageDataUrl === 'string' ? body.imageDataUrl : '';
     selectedPair = body.pair || 'EUR/USD';
     selectedTimeframe = body.timeframe || 'H1';
+    if (body.visionEnhancement && typeof body.visionEnhancement === 'object') {
+      visionEnhancement = body.visionEnhancement as VisionEnhancementPayload;
+    }
   } catch {
     return NextResponse.json({ error: 'Invalid request payload.' }, { status: 400 });
   }
@@ -639,16 +336,29 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const match = imageDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-  if (!match) {
+  const parseDataUrl = (url?: string): { mimeType: string; data: string } | null => {
+    if (!url || typeof url !== 'string') return null;
+    const m = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!m) return null;
+    return { mimeType: m[1], data: m[2] };
+  };
+
+  const mainImagePart = parseDataUrl(imageDataUrl);
+  if (!mainImagePart) {
     return NextResponse.json(
       { error: 'Unsupported image format. Upload a PNG, JPEG, or WebP screenshot.' },
       { status: 400 }
     );
   }
 
-  const mimeType = match[1];
-  const base64Data = match[2];
+  const rulerImagePart = parseDataUrl(visionEnhancement?.rulerGridDataUrl);
+  const rightZoomPart = parseDataUrl(visionEnhancement?.rightEdgeZoomDataUrl);
+  const detectedPlotBox = visionEnhancement?.detectedPlotBox;
+  const subPaneCount = Math.max(0, Number(visionEnhancement?.subPaneCount ?? 0));
+  const hasSubPanes = subPaneCount > 0;
+
+  const mimeType = mainImagePart.mimeType;
+  const base64Data = mainImagePart.data;
 
   const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY,
@@ -708,10 +418,26 @@ EXHAUSTIVE LEFT-TO-RIGHT SMC & MARKET STRUCTURE MAPPING RULES (CRITICAL):
   - For HOLD: select HOLD if price is choppy, mid-range, or lacks immediate market entry confluence; set entryPrice to the key breakout/rejection level to watch.
   - Calculate riskRewardRatio accurately from |takeProfit2 - entryPrice| / |entryPrice - stopLoss| formatted as "1 : X.X".`;
 
-  const promptText = `Inspect and analyze this uploaded screenshot across its full visible width from left to right.
-Selected pair context: ${selectedPair}
-Selected timeframe context: ${selectedTimeframe}
-First verify and approve whether this image is a valid trading chart on Line 1, then stream Steps 2-5 and the final result JSON object (including full left-to-right zones, Order Blocks, FVGs, BOS/CHoCH breaks, liquidity pools/sweeps, trendlines/channels, and swing points) one per line.`;
+  const visionGuideLines: string[] = [];
+  if (rulerImagePart) {
+    visionGuideLines.push(
+      `- Image 2 is a 0..1000 Coordinate Ruler Grid stamped onto the exact same screenshot (X100..X900 vertical dashed lines, Y100..Y900 horizontal dashed lines). Read X and Y coordinates DIRECTLY from those gridlines instead of guessing!`
+    );
+  }
+  if (rightZoomPart) {
+    visionGuideLines.push(
+      `- Image ${rulerImagePart ? '3' : '2'} is a 2x Magnified Crop of the right-most active candles + Y-axis price scale stamped with full-image Y= markers. Use this 2x zoom to read exact decimal digits on the Y-axis, live Bid/Ask badge price, and recent candle wicks with 100% precision.`
+    );
+  }
+  if (detectedPlotBox) {
+    visionGuideLines.push(
+      `- Pre-AI Pixel Scan measured main candlestick plotBox bounds at approx leftX:${detectedPlotBox.leftX}, rightX:${detectedPlotBox.rightX}, topY:${detectedPlotBox.topY}, bottomY:${detectedPlotBox.bottomY}.${
+        hasSubPanes
+          ? ` CRITICAL SUB-PANE ALERT: ${subPaneCount} indicator sub-pane(s) (RSI/MACD/Volume) were detected BELOW Y=${detectedPlotBox.bottomY}. NEVER place candlestick zones, FVGs, swings, or axisTicks below Y=${detectedPlotBox.bottomY}! You MAY still read RSI/MACD divergence visually for technicalRationale confluence.`
+          : ''
+      }`
+    );
+  }
 
   const encoder = new TextEncoder();
   let clientCancelled = false;
@@ -735,8 +461,28 @@ First verify and approve whether this image is a valid trading chart on Line 1, 
       // Immediately flush initial bytes so Next.js & Cloud Run never buffer HTTP 200 headers
       sendEvent({
         event: 'status',
-        message: `Connected to AI gatekeeper — inspecting ${selectedPair} chart & price axis...`,
+        message: `Connected to AI gatekeeper — calibrating ${selectedPair} ruler grid, axis & live OHLC math...`,
       });
+
+      // Fetch Hybrid Live OHLC + 14-ATR mathematical context (non-blocking 3.2s max, returns null safely if offline)
+      const hybridOhlc = await fetchHybridOhlcContext(
+        selectedPair,
+        selectedTimeframe,
+        req.signal
+      );
+
+      const promptText = [
+        `Inspect and analyze this uploaded screenshot across its full visible width from left to right.`,
+        `Selected pair context: ${selectedPair}`,
+        `Selected timeframe context: ${selectedTimeframe}`,
+        visionGuideLines.length > 0
+          ? `\nPRECISION VISION CALIBRATION AIDS ATTACHED:\n${visionGuideLines.join('\n')}`
+          : '',
+        hybridOhlc ? `\n${hybridOhlc.promptBlock}` : '',
+        `\nFirst verify and approve whether Image 1 is a valid trading chart on Line 1, then stream Steps 2-5 and the final result JSON object (including full left-to-right zones, Order Blocks, FVGs, BOS/CHoCH breaks, liquidity pools/sweeps, trendlines/channels, and swing points) one per line.`,
+      ]
+        .filter(Boolean)
+        .join('\n');
 
       let rejected = false;
       let sentResult = false;
@@ -896,7 +642,9 @@ First verify and approve whether this image is a valid trading chart on Line 1, 
 
           const sanitizedMarkup = sanitizeChartMarkup(
             rawSignalObj.chartMarkup,
-            rawSignalObj.entryPrice
+            rawSignalObj.entryPrice,
+            detectedPlotBox,
+            hasSubPanes
           );
 
           const rawKeyLevels: KeyPriceLevel[] = Array.isArray(rawSignalObj.keyLevels)
@@ -957,6 +705,35 @@ First verify and approve whether this image is a valid trading chart on Line 1, 
             }
           }
 
+          // Determine if Live OHLC matched the chart's detected symbol & price regime
+          let ohlcSynced = false;
+          if (hybridOhlc) {
+            const detNorm = String(rawSignalObj.detectedPair || selectedPair)
+              .replace(/[^A-Z0-9]/gi, '')
+              .toUpperCase();
+            const selNorm = selectedPair.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+            const chartCur = parseNumPrice(rawSignalObj.currentMarketPrice);
+            const liveCur = parseNumPrice(hybridOhlc.latestClose);
+            if (
+              detNorm === selNorm &&
+              chartCur !== null &&
+              liveCur !== null &&
+              Math.abs(chartCur - liveCur) / Math.max(liveCur, 1e-9) <= 0.045
+            ) {
+              ohlcSynced = true;
+            }
+          }
+
+          const visionVerification: VisionVerificationMeta = {
+            rulerCalibrated: Boolean(rulerImagePart),
+            rightEdgeZoomed: Boolean(rightZoomPart),
+            subPanesDetected: subPaneCount,
+            ohlcSynced,
+            ohlcSource: ohlcSynced ? hybridOhlc?.source : undefined,
+            ohlcAtr: ohlcSynced ? hybridOhlc?.atr14 : undefined,
+            selfChecked: false,
+          };
+
           const signalResult: TradingSignalResponse = {
             isValidChart: true,
             validationMessage: '',
@@ -982,6 +759,7 @@ First verify and approve whether this image is a valid trading chart on Line 1, 
             keyLevels: rawKeyLevels.slice(0, 14),
             invalidationCondition: String(rawSignalObj.invalidationCondition || ''),
             chartMarkup: sanitizedMarkup,
+            visionVerification,
             auditTrail: collectedAudit,
           };
 
@@ -1014,21 +792,43 @@ First verify and approve whether this image is a valid trading chart on Line 1, 
 
           try {
             let connectTimer: ReturnType<typeof setTimeout> | null = null;
+            const multimodalParts: Array<
+              | { inlineData: { mimeType: string; data: string } }
+              | { text: string }
+            > = [
+              {
+                inlineData: {
+                  mimeType,
+                  data: base64Data,
+                },
+              },
+            ];
+
+            if (rulerImagePart) {
+              multimodalParts.push({
+                inlineData: {
+                  mimeType: rulerImagePart.mimeType,
+                  data: rulerImagePart.data,
+                },
+              });
+            }
+
+            if (rightZoomPart) {
+              multimodalParts.push({
+                inlineData: {
+                  mimeType: rightZoomPart.mimeType,
+                  data: rightZoomPart.data,
+                },
+              });
+            }
+
+            multimodalParts.push({ text: promptText });
+
             const responseStream = await Promise.race([
               ai.models.generateContentStream({
                 model: candidate.model,
                 contents: {
-                  parts: [
-                    {
-                      inlineData: {
-                        mimeType,
-                        data: base64Data,
-                      },
-                    },
-                    {
-                      text: promptText,
-                    },
-                  ],
+                  parts: multimodalParts,
                 },
                 config: {
                   systemInstruction,
