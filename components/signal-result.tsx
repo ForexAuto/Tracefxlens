@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import {
+  AnalysisMode,
   AnalysisStageItem,
   SignalType,
   TradingSignalResponse,
@@ -25,6 +26,7 @@ import { AnalysisProgress } from '@/components/analysis-progress';
 
 interface SignalResultProps {
   signal: TradingSignalResponse | null;
+  analysisMode?: AnalysisMode;
   stages: AnalysisStageItem[];
   progressPct: number;
   isRejected: boolean;
@@ -85,6 +87,7 @@ function formatPctDelta(from: number | null, to: number | null): string | null {
 
 export function SignalResult({
   signal,
+  analysisMode = 'single',
   stages,
   progressPct,
   isRejected,
@@ -190,6 +193,7 @@ export function SignalResult({
 
   // 3. Empty / Ready State (Desktop companion column only; hidden on mobile)
   if (!signal) {
+    const isCrtReadyMode = analysisMode === 'top_down_crt';
     return (
       <div className="hidden lg:flex h-full flex-col justify-between rounded-2xl border border-slate-800/90 bg-[#111726]">
         <div className="p-6 sm:p-8">
@@ -197,10 +201,14 @@ export function SignalResult({
             <ScanLine className="h-5 w-5" />
           </div>
           <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold tracking-tight text-slate-100">
-            Signal Execution Ticket
+            {isCrtReadyMode
+              ? 'Top-Down CRT Execution Ticket'
+              : 'Signal Execution Ticket'}
           </h2>
           <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-400">
-            Upload a chart screenshot to start. The AI gatekeeper verifies your chart first, streams each structural checkpoint live, and delivers a BUY, SELL, or HOLD signal with visual chart markup.
+            {isCrtReadyMode
+              ? 'Upload both the H1 Macro chart and the M5 Execution chart. H1 dictates directional bias, CRT range validity, and macro liquidity targets; M5 refines entry timing and compresses stop-loss risk. If H1 CRT is invalid, M5 signals are vetoed to HOLD.'
+              : 'Upload a chart screenshot to start. The AI gatekeeper verifies your chart first, streams each structural checkpoint live, and delivers a BUY, SELL, or HOLD signal with visual chart markup.'}
           </p>
 
           {!hasChart && (
@@ -209,26 +217,42 @@ export function SignalResult({
               onClick={onTriggerUpload}
               className="mt-5 inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-700/90 bg-[#0D1320] px-4 py-2 text-xs font-medium text-slate-200 transition-colors hover:border-slate-600 hover:text-white whitespace-nowrap"
             >
-              Upload Chart Screenshot
+              {isCrtReadyMode
+                ? 'Upload H1 & M5 Charts'
+                : 'Upload Chart Screenshot'}
             </button>
           )}
         </div>
 
         <div className="border-t border-slate-800/80 p-5 sm:p-6">
           <p className="text-xs font-medium text-slate-400">
-            Supported Signal Coverage
+            {isCrtReadyMode
+              ? 'Top-Down CRT Dominance Law'
+              : 'Supported Signal Coverage'}
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 text-xs sm:grid-cols-2">
             <div>
-              <span className="font-semibold text-slate-200">Directional Execution</span>
+              <span className="font-semibold text-slate-200">
+                {isCrtReadyMode
+                  ? 'H1 Macro Dominates'
+                  : 'Directional Execution'}
+              </span>
               <p className="mt-0.5 text-slate-500">
-                BUY · SELL with Entry, SL &amp; TP1–TP3
+                {isCrtReadyMode
+                  ? 'CRT Range · Bias · TP1–TP3 Targets'
+                  : 'BUY · SELL with Entry, SL & TP1–TP3'}
               </p>
             </div>
             <div>
-              <span className="font-semibold text-slate-200">Stand Aside Discipline</span>
+              <span className="font-semibold text-slate-200">
+                {isCrtReadyMode
+                  ? 'M5 Execution Microscope'
+                  : 'Stand Aside Discipline'}
+              </span>
               <p className="mt-0.5 text-slate-500">
-                HOLD with key breakout watch level
+                {isCrtReadyMode
+                  ? 'CHoCH Trigger · Tight SL · Hard Veto'
+                  : 'HOLD with key breakout watch level'}
               </p>
             </div>
           </div>
@@ -264,9 +288,36 @@ export function SignalResult({
   const DirectionIcon = meta.Icon;
   const entryNum = parseNumericPrice(signal.entryPrice);
   const slNum = parseNumericPrice(signal.stopLoss);
+  const crt = signal.analysisMode === 'top_down_crt' ? signal.crtContext : undefined;
+  const isTopDownCrt = Boolean(crt);
 
-  const fullTicketText = [
+  const executionSubtitle =
+    isTopDownCrt && signal.signalType === 'HOLD'
+      ? !crt?.h1CrtValid || crt.h1Bias === 'NEUTRAL'
+        ? 'Stand Aside · H1 CRT Setup Invalid (Veto Active)'
+        : 'Stand Aside · Await M5 Trigger Aligned with H1'
+      : isTopDownCrt
+      ? `${meta.executionHint} · H1 Bias + M5 Tight Risk`
+      : meta.executionHint;
+
+  const fullTicketLines = [
     `TRACEFX LENS SIGNAL — ${signal.detectedPair} (${signal.detectedTimeframe})`,
+    ...(crt
+      ? [
+          `Mode: Top-Down CRT (${crt.macroTimeframe} Dominates -> ${crt.executionTimeframe} Execution)`,
+          `H1 CRT Bias: ${crt.h1Bias} (${crt.h1CrtValid ? 'Valid CRT' : 'Invalid — Hard Veto'})`,
+          ...(crt.crtRangeLow || crt.crtEquilibrium || crt.crtRangeHigh
+            ? [
+                `H1 CRT Range: Low ${crt.crtRangeLow || '—'} · 50% EQ ${
+                  crt.crtEquilibrium || '—'
+                } · High ${crt.crtRangeHigh || '—'}`,
+              ]
+            : []),
+          `H1 Sweep: ${crt.crtSweepStatus}`,
+          `M5 Trigger: ${crt.m5ExecutionTrigger}`,
+          `Dominance Verdict: ${crt.alignmentVerdict}`,
+        ]
+      : []),
     `Order Type: ${signal.signalType} (${signal.executionCategory})`,
     `Current Market: ${signal.currentMarketPrice}`,
     `Entry Price: ${signal.entryPrice}`,
@@ -276,7 +327,8 @@ export function SignalResult({
     `Take Profit 3: ${signal.takeProfit3}`,
     `Risk / Reward: ${signal.riskRewardRatio}`,
     `Trigger: ${signal.entryTriggerNote}`,
-  ].join('\n');
+  ];
+  const fullTicketText = fullTicketLines.join('\n');
 
   const pairMismatch =
     signal.detectedPair &&
@@ -323,7 +375,7 @@ export function SignalResult({
                 >
                   {signal.signalType}
                 </h2>
-                <p className="text-xs text-slate-400">{meta.executionHint}</p>
+                <p className="text-xs text-slate-400">{executionSubtitle}</p>
               </div>
             </div>
           </div>
@@ -381,12 +433,52 @@ export function SignalResult({
               label: `${vv.subPanesDetected} Sub-Pane Split`,
             });
           }
-          if (vv.ohlcSynced) {
+          if (vv.ohlcMode === 'disabled') {
             items.push({
-              key: 'ohlc',
-              label: `Live OHLC${vv.ohlcAtr ? ` (ATR ${vv.ohlcAtr})` : ''}`,
-              className: 'text-sky-400/90',
+              key: 'ohlc-off',
+              label: 'Screenshot Vision Only',
+              className: 'text-slate-400',
             });
+          } else if (vv.ohlcSynced) {
+            const ageTag =
+              typeof vv.ohlcAgeSeconds === 'number' && vv.ohlcAgeSeconds <= 90
+                ? ` · ${vv.ohlcAgeSeconds}s`
+                : '';
+            if (vv.ohlcMode === 'atr_spot_only') {
+              items.push({
+                key: 'ohlc',
+                label: `Spot + ATR Buffer${ageTag}${
+                  vv.ohlcAtr ? ` (ATR ${vv.ohlcAtr})` : ''
+                }`,
+                className: 'text-amber-400/90',
+              });
+            } else {
+              items.push({
+                key: 'ohlc',
+                label: `Live Spot OHLC${ageTag}${
+                  vv.ohlcAtr ? ` (ATR ${vv.ohlcAtr})` : ''
+                }`,
+                className: 'text-sky-400/90',
+              });
+            }
+          }
+          if (vv.macroSynced && signal.macroContext) {
+            const mc = signal.macroContext;
+            const macroParts: string[] = [];
+            if (mc.dxy) macroParts.push(`DXY ${mc.dxy.value}`);
+            if (mc.us10y) macroParts.push(`US10Y ${mc.us10y.value}`);
+            if (macroParts.length > 0) {
+              items.push({
+                key: 'macro',
+                label: macroParts.join(' · '),
+                className:
+                  mc.signalAlignment === 'tailwind'
+                    ? 'text-emerald-400/90'
+                    : mc.signalAlignment === 'headwind'
+                    ? 'text-rose-400/90'
+                    : 'text-slate-300',
+              });
+            }
           }
           if (vv.selfChecked) {
             items.push({
@@ -415,6 +507,217 @@ export function SignalResult({
         )}
       </div>
 
+      {/* Top-Down CRT Hierarchy: H1 Dominates Bias & Targets -> M5 Executes Entry & Risk */}
+      {crt && (
+        <div className="border-t border-slate-800/80 p-5 sm:p-6">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <span className="font-semibold text-slate-200">
+              Top-Down CRT Hierarchy
+            </span>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span
+              className={`font-[family-name:var(--font-mono)] font-semibold tabular-nums ${
+                !crt.h1CrtValid || crt.h1Bias === 'NEUTRAL'
+                  ? 'text-amber-400'
+                  : crt.h1Bias === 'BULLISH'
+                  ? 'text-emerald-400'
+                  : 'text-rose-400'
+              }`}
+            >
+              {crt.macroTimeframe} {crt.h1Bias}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span
+              className={
+                crt.h1CrtValid ? 'text-emerald-400/90' : 'text-amber-400/95'
+              }
+            >
+              {crt.h1CrtValid
+                ? 'Valid H1 CRT Setup'
+                : 'Invalid H1 CRT · M5 Vetoed'}
+            </span>
+          </div>
+
+          {(crt.crtRangeLow || crt.crtEquilibrium || crt.crtRangeHigh) && (
+            <div className="mt-3.5 grid grid-cols-3 divide-x divide-slate-800/80 border-y border-slate-800/70 py-2.5">
+              <div className="pr-3">
+                <div className="text-[11px] text-slate-500">H1 CRT Low</div>
+                <div className="mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold text-slate-200 tabular-nums">
+                  {crt.crtRangeLow || '—'}
+                </div>
+              </div>
+              <div className="px-3">
+                <div className="text-[11px] text-slate-500">50% Equilibrium</div>
+                <div className="mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold text-sky-300 tabular-nums">
+                  {crt.crtEquilibrium || '—'}
+                </div>
+              </div>
+              <div className="pl-3">
+                <div className="text-[11px] text-slate-500">H1 CRT High</div>
+                <div className="mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold text-slate-200 tabular-nums">
+                  {crt.crtRangeHigh || '—'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="mt-3.5 space-y-2 text-xs leading-relaxed">
+            <div>
+              <span className="font-semibold text-slate-200">
+                {crt.macroTimeframe} Macro (Direction &amp; Targets):{' '}
+              </span>
+              <span className="text-slate-300">{crt.crtSweepStatus}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-slate-200">
+                {crt.executionTimeframe} Execution (Trigger &amp; Tight Risk):{' '}
+              </span>
+              <span className="text-slate-300">{crt.m5ExecutionTrigger}</span>
+            </div>
+            <div>
+              <span className="font-semibold text-slate-200">
+                Dominance Verdict:{' '}
+              </span>
+              <span
+                className={
+                  !crt.h1CrtValid || signal.signalType === 'HOLD'
+                    ? 'text-amber-300'
+                    : 'text-emerald-300'
+                }
+              >
+                {crt.alignmentVerdict}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Intermarket Macro Correlation Filter: Live DXY & US10Y Treasury Yield */}
+      {signal.macroContext && (signal.macroContext.dxy || signal.macroContext.us10y) && (
+        <div className="border-t border-slate-800/80 p-5 sm:p-6">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+            <span className="font-semibold text-slate-200">
+              Intermarket Macro Filter
+            </span>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span className="text-slate-400">
+              {signal.macroContext.sensitivityLabel}
+            </span>
+            <span className="text-slate-600" aria-hidden="true">
+              ·
+            </span>
+            <span
+              className={`font-semibold ${
+                signal.macroContext.signalAlignment === 'tailwind'
+                  ? 'text-emerald-400'
+                  : signal.macroContext.signalAlignment === 'headwind'
+                  ? 'text-rose-400'
+                  : signal.macroContext.signalAlignment === 'mixed'
+                  ? 'text-amber-400'
+                  : 'text-slate-300'
+              }`}
+            >
+              {signal.macroContext.alignmentLabel}
+            </span>
+          </div>
+
+          <div className="mt-3.5 grid grid-cols-1 divide-y divide-slate-800/80 border-y border-slate-800/70 py-2.5 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+            {/* Column 1: DXY Dollar Index */}
+            <div className="pb-2.5 sm:pb-0 sm:pr-3">
+              <div className="text-[11px] text-slate-500">DXY Dollar Index</div>
+              {signal.macroContext.dxy ? (
+                <>
+                  <div className="mt-0.5 flex items-baseline gap-1.5 font-[family-name:var(--font-mono)] tabular-nums">
+                    <span className="text-xs sm:text-sm font-semibold text-slate-100">
+                      {signal.macroContext.dxy.value}
+                    </span>
+                    <span
+                      className={`text-[11px] font-medium ${
+                        signal.macroContext.dxy.changeLabel.startsWith('+')
+                          ? 'text-emerald-400'
+                          : signal.macroContext.dxy.changeLabel.startsWith('-')
+                          ? 'text-rose-400'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {signal.macroContext.dxy.changeLabel}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-400 tabular-nums">
+                    H1 {signal.macroContext.dxy.h1Bias} · M5 {signal.macroContext.dxy.m5Impulse}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-0.5 text-xs text-slate-500">Unavailable</div>
+              )}
+            </div>
+
+            {/* Column 2: US10Y Treasury Yield */}
+            <div className="py-2.5 sm:px-3 sm:py-0">
+              <div className="text-[11px] text-slate-500">US10Y Treasury Yield</div>
+              {signal.macroContext.us10y ? (
+                <>
+                  <div className="mt-0.5 flex items-baseline gap-1.5 font-[family-name:var(--font-mono)] tabular-nums">
+                    <span className="text-xs sm:text-sm font-semibold text-slate-100">
+                      {signal.macroContext.us10y.value}
+                    </span>
+                    <span
+                      className={`text-[11px] font-medium ${
+                        signal.macroContext.us10y.changeLabel.startsWith('+')
+                          ? 'text-emerald-400'
+                          : signal.macroContext.us10y.changeLabel.startsWith('-')
+                          ? 'text-rose-400'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      {signal.macroContext.us10y.changeLabel}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-slate-400 tabular-nums">
+                    H1 {signal.macroContext.us10y.h1Bias} · M5 {signal.macroContext.us10y.m5Impulse}
+                  </div>
+                </>
+              ) : (
+                <div className="mt-0.5 text-xs text-slate-500">Unavailable</div>
+              )}
+            </div>
+
+            {/* Column 3: Implied Pair Pressure */}
+            <div className="pt-2.5 sm:pl-3 sm:pt-0">
+              <div className="text-[11px] text-slate-500">
+                {signal.detectedPair} Macro Pressure
+              </div>
+              <div
+                className={`mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold tabular-nums ${
+                  signal.macroContext.pairImpliedBias === 'BULLISH'
+                    ? 'text-emerald-400'
+                    : signal.macroContext.pairImpliedBias === 'BEARISH'
+                    ? 'text-rose-400'
+                    : 'text-slate-300'
+                }`}
+              >
+                {signal.macroContext.sensitivityProfile === 'usd_neutral_cross'
+                  ? 'USD-NEUTRAL'
+                  : signal.macroContext.pairImpliedBias}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">
+                {signal.macroContext.alignmentLabel}
+              </div>
+            </div>
+          </div>
+
+          <p className="mt-3 text-xs leading-relaxed text-slate-300">
+            {signal.macroContext.summary}
+          </p>
+        </div>
+      )}
+
       {/* Primary Execution Coordinates: Current Price · Entry · Stop Loss */}
       <div className="grid grid-cols-1 divide-y divide-slate-800/80 border-t border-slate-800/80 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         {/* Current Price */}
@@ -429,7 +732,11 @@ export function SignalResult({
         <div className="flex items-center justify-between p-4 sm:p-5">
           <div>
             <div className="text-xs font-medium text-sky-400">
-              {signal.signalType === 'HOLD' ? 'Watch Trigger' : 'Entry Price'}
+              {signal.signalType === 'HOLD'
+                ? 'Watch Trigger'
+                : isTopDownCrt
+                ? 'M5 Entry Price'
+                : 'Entry Price'}
             </div>
             <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-white tabular-nums">
               {signal.entryPrice}
@@ -453,7 +760,7 @@ export function SignalResult({
         <div className="flex items-center justify-between p-4 sm:p-5">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-rose-400">
-              <span>Stop Loss</span>
+              <span>{isTopDownCrt ? 'M5 Tight Stop' : 'Stop Loss'}</span>
               {formatPctDelta(entryNum, slNum) && (
                 <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">
                   {formatPctDelta(entryNum, slNum)}
@@ -483,7 +790,9 @@ export function SignalResult({
       <div className="border-t border-slate-800/80 p-5 sm:p-6">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-xs font-semibold text-slate-300">
-            Take-Profit Exit Targets
+            {isTopDownCrt
+              ? 'H1 Macro Draw on Liquidity Targets'
+              : 'Take-Profit Exit Targets'}
           </h3>
           <span className="text-xs text-slate-500">Tap level to copy</span>
         </div>
@@ -493,19 +802,25 @@ export function SignalResult({
             {
               key: 'tp1',
               code: 'TP 1',
-              role: 'Conservative Partial Exit',
+              role: isTopDownCrt
+                ? 'H1 CRT 50% Equilibrium / Internal Target'
+                : 'Conservative Partial Exit',
               price: signal.takeProfit1,
             },
             {
               key: 'tp2',
               code: 'TP 2',
-              role: 'Primary Structural Target',
+              role: isTopDownCrt
+                ? 'Opposing H1 CRT Range Extreme'
+                : 'Primary Structural Target',
               price: signal.takeProfit2,
             },
             {
               key: 'tp3',
               code: 'TP 3',
-              role: 'Extended Runner Objective',
+              role: isTopDownCrt
+                ? 'External H1 Draw on Liquidity'
+                : 'Extended Runner Objective',
               price: signal.takeProfit3,
             },
           ].map((tp) => {

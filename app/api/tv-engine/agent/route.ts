@@ -503,13 +503,15 @@ export async function POST(req: NextRequest) {
               },
             });
           } catch {
-            // Fallback to gemini-flash-latest on transient 429/503
+            // Transient retry on gemini-3.8-flash
+            await new Promise((resolve) => setTimeout(resolve, 350));
             response = await ai.models.generateContent({
-              model: 'gemini-flash-latest',
+              model: 'gemini-3.8-flash',
               contents,
               config: {
                 systemInstruction: SYSTEM_INSTRUCTION,
                 tools: [{ functionDeclarations: TV_AGENT_TOOLS }],
+                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
               },
             });
           }

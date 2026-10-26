@@ -8,11 +8,24 @@ import type {
 } from '@/lib/trading-data';
 import {
   deriveExecutionCategory,
+  enforceTopDownCrtDominance,
   normalizeKeyLevelRole,
   normalizeSignalType,
   parseNumPrice,
   sanitizeChartMarkup,
 } from '@/lib/signal-sanitizer';
+import { buildMacroCorrelationContext } from '@/lib/macro-correlation';
+import {
+  generateOpenRouterCompletion,
+  hasGeminiKey,
+  hasOpenRouterKey,
+  type OpenRouterImageInput,
+  resolveOpenRouterVisionCascade,
+} from '@/lib/openrouter-server';
+import {
+  DEFAULT_VISION_MODEL_ID,
+  isOpenRouterModelSelection,
+} from '@/lib/vision-models';
 
 function parseDataUrl(url?: string): { mimeType: string; data: string } | null {
   if (!url || typeof url !== 'string') return null;
@@ -81,6 +94,7 @@ export async function POST(req: NextRequest) {
   let rightEdgeZoomDataUrl = '';
   let detectedPlotBox: DetectedPlotBounds | undefined;
   let subPaneCount = 0;
+  let visionModel = DEFAULT_VISION_MODEL_ID;
 
   try {
     const body = await req.json();
@@ -95,6 +109,9 @@ export async function POST(req: NextRequest) {
       detectedPlotBox = body.detectedPlotBox as DetectedPlotBounds;
     }
     subPaneCount = Math.max(0, Number(body.subPaneCount ?? 0));
+    if (typeof body.visionModel === 'string' && body.visionModel.trim()) {
+      visionModel = body.visionModel.trim();
+    }
   } catch {
     return NextResponse.json({ error: 'Invalid verify payload.' }, { status: 400 });
   }
@@ -103,7 +120,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  if (!process.env.GEMINI_API_KEY) {
+  const geminiReady = hasGeminiKey();
+  const openRouterReady = hasOpenRouterKey();
+
+  if (!geminiReady && !openRouterReady) {
     return NextResponse.json({ signal: draftSignal });
   }
 
@@ -115,19 +135,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+  const ai = geminiReady
+    ? new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      })
+    : null;
 
+  const isTopDownCrt = draftSignal.analysisMode === 'top_down_crt';
   const hasSubPanes = subPaneCount > 0;
   const verifySystemInstruction = `You are a precision quantitative chart-markup visual auditor for TraceFX Lens (Pass 2 Visual Self-Check).
 You are given:
-- Image 1: The original chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900).
+- Image 1: The original ${isTopDownCrt ? 'M5 Execution ' : ''}chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900).
 - Image 2: The rendered Draft 1 technical markup drawn directly onto the chart (zones, FVGs, BOS/CHoCH, swings, Entry, SL, TP1-TP3).
 ${zoomPart ? '- Image 3: A 2x magnified crop of the right-most active candles and Y-axis price scale.' : ''}
 
@@ -139,7 +162,19 @@ Inspect Image 2 against Image 1${zoomPart ? ' and Image 3' : ''} for ANY visual 
       ? `An indicator sub-pane exists below Y=${detectedPlotBox.bottomY}. Remove or move above Y=${detectedPlotBox.bottomY} any zone, FVG, swing, or trendline that bled into the bottom indicator pane.`
       : 'Ensure plotBox frames only the main candlestick pane, excluding toolbars or sub-panes.'
   }
-4. Stop-Loss Liquidity Trap Check: Verify Stop Loss is placed safely BEYOND the invalidation swing wick / Order Block / EQH-EQL liquidity sweep (never sitting inside an obvious unswept liquidity pool), and preserve strict ordering (BUY: SL < Entry < TP1 < TP2 < TP3; SELL: SL > Entry > TP1 > TP2 > TP3).
+4. Stop-Loss Liquidity Trap Check: Verify Stop Loss is placed safely BEYOND the invalidation swing wick / Order Block / EQH-EQL liquidity sweep (never sitting inside an obvious unswept liquidity pool), and preserve strict ordering (BUY: SL < Entry < TP1 < TP2 < TP3; SELL: SL > Entry > TP1 > TP2 > TP3).${
+    isTopDownCrt && draftSignal.crtContext
+      ? `\n5. TOP-DOWN CRT INVARIANT: H1 dominates (${
+          draftSignal.crtContext.h1CrtValid
+            ? `Valid H1 ${draftSignal.crtContext.h1Bias} CRT`
+            : 'Invalid H1 CRT -> MUST remain HOLD'
+        }). NEVER flip signalType against H1 bias; keep TP1–TP3 anchored to H1 macro targets (${draftSignal.takeProfit1}, ${draftSignal.takeProfit2}, ${draftSignal.takeProfit3}) while tightening M5 Entry/SL precision.`
+      : ''
+  }${
+    draftSignal.macroContext
+      ? `\n${isTopDownCrt && draftSignal.crtContext ? '6' : '5'}. INTERMARKET MACRO AWARENESS: Live DXY & US10Y filter status is "${draftSignal.macroContext.alignmentLabel}" (${draftSignal.macroContext.summary}). Never flip a HOLD into a counter-macro trade, and if Stop Loss cannot safely clear liquidity under a Double Macro Headwind, prefer HOLD.`
+      : ''
+  }
 
 Output ONLY a single valid JSON object (no markdown fences, no commentary) with this schema:
 {
@@ -160,6 +195,15 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     signalType: draftSignal.signalType,
     detectedPair: draftSignal.detectedPair,
     detectedTimeframe: draftSignal.detectedTimeframe,
+    crtContext: draftSignal.crtContext,
+    macroContext: draftSignal.macroContext
+      ? {
+          alignmentLabel: draftSignal.macroContext.alignmentLabel,
+          pairImpliedBias: draftSignal.macroContext.pairImpliedBias,
+          dxy: draftSignal.macroContext.dxy?.value,
+          us10y: draftSignal.macroContext.us10y?.value,
+        }
+      : undefined,
     currentMarketPrice: draftSignal.currentMarketPrice,
     entryPrice: draftSignal.entryPrice,
     stopLoss: draftSignal.stopLoss,
@@ -179,25 +223,64 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
   if (zoomPart) {
     parts.push({ inlineData: zoomPart });
   }
+  const verifyPromptText = `Audit and refine this Draft 1 signal & chartMarkup JSON by comparing Image 2 (drawn overlays) against Image 1 (0..1000 ruler grid):\n${compactDraftContext}`;
   parts.push({
-    text: `Audit and refine this Draft 1 signal & chartMarkup JSON by comparing Image 2 (drawn overlays) against Image 1 (0..1000 ruler grid):\n${compactDraftContext}`,
+    text: verifyPromptText,
   });
 
+  const openRouterImages: OpenRouterImageInput[] = [
+    { ...refPart, essential: true },
+    { ...markedPart, essential: true },
+  ];
+  if (zoomPart) {
+    openRouterImages.push({ ...zoomPart, essential: false });
+  }
+
   const verifyCandidates: Array<{
+    provider: 'gemini' | 'openrouter';
     model: string;
     timeoutMs: number;
     thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
-  }> = [
-    {
-      model: 'gemini-3.8-flash',
-      timeoutMs: 9500,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-    },
-    {
-      model: 'gemini-3.1-flash-lite',
-      timeoutMs: 8500,
-    },
-  ];
+  }> = [];
+
+  const wantsOpenRouter = isOpenRouterModelSelection(visionModel);
+  if (wantsOpenRouter && openRouterReady) {
+    const orIds = await resolveOpenRouterVisionCascade(visionModel, 3);
+    for (const id of orIds) {
+      verifyCandidates.push({
+        provider: 'openrouter',
+        model: id,
+        timeoutMs: 14000,
+      });
+    }
+    if (geminiReady) {
+      verifyCandidates.push({
+        provider: 'gemini',
+        model: 'gemini-3.8-flash',
+        timeoutMs: 11000,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      });
+    }
+  } else {
+    if (geminiReady) {
+      verifyCandidates.push({
+        provider: 'gemini',
+        model: 'gemini-3.8-flash',
+        timeoutMs: 11000,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      });
+    }
+    if (openRouterReady) {
+      const orIds = await resolveOpenRouterVisionCascade(null, 2);
+      for (const id of orIds) {
+        verifyCandidates.push({
+          provider: 'openrouter',
+          model: id,
+          timeoutMs: 14000,
+        });
+      }
+    }
+  }
 
   for (const candidate of verifyCandidates) {
     if (req.signal.aborted) break;
@@ -208,26 +291,54 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     req.signal.addEventListener('abort', onParentAbort, { once: true });
 
     try {
-      const response = await ai.models.generateContent({
-        model: candidate.model,
-        contents: { parts },
-        config: {
+      let responseText = '';
+      if (candidate.provider === 'openrouter') {
+        responseText = await generateOpenRouterCompletion({
+          model: candidate.model,
           systemInstruction: verifySystemInstruction,
+          images: openRouterImages,
+          promptText: verifyPromptText,
           temperature: 0.1,
-          responseMimeType: 'application/json',
-          abortSignal: controller.signal,
-          ...(candidate.thinkingConfig
-            ? { thinkingConfig: candidate.thinkingConfig }
-            : {}),
-        },
-      });
+          signal: controller.signal,
+        });
+      } else if (ai) {
+        const response = await ai.models.generateContent({
+          model: candidate.model,
+          contents: { parts },
+          config: {
+            systemInstruction: verifySystemInstruction,
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+            abortSignal: controller.signal,
+            ...(candidate.thinkingConfig
+              ? { thinkingConfig: candidate.thinkingConfig }
+              : {}),
+          },
+        });
+        responseText = response.text || '';
+      }
 
-      const rawObj = extractJsonObject(response.text || '');
+      const rawObj = extractJsonObject(responseText);
       if (!rawObj) continue;
 
-      const nextSignalType = normalizeSignalType(
+      let nextSignalType = normalizeSignalType(
         rawObj.signalType ?? draftSignal.signalType
       );
+      let nextCrtContext = draftSignal.crtContext;
+
+      if (isTopDownCrt && draftSignal.crtContext) {
+        const enforced = enforceTopDownCrtDominance(
+          nextSignalType,
+          draftSignal.crtContext
+        );
+        nextSignalType = enforced.signalType;
+        nextCrtContext = enforced.crtContext;
+        // Also never promote a Pass-1 HOLD into BUY/SELL during visual Pass-2 audit
+        if (draftSignal.signalType === 'HOLD') {
+          nextSignalType = 'HOLD';
+        }
+      }
+
       const nextCurrent = String(
         rawObj.currentMarketPrice || draftSignal.currentMarketPrice
       );
@@ -325,12 +436,24 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
         };
       }
 
+      const finalSignalType = orderingValid ? nextSignalType : draftSignal.signalType;
+      const updatedMacroContext = draftSignal.macroContext
+        ? finalSignalType === draftSignal.signalType
+          ? draftSignal.macroContext
+          : buildMacroCorrelationContext(
+              draftSignal.macroContext.dxy,
+              draftSignal.macroContext.us10y,
+              draftSignal.detectedPair,
+              finalSignalType
+            )
+        : undefined;
+
       const verifiedSignal: TradingSignalResponse = {
         ...draftSignal,
-        signalType: orderingValid ? nextSignalType : draftSignal.signalType,
-        executionCategory: deriveExecutionCategory(
-          orderingValid ? nextSignalType : draftSignal.signalType
-        ),
+        crtContext: nextCrtContext,
+        macroContext: updatedMacroContext,
+        signalType: finalSignalType,
+        executionCategory: deriveExecutionCategory(finalSignalType),
         currentMarketPrice: orderingValid ? nextCurrent : draftSignal.currentMarketPrice,
         entryPrice: orderingValid ? nextEntry : draftSignal.entryPrice,
         stopLoss: orderingValid ? nextSl : draftSignal.stopLoss,

@@ -119,6 +119,9 @@ function mergeClientServerRecord(
 
   return {
     ...a,
+    analysisMode: a.analysisMode || b.analysisMode,
+    crtContext: a.crtContext || b.crtContext,
+    macroContext: a.macroContext || b.macroContext,
     chartImageUrl: a.chartImageUrl || b.chartImageUrl,
     chartMarkup: a.chartMarkup || b.chartMarkup,
     outcome: lockedOutcome,
@@ -255,6 +258,9 @@ export async function recordSignalToHistory(
     fingerprint,
     pair: signal.detectedPair,
     timeframe: signal.detectedTimeframe,
+    analysisMode: signal.analysisMode,
+    crtContext: signal.crtContext,
+    macroContext: signal.macroContext,
     signalType: signal.signalType,
     executionCategory: signal.executionCategory,
     currentMarketPrice: signal.currentMarketPrice,

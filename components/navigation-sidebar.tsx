@@ -6,6 +6,7 @@ import {
   PanelLeft,
   X,
   ScanLine,
+  CalendarClock,
   History,
   MonitorPlay,
   Download,
@@ -19,7 +20,7 @@ import type { SignalHistoryRecord } from '@/lib/trading-data';
 import { usePWA } from '@/components/pwa-provider';
 
 interface AppHeaderWithSidebarProps {
-  activeRoute: 'analyze' | 'history' | 'tv-engine';
+  activeRoute: 'analyze' | 'news' | 'history' | 'tv-engine';
   rightAction?: React.ReactNode;
 }
 
@@ -147,6 +148,16 @@ export function AppHeaderWithSidebar({
               }`}
             >
               Analyze Chart
+            </Link>
+            <Link
+              href="/news"
+              className={`py-1 transition-colors border-b-2 whitespace-nowrap shrink-0 ${
+                activeRoute === 'news'
+                  ? 'border-sky-400 text-white'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Impact News
             </Link>
             <Link
               href="/history"
@@ -292,6 +303,43 @@ export function AppHeaderWithSidebar({
                       }`}
                     />
                   </Link>
+
+                <Link
+                  href="/news"
+                  onClick={() => setSidebarOpen(false)}
+                  className={`group flex min-h-[52px] items-center justify-between rounded-xl border px-3.5 py-2.5 ${
+                    activeRoute === 'news'
+                      ? 'border-sky-500/35 bg-sky-500/10 text-white'
+                      : 'border-transparent bg-transparent text-slate-300 hover:border-slate-800/90 hover:bg-[#111726] hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border ${
+                        activeRoute === 'news'
+                          ? 'border-sky-500/40 bg-sky-500/15 text-sky-400'
+                          : 'border-slate-800 bg-[#111726] text-slate-400 group-hover:text-sky-400'
+                      }`}
+                    >
+                      <CalendarClock className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold">
+                        High Impact News
+                      </div>
+                      <div className="truncate text-xs text-slate-400">
+                        Red-folder calendar &amp; full event specs
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight
+                    className={`h-4 w-4 shrink-0 ${
+                      activeRoute === 'news'
+                        ? 'text-sky-400'
+                        : 'text-slate-600 group-hover:text-slate-400'
+                    }`}
+                  />
+                </Link>
 
                 <Link
                   href="/history"

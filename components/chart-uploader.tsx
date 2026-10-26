@@ -31,6 +31,11 @@ interface ChartUploaderProps {
   selectedPair: string;
   selectedTimeframe: string;
   fileInputRef: React.RefObject<HTMLInputElement | null>;
+  customLabel?: string;
+  customMarkedPrefix?: string;
+  uploadTitle?: string;
+  uploadDescription?: string;
+  enableGlobalPaste?: boolean;
 }
 
 /**
@@ -91,6 +96,11 @@ export function ChartUploader({
   selectedPair,
   selectedTimeframe,
   fileInputRef,
+  customLabel,
+  customMarkedPrefix,
+  uploadTitle,
+  uploadDescription,
+  enableGlobalPaste = true,
 }: ChartUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [lightboxOpen, setLightboxOpen] = useState(false);
@@ -218,6 +228,7 @@ export function ChartUploader({
 
   // Support global clipboard paste (Ctrl+V / Cmd+V) of chart screenshots
   useEffect(() => {
+    if (!enableGlobalPaste) return;
     const handlePaste = (e: ClipboardEvent) => {
       if (disabled) return;
       const items = e.clipboardData?.items;
@@ -235,7 +246,7 @@ export function ChartUploader({
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [disabled, processFile]);
+  }, [disabled, enableGlobalPaste, processFile]);
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -255,17 +266,19 @@ export function ChartUploader({
     }
   };
 
+  const markedPrefix = customMarkedPrefix || 'AI Marked Chart';
+
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <label className="text-xs font-medium text-slate-400">
           {hasValidSignal && showMarkup
             ? layerFilter === 'primary'
-              ? 'AI Marked Chart · Primary Setup'
+              ? `${markedPrefix} · Primary Setup`
               : layerFilter === 'structure'
-              ? 'AI Marked Chart · Structure Only'
-              : 'AI Marked Chart · Full Structure'
-            : 'Chart Screenshot'}
+              ? `${markedPrefix} · Structure Only`
+              : `${markedPrefix} · Full Structure`
+            : customLabel || 'Chart Screenshot'}
         </label>
         {isAnalyzing ? (
           <span className="text-xs font-medium text-sky-400">
@@ -320,10 +333,11 @@ export function ChartUploader({
             <Upload className="h-5 w-5" />
           </div>
           <p className="text-sm font-semibold text-slate-100">
-            Tap to upload chart screenshot
+            {uploadTitle || 'Tap to upload chart screenshot'}
           </p>
           <p className="mt-1 max-w-xs text-xs leading-relaxed text-slate-400">
-            Supports TradingView, MT4/MT5, cTrader, or exchange screenshots. Keep the price scale visible for exact levels.
+            {uploadDescription ||
+              'Supports TradingView, MT4/MT5, cTrader, or exchange screenshots. Keep the price scale visible for exact levels.'}
           </p>
           <p className="mt-2.5 text-[11px] text-slate-500">
             PNG · JPG · WebP · Paste from clipboard

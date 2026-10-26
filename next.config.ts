@@ -21,7 +21,7 @@ const nextConfig: NextConfig = {
   },
   output: 'standalone',
   serverExternalPackages: ['playwright-core'],
-  transpilePackages: ['motion'],
+  transpilePackages: ['motion', 'forexfactory'],
   async headers() {
     return [
       {

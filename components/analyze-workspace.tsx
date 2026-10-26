@@ -1,20 +1,37 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { ScanLine, RotateCcw, Upload, Square } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import {
+  ScanLine,
+  RotateCcw,
+  Upload,
+  Square,
+  Check,
+  ArrowLeftRight,
+} from 'lucide-react';
 import { PairSelector } from '@/components/pair-selector';
 import { TimeframeSelector } from '@/components/timeframe-selector';
+import { VisionModelSelector } from '@/components/vision-model-selector';
 import { ChartUploader } from '@/components/chart-uploader';
 import { SignalResult } from '@/components/signal-result';
 import { StopConfirmDialog } from '@/components/stop-confirm-dialog';
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
 import { TradingSessionHeader } from '@/components/trading-session-banner';
 import {
+  AnalysisMode,
   AnalysisStageItem,
   AnalyzeStreamEvent,
   createInitialAnalysisStages,
+  MARKET_PAIRS,
   TradingSignalResponse,
 } from '@/lib/trading-data';
+import {
+  DEFAULT_VISION_MODEL_ID,
+  INITIAL_VISION_MODEL_CATALOG,
+  isRestrictedHarnessModelId,
+  OPENROUTER_AUTO_VISION_ID,
+  type VisionModelOption,
+} from '@/lib/vision-models';
 import {
   loadWorkspaceState,
   saveWorkspaceState,
@@ -29,14 +46,19 @@ import {
 } from '@/lib/chart-vision-enhancer';
 
 const SELF_CHECK_PREF_KEY = 'tracefx_self_check_v1';
+const OHLC_ASSIST_PREF_KEY = 'tracefx_ohlc_assist_v1';
+const VISION_MODEL_PREF_KEY = 'tracefx_vision_model_v1';
 
 export function AnalyzeWorkspace() {
   const [selectedPair, setSelectedPair] = useState<string>('XAU/USD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<string>('H1');
+  const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single');
+  const [macroImageDataUrl, setMacroImageDataUrl] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
+  const [activeCrtSlot, setActiveCrtSlot] = useState<'h1' | 'm5'>('h1');
   const [signal, setSignal] = useState<TradingSignalResponse | null>(null);
   const [stages, setStages] = useState<AnalysisStageItem[]>(() =>
-    createInitialAnalysisStages('XAU/USD', 'H1')
+    createInitialAnalysisStages('XAU/USD', 'H1', 'single')
   );
   const [progressPct, setProgressPct] = useState<number>(0);
   const [isRejected, setIsRejected] = useState<boolean>(false);
@@ -47,14 +69,24 @@ export function AnalyzeWorkspace() {
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [selfCheckEnabled, setSelfCheckEnabled] = useState<boolean>(true);
+  const [ohlcAssistEnabled, setOhlcAssistEnabled] = useState<boolean>(true);
+  const [visionModel, setVisionModel] = useState<string>(DEFAULT_VISION_MODEL_ID);
+  const [visionCatalog, setVisionCatalog] = useState<VisionModelOption[]>(
+    INITIAL_VISION_MODEL_CATALOG
+  );
+  const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const selfCheckEnabledRef = useRef<boolean>(true);
+  const ohlcAssistEnabledRef = useRef<boolean>(true);
+  const visionModelRef = useRef<string>(DEFAULT_VISION_MODEL_ID);
   const latestStateRef = useRef({
     selectedPair: 'XAU/USD',
     selectedTimeframe: 'H1',
+    analysisMode: 'single' as AnalysisMode,
     imageDataUrl: null as string | null,
+    macroImageDataUrl: null as string | null,
     signal: null as TradingSignalResponse | null,
     rejectedFinding: null as string | null,
     wasAnalyzing: false,
@@ -64,7 +96,9 @@ export function AnalyzeWorkspace() {
     latestStateRef.current = {
       selectedPair,
       selectedTimeframe,
+      analysisMode,
       imageDataUrl,
+      macroImageDataUrl,
       signal,
       rejectedFinding: isRejected ? stages[0]?.finding || null : null,
       wasAnalyzing: isAnalyzing,
@@ -72,7 +106,9 @@ export function AnalyzeWorkspace() {
   }, [
     selectedPair,
     selectedTimeframe,
+    analysisMode,
     imageDataUrl,
+    macroImageDataUrl,
     signal,
     isRejected,
     stages,
@@ -107,7 +143,9 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair: current.selectedPair,
       selectedTimeframe: current.selectedTimeframe,
+      analysisMode: current.analysisMode,
       imageDataUrl: current.imageDataUrl,
+      macroImageDataUrl: current.macroImageDataUrl,
       signal: current.signal,
       rejectedFinding: null,
       wasAnalyzing: false,
@@ -115,12 +153,21 @@ export function AnalyzeWorkspace() {
   }, []);
 
   const executeAnalysis = useCallback(
-    async (chartUrl: string, pair: string, timeframe: string) => {
+    async (
+      chartUrl: string,
+      pair: string,
+      timeframe: string,
+      mode: AnalysisMode = 'single',
+      macroChartUrl: string | null = null
+    ) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
       const controller = new AbortController();
       abortControllerRef.current = controller;
+
+      const isCrtMode = mode === 'top_down_crt';
+      const effectiveTimeframe = isCrtMode ? 'H1 → M5' : timeframe;
 
       setIsAnalyzing(true);
       setIsCompletingScan(false);
@@ -129,12 +176,14 @@ export function AnalyzeWorkspace() {
       setIsStopped(false);
       setError(null);
       setProgressPct(0);
-      setStages(createInitialAnalysisStages(pair, timeframe));
+      setStages(createInitialAnalysisStages(pair, effectiveTimeframe, mode));
 
       await saveWorkspaceState({
         selectedPair: pair,
         selectedTimeframe: timeframe,
+        analysisMode: mode,
         imageDataUrl: chartUrl,
+        macroImageDataUrl: macroChartUrl,
         signal: null,
         rejectedFinding: null,
         wasAnalyzing: true,
@@ -149,24 +198,35 @@ export function AnalyzeWorkspace() {
             item.step === 1
               ? {
                   ...item,
-                  waitingText:
-                    'Calibrating 0..1000 coordinate ruler grid, sub-panes & 2× price-axis crop...',
+                  waitingText: isCrtMode
+                    ? 'Calibrating H1 Macro & M5 Execution 0..1000 ruler grids & 2× price-axis crops...'
+                    : 'Calibrating 0..1000 coordinate ruler grid, sub-panes & 2× price-axis crop...',
                 }
               : item
           )
         );
 
-        const visionEnhancement = await buildVisionEnhancementPayload(chartUrl);
+        const [visionEnhancement, macroVisionEnhancement] = await Promise.all([
+          buildVisionEnhancementPayload(chartUrl),
+          isCrtMode && macroChartUrl
+            ? buildVisionEnhancementPayload(macroChartUrl)
+            : Promise.resolve(undefined),
+        ]);
         if (controller.signal.aborted) return;
 
         const response = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            analysisMode: mode,
             imageDataUrl: chartUrl,
+            macroImageDataUrl: isCrtMode ? macroChartUrl : undefined,
             pair,
-            timeframe,
+            timeframe: effectiveTimeframe,
+            visionModel: visionModelRef.current,
+            ohlcAssistEnabled: ohlcAssistEnabledRef.current,
             visionEnhancement,
+            macroVisionEnhancement,
           }),
           signal: controller.signal,
         });
@@ -231,9 +291,11 @@ export function AnalyzeWorkspace() {
                   return {
                     ...item,
                     status: 'active',
-                    waitingText: `Streaming ${
-                      evt.detectedTimeframe || timeframe
-                    } swing structure from model...`,
+                    waitingText: isCrtMode
+                      ? 'Auditing H1 CRT range, liquidity purge & macro directional bias...'
+                      : `Streaming ${
+                          evt.detectedTimeframe || timeframe
+                        } swing structure from model...`,
                   };
                 }
                 return item;
@@ -250,7 +312,11 @@ export function AnalyzeWorkspace() {
 
             setStages((prev) =>
               prev.map((item) => {
-                if (item.step < completedStep && item.status !== 'approved' && item.status !== 'completed') {
+                if (
+                  item.step < completedStep &&
+                  item.status !== 'approved' &&
+                  item.status !== 'completed'
+                ) {
                   return {
                     ...item,
                     status: item.step === 1 ? 'approved' : 'completed',
@@ -365,7 +431,9 @@ export function AnalyzeWorkspace() {
           await saveWorkspaceState({
             selectedPair: pair,
             selectedTimeframe: timeframe,
+            analysisMode: mode,
             imageDataUrl: chartUrl,
+            macroImageDataUrl: macroChartUrl,
             signal: null,
             rejectedFinding: rejectedReason,
             wasAnalyzing: false,
@@ -378,7 +446,11 @@ export function AnalyzeWorkspace() {
 
           // Optional Pass 2 — Two-Pass "Visual Self-Check" Mode (Draw -> Inspect -> Correct)
           // Guaranteed non-breaking: if Pass 2 times out or fails, `verifiedSignal` seamlessly stays Draft 1!
-          if (selfCheckEnabledRef.current && verifiedSignal.isValidChart && !controller.signal.aborted) {
+          if (
+            selfCheckEnabledRef.current &&
+            verifiedSignal.isValidChart &&
+            !controller.signal.aborted
+          ) {
             try {
               setStages((prev) =>
                 prev.map((item) =>
@@ -386,8 +458,9 @@ export function AnalyzeWorkspace() {
                     ? {
                         ...item,
                         status: 'active',
-                        waitingText:
-                          'Pass 2 Self-Check: inspecting drawn zones, wicks & stop-loss placement on canvas...',
+                        waitingText: isCrtMode
+                          ? 'Pass 2 Self-Check: auditing M5 tight risk & H1 dominance lock on canvas...'
+                          : 'Pass 2 Self-Check: inspecting drawn zones, wicks & stop-loss placement on canvas...',
                       }
                     : item
                 )
@@ -404,6 +477,7 @@ export function AnalyzeWorkspace() {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     draftSignal: verifiedSignal,
+                    visionModel: visionModelRef.current,
                     rulerOrCleanDataUrl:
                       visionEnhancement?.rulerGridDataUrl || chartUrl,
                     markedDraftDataUrl,
@@ -438,7 +512,10 @@ export function AnalyzeWorkspace() {
                   ? {
                       ...item,
                       status: 'completed',
-                      finding: finalStepFinding || item.finding || 'Verified by Pass 2 self-check.',
+                      finding:
+                        finalStepFinding ||
+                        item.finding ||
+                        'Verified by Pass 2 self-check.',
                     }
                   : item
               )
@@ -448,13 +525,15 @@ export function AnalyzeWorkspace() {
           await saveWorkspaceState({
             selectedPair: pair,
             selectedTimeframe: timeframe,
+            analysisMode: mode,
             imageDataUrl: chartUrl,
+            macroImageDataUrl: macroChartUrl,
             signal: verifiedSignal,
             rejectedFinding: null,
             wasAnalyzing: false,
           });
 
-          // Automatically archive signal & marked chart into Supabase + local History
+          // Automatically archive signal & marked execution chart into Supabase + local History
           void recordSignalToHistory(verifiedSignal, chartUrl);
 
           if (controller.signal.aborted) return;
@@ -466,6 +545,9 @@ export function AnalyzeWorkspace() {
           if (controller.signal.aborted) return;
 
           abortControllerRef.current = null;
+          if (isCrtMode) {
+            setActiveCrtSlot('m5');
+          }
           setSignal(verifiedSignal);
           setIsCompletingScan(false);
         } else {
@@ -492,7 +574,9 @@ export function AnalyzeWorkspace() {
         await saveWorkspaceState({
           selectedPair: pair,
           selectedTimeframe: timeframe,
+          analysisMode: mode,
           imageDataUrl: chartUrl,
+          macroImageDataUrl: macroChartUrl,
           signal: null,
           rejectedFinding: null,
           wasAnalyzing: false,
@@ -516,14 +600,72 @@ export function AnalyzeWorkspace() {
             selfCheckEnabledRef.current = enabled;
             setSelfCheckEnabled(enabled);
           }
+          const savedOhlcAssist = window.localStorage.getItem(OHLC_ASSIST_PREF_KEY);
+          if (savedOhlcAssist === '0' || savedOhlcAssist === '1') {
+            const ohlcEnabled = savedOhlcAssist === '1';
+            ohlcAssistEnabledRef.current = ohlcEnabled;
+            setOhlcAssistEnabled(ohlcEnabled);
+          }
+          const savedVisionModel = window.localStorage.getItem(VISION_MODEL_PREF_KEY);
+          if (savedVisionModel && savedVisionModel.trim()) {
+            const rawModel = savedVisionModel.trim();
+            const safeModel = isRestrictedHarnessModelId(rawModel)
+              ? OPENROUTER_AUTO_VISION_ID
+              : rawModel;
+            visionModelRef.current = safeModel;
+            setVisionModel(safeModel);
+            if (safeModel !== rawModel) {
+              window.localStorage.setItem(VISION_MODEL_PREF_KEY, safeModel);
+            }
+          }
         } catch {
           // Ignore storage restrictions
         }
+        let queryPairOverride: string | null = null;
+        try {
+          const rawPairParam = new URLSearchParams(window.location.search).get(
+            'pair'
+          );
+          if (rawPairParam) {
+            const norm = rawPairParam.trim().toUpperCase();
+            const found = MARKET_PAIRS.find(
+              (m) => m.symbol.toUpperCase() === norm
+            );
+            if (found) {
+              queryPairOverride = found.symbol;
+              window.history.replaceState({}, '', '/');
+            }
+          }
+        } catch {
+          // Ignore URL parsing issues
+        }
+
         if (persisted) {
-          setSelectedPair(persisted.selectedPair);
+          const persistedMode: AnalysisMode =
+            persisted.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single';
+          const persistedMacro = persisted.macroImageDataUrl ?? null;
+          const nextPair =
+            queryPairOverride && !persisted.wasAnalyzing
+              ? queryPairOverride
+              : persisted.selectedPair;
+          const pairSwitchedViaUrl = nextPair !== persisted.selectedPair;
+
+          setSelectedPair(nextPair);
           setSelectedTimeframe(persisted.selectedTimeframe);
-          setImageDataUrl(persisted.imageDataUrl);
-          setSignal(persisted.signal);
+          setAnalysisMode(persistedMode);
+          setMacroImageDataUrl(pairSwitchedViaUrl ? null : persistedMacro);
+          setImageDataUrl(pairSwitchedViaUrl ? null : persisted.imageDataUrl);
+          setSignal(pairSwitchedViaUrl ? null : persisted.signal);
+
+          if (persistedMode === 'top_down_crt') {
+            setActiveCrtSlot(
+              !pairSwitchedViaUrl && persisted.signal
+                ? 'm5'
+                : !persistedMacro || pairSwitchedViaUrl
+                ? 'h1'
+                : 'm5'
+            );
+          }
 
           if (persisted.signal?.isValidChart) {
             void recordSignalToHistory(
@@ -540,32 +682,47 @@ export function AnalyzeWorkspace() {
             void syncHistoryWithServer();
           }
 
-          if (persisted.rejectedFinding && persisted.imageDataUrl && !persisted.signal) {
-            setIsRejected(true);
-            setStages(
-              createInitialAnalysisStages(
-                persisted.selectedPair,
-                persisted.selectedTimeframe
-              ).map((item) =>
-                item.step === 1
-                  ? {
-                      ...item,
-                      status: 'rejected',
-                      finding: persisted.rejectedFinding || null,
-                    }
-                  : { ...item, status: 'locked' }
-              )
-            );
+          if (persisted.rejectedFinding && !persisted.signal) {
+            const hasRequiredCharts =
+              persistedMode === 'top_down_crt'
+                ? Boolean(persistedMacro && persisted.imageDataUrl)
+                : Boolean(persisted.imageDataUrl);
+            if (hasRequiredCharts) {
+              setIsRejected(true);
+              setStages(
+                createInitialAnalysisStages(
+                  persisted.selectedPair,
+                  persistedMode === 'top_down_crt'
+                    ? 'H1 → M5'
+                    : persisted.selectedTimeframe,
+                  persistedMode
+                ).map((item) =>
+                  item.step === 1
+                    ? {
+                        ...item,
+                        status: 'rejected',
+                        finding: persisted.rejectedFinding || null,
+                      }
+                    : { ...item, status: 'locked' }
+                )
+              );
+            }
           }
 
           if (persisted.wasAnalyzing && persisted.imageDataUrl && !persisted.signal) {
+            const canResume =
+              persistedMode === 'top_down_crt'
+                ? Boolean(persistedMacro && persisted.imageDataUrl)
+                : Boolean(persisted.imageDataUrl);
             const ageMs = Date.now() - (persisted.updatedAt || 0);
-            if (ageMs >= 0 && ageMs < 45_000) {
+            if (canResume && ageMs >= 0 && ageMs < 45_000) {
               setIsHydrated(true);
               void executeAnalysis(
                 persisted.imageDataUrl,
                 persisted.selectedPair,
-                persisted.selectedTimeframe
+                persisted.selectedTimeframe,
+                persistedMode,
+                persistedMacro
               );
               return;
             }
@@ -573,12 +730,16 @@ export function AnalyzeWorkspace() {
             void saveWorkspaceState({
               selectedPair: persisted.selectedPair,
               selectedTimeframe: persisted.selectedTimeframe,
+              analysisMode: persistedMode,
               imageDataUrl: persisted.imageDataUrl,
+              macroImageDataUrl: persistedMacro,
               signal: null,
               rejectedFinding: null,
               wasAnalyzing: false,
             });
           }
+        } else if (queryPairOverride) {
+          setSelectedPair(queryPairOverride);
         }
         setIsHydrated(true);
       })
@@ -595,6 +756,35 @@ export function AnalyzeWorkspace() {
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  // Hydrate live OpenRouter Free Vision catalog from server
+  useEffect(() => {
+    let active = true;
+    fetch('/api/openrouter/models', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then(
+        (
+          data: {
+            openRouterConfigured?: boolean;
+            models?: VisionModelOption[];
+          } | null
+        ) => {
+          if (!active || !data) return;
+          if (typeof data.openRouterConfigured === 'boolean') {
+            setOpenRouterConfigured(data.openRouterConfigured);
+          }
+          if (Array.isArray(data.models) && data.models.length > 0) {
+            setVisionCatalog(data.models);
+          }
+        }
+      )
+      .catch(() => {
+        // Retain static initial catalog on offline error
+      });
+    return () => {
+      active = false;
     };
   }, []);
 
@@ -620,6 +810,48 @@ export function AnalyzeWorkspace() {
   }, [isHydrated]);
 
   const isBusy = isAnalyzing || isCompletingScan;
+  const isTopDownCrt = analysisMode === 'top_down_crt';
+
+  // Memoize H1 macro signal projection so ChartUploader's reference check preserves layer filter toggles
+  const h1MacroSignalView = useMemo<TradingSignalResponse | null>(() => {
+    if (!signal || !signal.isValidChart || !signal.macroChartMarkup) {
+      return null;
+    }
+    return {
+      ...signal,
+      detectedTimeframe: 'H1 Macro · CRT',
+      chartMarkup: signal.macroChartMarkup,
+    };
+  }, [signal]);
+
+  const displayedImageDataUrl = isTopDownCrt
+    ? activeCrtSlot === 'h1'
+      ? macroImageDataUrl
+      : imageDataUrl
+    : imageDataUrl;
+
+  const displayedSignal = isTopDownCrt
+    ? activeCrtSlot === 'h1'
+      ? h1MacroSignalView
+      : signal
+    : signal;
+
+  const displayedTimeframe = isTopDownCrt
+    ? activeCrtSlot === 'h1'
+      ? 'H1'
+      : 'M5'
+    : selectedTimeframe;
+
+  const hasAnyUploadedChart = isTopDownCrt
+    ? Boolean(macroImageDataUrl || imageDataUrl)
+    : Boolean(imageDataUrl);
+
+  const isReadyToAnalyze = isTopDownCrt
+    ? Boolean(macroImageDataUrl && imageDataUrl)
+    : Boolean(imageDataUrl);
+
+  const crtReadyCount =
+    (macroImageDataUrl ? 1 : 0) + (imageDataUrl ? 1 : 0);
 
   const requestStopAnalysis = useCallback(() => {
     if (isBusy) {
@@ -631,13 +863,61 @@ export function AnalyzeWorkspace() {
     setStopConfirmOpen(false);
   }, []);
 
+  const handleModeChange = (nextMode: AnalysisMode) => {
+    if (isBusy || nextMode === analysisMode) return;
+
+    let nextMacro = macroImageDataUrl;
+    let nextSingleOrM5 = imageDataUrl;
+
+    if (nextMode === 'top_down_crt') {
+      // Smart carry-over: if user already uploaded an H1 chart in Single mode, place it in Slot 1 (H1 Macro)
+      if (!nextMacro && nextSingleOrM5 && selectedTimeframe === 'H1') {
+        nextMacro = nextSingleOrM5;
+        nextSingleOrM5 = null;
+      }
+      setActiveCrtSlot(!nextMacro ? 'h1' : 'm5');
+    }
+
+    const compatibleSignal =
+      signal && (signal.analysisMode || 'single') === nextMode ? signal : null;
+
+    setAnalysisMode(nextMode);
+    setMacroImageDataUrl(nextMacro);
+    setImageDataUrl(nextSingleOrM5);
+    setSignal(compatibleSignal);
+    setError(null);
+    setIsRejected(false);
+    setIsStopped(false);
+    setProgressPct(0);
+    setStages(
+      createInitialAnalysisStages(
+        selectedPair,
+        nextMode === 'top_down_crt' ? 'H1 → M5' : selectedTimeframe,
+        nextMode
+      )
+    );
+
+    void saveWorkspaceState({
+      selectedPair,
+      selectedTimeframe,
+      analysisMode: nextMode,
+      imageDataUrl: nextSingleOrM5,
+      macroImageDataUrl: nextMacro,
+      signal: compatibleSignal,
+      rejectedFinding: null,
+      wasAnalyzing: false,
+    });
+  };
+
   const handlePairChange = (pair: string) => {
     setSelectedPair(pair);
     setIsStopped(false);
     void saveWorkspaceState({
       selectedPair: pair,
       selectedTimeframe,
+      analysisMode,
       imageDataUrl,
+      macroImageDataUrl,
       signal,
       rejectedFinding: null,
       wasAnalyzing: isAnalyzing,
@@ -650,7 +930,9 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe: tf,
+      analysisMode,
       imageDataUrl,
+      macroImageDataUrl,
       signal,
       rejectedFinding: null,
       wasAnalyzing: isAnalyzing,
@@ -662,6 +944,10 @@ export function AnalyzeWorkspace() {
       confirmStopAnalysis();
     }
     setImageDataUrl(null);
+    setMacroImageDataUrl(null);
+    if (isTopDownCrt) {
+      setActiveCrtSlot('h1');
+    }
     setSignal(null);
     setError(null);
     setIsRejected(false);
@@ -670,7 +956,9 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
+      analysisMode,
       imageDataUrl: null,
+      macroImageDataUrl: null,
       signal: null,
       rejectedFinding: null,
       wasAnalyzing: false,
@@ -678,7 +966,28 @@ export function AnalyzeWorkspace() {
   };
 
   const handleImageChange = (newUrl: string | null) => {
-    setImageDataUrl(newUrl);
+    let nextMacro = macroImageDataUrl;
+    let nextSingleOrM5 = imageDataUrl;
+
+    if (isTopDownCrt) {
+      if (activeCrtSlot === 'h1') {
+        nextMacro = newUrl;
+        setMacroImageDataUrl(newUrl);
+        if (newUrl && !imageDataUrl) {
+          setActiveCrtSlot('m5');
+        }
+      } else {
+        nextSingleOrM5 = newUrl;
+        setImageDataUrl(newUrl);
+        if (newUrl && !macroImageDataUrl) {
+          setActiveCrtSlot('h1');
+        }
+      }
+    } else {
+      nextSingleOrM5 = newUrl;
+      setImageDataUrl(newUrl);
+    }
+
     setSignal(null);
     setError(null);
     setIsRejected(false);
@@ -687,7 +996,32 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
-      imageDataUrl: newUrl,
+      analysisMode,
+      imageDataUrl: nextSingleOrM5,
+      macroImageDataUrl: nextMacro,
+      signal: null,
+      rejectedFinding: null,
+      wasAnalyzing: false,
+    });
+  };
+
+  const handleSwapCrtCharts = () => {
+    if (isBusy || !isTopDownCrt) return;
+    const prevMacro = macroImageDataUrl;
+    const prevM5 = imageDataUrl;
+    setMacroImageDataUrl(prevM5);
+    setImageDataUrl(prevMacro);
+    setSignal(null);
+    setError(null);
+    setIsRejected(false);
+    setIsStopped(false);
+    setProgressPct(0);
+    void saveWorkspaceState({
+      selectedPair,
+      selectedTimeframe,
+      analysisMode,
+      imageDataUrl: prevMacro,
+      macroImageDataUrl: prevM5,
       signal: null,
       rejectedFinding: null,
       wasAnalyzing: false,
@@ -695,14 +1029,34 @@ export function AnalyzeWorkspace() {
   };
 
   const handleAnalyze = () => {
-    if (!imageDataUrl || isBusy) return;
-    void executeAnalysis(imageDataUrl, selectedPair, selectedTimeframe);
+    if (isBusy) return;
+    if (isTopDownCrt) {
+      if (!macroImageDataUrl || !imageDataUrl) return;
+      void executeAnalysis(
+        imageDataUrl,
+        selectedPair,
+        selectedTimeframe,
+        'top_down_crt',
+        macroImageDataUrl
+      );
+      return;
+    }
+    if (!imageDataUrl) return;
+    void executeAnalysis(imageDataUrl, selectedPair, selectedTimeframe, 'single', null);
   };
 
   const handleTriggerUpload = () => {
-    if (!isBusy) {
-      fileInputRef.current?.click();
+    if (isBusy) return;
+    if (isTopDownCrt) {
+      if (!macroImageDataUrl) {
+        setActiveCrtSlot('h1');
+      } else if (!imageDataUrl) {
+        setActiveCrtSlot('m5');
+      }
     }
+    setTimeout(() => {
+      fileInputRef.current?.click();
+    }, 0);
   };
 
   const handleToggleSelfCheck = () => {
@@ -712,6 +1066,30 @@ export function AnalyzeWorkspace() {
     setSelfCheckEnabled(next);
     try {
       window.localStorage.setItem(SELF_CHECK_PREF_KEY, next ? '1' : '0');
+    } catch {
+      // Ignore storage restrictions
+    }
+  };
+
+  const handleToggleOhlcAssist = () => {
+    if (isBusy) return;
+    const next = !ohlcAssistEnabled;
+    ohlcAssistEnabledRef.current = next;
+    setOhlcAssistEnabled(next);
+    try {
+      window.localStorage.setItem(OHLC_ASSIST_PREF_KEY, next ? '1' : '0');
+    } catch {
+      // Ignore storage restrictions
+    }
+  };
+
+  const handleVisionModelChange = (nextModelId: string) => {
+    if (isBusy) return;
+    visionModelRef.current = nextModelId;
+    setVisionModel(nextModelId);
+    setError(null);
+    try {
+      window.localStorage.setItem(VISION_MODEL_PREF_KEY, nextModelId);
     } catch {
       // Ignore storage restrictions
     }
@@ -732,7 +1110,7 @@ export function AnalyzeWorkspace() {
               <Square className="h-3 w-3 fill-current text-rose-400" />
               <span>Stop Scan</span>
             </button>
-          ) : imageDataUrl || signal ? (
+          ) : hasAnyUploadedChart || signal ? (
             <button
               type="button"
               onClick={handleReset}
@@ -749,7 +1127,7 @@ export function AnalyzeWorkspace() {
               className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111726] px-3.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-slate-700 hover:text-white disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Upload className="h-3.5 w-3.5 text-sky-400" />
-              <span>Upload Chart</span>
+              <span>{isTopDownCrt ? 'Upload H1 Chart' : 'Upload Chart'}</span>
             </button>
           )
         }
@@ -774,6 +1152,45 @@ export function AnalyzeWorkspace() {
             aria-label="Chart Input Controls"
             className="lg:col-span-5 rounded-2xl border border-slate-800/90 bg-[#111726] p-4 sm:p-6 space-y-4 sm:space-y-5"
           >
+            {/* Analysis Workflow Mode Toggle: Single Chart vs Top-Down CRT */}
+            <div>
+              <div
+                role="group"
+                aria-label="Analysis workflow mode"
+                className="grid grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-[#0D1320] p-1"
+              >
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => handleModeChange('single')}
+                  className={`min-h-[40px] min-w-0 truncate rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+                    !isTopDownCrt
+                      ? 'bg-sky-500 text-slate-950 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Single Chart
+                </button>
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => handleModeChange('top_down_crt')}
+                  className={`min-h-[40px] min-w-0 truncate rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 ${
+                    isTopDownCrt
+                      ? 'bg-sky-500 text-slate-950 font-semibold'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Top-Down CRT
+                </button>
+              </div>
+              {isTopDownCrt && (
+                <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                  H1 dominates bias &amp; targets · M5 refines trigger &amp; tight risk · Invalid H1 forces HOLD
+                </p>
+              )}
+            </div>
+
             {/* Market Pair & Timeframe Dropdowns Side-by-Side on Mobile & Desktop */}
             <div className="grid grid-cols-2 gap-2.5 sm:gap-3.5">
               <PairSelector
@@ -781,56 +1198,236 @@ export function AnalyzeWorkspace() {
                 onChange={handlePairChange}
                 disabled={isBusy}
               />
-              <TimeframeSelector
-                value={selectedTimeframe}
-                onChange={handleTimeframeChange}
-                disabled={isBusy}
-              />
+              {isTopDownCrt ? (
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-slate-400">
+                    Timeframe Pair
+                  </label>
+                  <div className="flex min-h-[50px] w-full flex-col justify-center rounded-xl border border-slate-800 bg-[#0D1320] px-3 py-2">
+                    <div className="font-[family-name:var(--font-mono)] text-sm font-semibold tracking-tight text-slate-100 whitespace-nowrap tabular-nums">
+                      H1 → M5
+                    </div>
+                    <p className="truncate text-[11px] text-slate-400">
+                      Macro CRT · Tight Risk
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <TimeframeSelector
+                  value={selectedTimeframe}
+                  onChange={handleTimeframeChange}
+                  disabled={isBusy}
+                />
+              )}
             </div>
+
+            {/* Vision Engine Selector: Gemini 3.8 Flash + OpenRouter Free Vision Models */}
+            <VisionModelSelector
+              value={visionModel}
+              onChange={handleVisionModelChange}
+              models={visionCatalog}
+              openRouterConfigured={openRouterConfigured}
+              disabled={isBusy}
+            />
+
+            {/* Dual-Chart Slot Switcher in Top-Down CRT Mode */}
+            {isTopDownCrt && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-slate-400 tabular-nums">
+                    Top-Down Chart Slots ({crtReadyCount}/2 Ready)
+                  </span>
+                  {macroImageDataUrl && imageDataUrl && !isBusy && (
+                    <button
+                      type="button"
+                      onClick={handleSwapCrtCharts}
+                      className="inline-flex min-h-[32px] items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-sky-400 whitespace-nowrap shrink-0"
+                    >
+                      <ArrowLeftRight className="h-3.5 w-3.5" />
+                      <span>Swap H1 / M5</span>
+                    </button>
+                  )}
+                </div>
+
+                <div
+                  role="tablist"
+                  aria-label="Top-Down CRT chart slots"
+                  className="grid grid-cols-1 gap-2 sm:grid-cols-2 sm:gap-2.5"
+                >
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCrtSlot === 'h1'}
+                    onClick={() => setActiveCrtSlot('h1')}
+                    className={`flex min-h-[54px] min-w-0 items-center justify-between gap-3 overflow-hidden rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
+                      activeCrtSlot === 'h1'
+                        ? 'border-sky-500/50 bg-sky-500/10 text-slate-100'
+                        : 'border-slate-800 bg-[#0D1320] text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold tracking-tight tabular-nums">
+                        1. H1 Macro · CRT
+                      </div>
+                      <div className="mt-0.5 truncate text-[11px] text-slate-400">
+                        {signal?.macroChartMarkup
+                          ? 'Inspect H1 CRT Markup'
+                          : 'Bias, Range & Targets'}
+                      </div>
+                    </div>
+                    {macroImageDataUrl && (
+                      <span
+                        aria-label="H1 chart uploaded"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/12 text-emerald-400"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={activeCrtSlot === 'm5'}
+                    onClick={() => setActiveCrtSlot('m5')}
+                    className={`flex min-h-[54px] min-w-0 items-center justify-between gap-3 overflow-hidden rounded-xl border px-3.5 py-2.5 text-left transition-colors ${
+                      activeCrtSlot === 'm5'
+                        ? 'border-sky-500/50 bg-sky-500/10 text-slate-100'
+                        : 'border-slate-800 bg-[#0D1320] text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs font-semibold tracking-tight tabular-nums">
+                        2. M5 Execution
+                      </div>
+                      <div className="mt-0.5 truncate text-[11px] text-slate-400">
+                        {signal?.chartMarkup
+                          ? 'Inspect M5 Entry Markup'
+                          : 'Trigger & Tight Stop'}
+                      </div>
+                    </div>
+                    {imageDataUrl && (
+                      <span
+                        aria-label="M5 chart uploaded"
+                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/12 text-emerald-400"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Chart Screenshot Uploader + Live AI Chart Markup */}
             <ChartUploader
-              imageDataUrl={imageDataUrl}
-              signal={signal}
+              imageDataUrl={displayedImageDataUrl}
+              signal={displayedSignal}
               onImageChange={handleImageChange}
               disabled={isBusy}
               isAnalyzing={isBusy}
               selectedPair={selectedPair}
-              selectedTimeframe={selectedTimeframe}
+              selectedTimeframe={displayedTimeframe}
               fileInputRef={fileInputRef}
+              customLabel={
+                isTopDownCrt
+                  ? activeCrtSlot === 'h1'
+                    ? 'H1 Macro Chart · CRT Bias & Targets'
+                    : 'M5 Execution Chart · Entry & Tight Stop'
+                  : undefined
+              }
+              customMarkedPrefix={
+                isTopDownCrt
+                  ? activeCrtSlot === 'h1'
+                    ? 'AI Marked H1 Macro'
+                    : 'AI Marked M5 Execution'
+                  : undefined
+              }
+              uploadTitle={
+                isTopDownCrt
+                  ? activeCrtSlot === 'h1'
+                    ? 'Upload 1. H1 Macro (CRT) screenshot'
+                    : 'Upload 2. M5 Execution screenshot'
+                  : undefined
+              }
+              uploadDescription={
+                isTopDownCrt
+                  ? activeCrtSlot === 'h1'
+                    ? 'H1 sets the dominant bias, CRT candle range (High, Low & 50% EQ), and macro liquidity targets. Keep the right-hand price scale visible.'
+                    : 'M5 is your execution microscope for CHoCH/FVG entry precision and tight stop-loss placement. Keep the right-hand price scale visible.'
+                  : undefined
+              }
             />
 
-            {/* Two-Pass Visual Self-Check Switch (Draw -> Inspect -> Correct) */}
-            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800/80 bg-[#0D1320] px-3.5 py-2.5">
-              <div className="min-w-0">
-                <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
-                  Two-Pass Visual Self-Check
+            {/* Precision Calibration Switches: 2-Pass Self-Check + Live OHLC Feed Assist */}
+            <div className="divide-y divide-slate-800/80 rounded-xl border border-slate-800/80 bg-[#0D1320]">
+              <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
+                    Two-Pass Visual Self-Check
+                  </div>
+                  <p className="truncate text-[11px] text-slate-500">
+                    {isTopDownCrt
+                      ? 'Dual H1/M5 rulers · Pass 2 wick audit · H1 veto lock'
+                      : 'Ruler grid · 2× axis zoom · Pass 2 wick & SL audit'}
+                  </p>
                 </div>
-                <p className="truncate text-[11px] text-slate-500">
-                  Ruler grid · 2× axis zoom · OHLC math · Pass 2 wick audit
-                </p>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={selfCheckEnabled}
-                aria-label="Toggle Two-Pass Visual Self-Check"
-                disabled={isBusy}
-                onClick={handleToggleSelfCheck}
-                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:opacity-50 ${
-                  selfCheckEnabled
-                    ? 'border-sky-400/50 bg-sky-500/25'
-                    : 'border-slate-700 bg-slate-800/80'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 rounded-full transition-transform duration-150 ${
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={selfCheckEnabled}
+                  aria-label="Toggle Two-Pass Visual Self-Check"
+                  disabled={isBusy}
+                  onClick={handleToggleSelfCheck}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:opacity-50 ${
                     selfCheckEnabled
-                      ? 'translate-x-5 bg-sky-400'
-                      : 'translate-x-1 bg-slate-400'
+                      ? 'border-sky-400/50 bg-sky-500/25'
+                      : 'border-slate-700 bg-slate-800/80'
                   }`}
-                />
-              </button>
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full transition-transform duration-150 ${
+                      selfCheckEnabled
+                        ? 'translate-x-5 bg-sky-400'
+                        : 'translate-x-1 bg-slate-400'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
+                    Live Spot OHLC &amp; Macro Assist
+                  </div>
+                  <p className="truncate text-[11px] text-slate-500">
+                    {ohlcAssistEnabled
+                      ? 'Swissquote Spot · DXY & US10Y Yield Filter · 14-ATR'
+                      : 'Off · Pure screenshot Y-axis vision (for backtests)'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={ohlcAssistEnabled}
+                  aria-label="Toggle Live Spot OHLC and Macro Correlation Assist"
+                  disabled={isBusy}
+                  onClick={handleToggleOhlcAssist}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:opacity-50 ${
+                    ohlcAssistEnabled
+                      ? 'border-sky-400/50 bg-sky-500/25'
+                      : 'border-slate-700 bg-slate-800/80'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 rounded-full transition-transform duration-150 ${
+                      ohlcAssistEnabled
+                        ? 'translate-x-5 bg-sky-400'
+                        : 'translate-x-1 bg-slate-400'
+                    }`}
+                  />
+                </button>
+              </div>
             </div>
 
             {/* Primary Thumb-Zone CTA -> Transforms into Stop Analysis during active scan */}
@@ -846,21 +1443,42 @@ export function AnalyzeWorkspace() {
                     Stop Analysis{progressPct > 0 ? ` (${progressPct}%)` : ''}
                   </span>
                 </button>
+              ) : isTopDownCrt && !isReadyToAnalyze ? (
+                <button
+                  type="button"
+                  onClick={handleTriggerUpload}
+                  className="flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl border border-sky-500/40 bg-sky-500/12 px-5 py-3 text-sm font-semibold text-sky-200 transition-all duration-150 hover:bg-sky-500/20 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111726] whitespace-nowrap"
+                >
+                  <Upload className="h-4 w-4 text-sky-400" />
+                  <span>
+                    {!macroImageDataUrl
+                      ? 'Upload 1. H1 Macro Chart'
+                      : 'Upload 2. M5 Execution Chart'}
+                  </span>
+                </button>
               ) : (
                 <button
                   type="button"
-                  disabled={!imageDataUrl}
+                  disabled={!isReadyToAnalyze}
                   onClick={handleAnalyze}
                   className="flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-sky-500 px-5 py-3 text-sm font-semibold text-slate-950 transition-all duration-150 hover:bg-sky-400 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#111726] disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500 whitespace-nowrap"
                 >
                   <ScanLine className="h-4 w-4" />
                   <span>
-                    {signal ? 'Re-Analyze Chart' : 'Generate Trading Signal'}
+                    {isTopDownCrt
+                      ? signal
+                        ? 'Re-Run Top-Down CRT'
+                        : 'Generate Top-Down CRT Signal'
+                      : signal
+                      ? 'Re-Analyze Chart'
+                      : 'Generate Trading Signal'}
                   </span>
                 </button>
               )}
               <p className="mt-2 text-center text-[11px] text-slate-500">
-                Generates BUY, SELL &amp; HOLD signals with visual chart markup
+                {isTopDownCrt
+                  ? 'H1 CRT validates bias & TP1–TP3 · M5 refines entry & tight SL'
+                  : 'Generates BUY, SELL & HOLD signals with visual chart markup'}
               </p>
             </div>
           </section>
@@ -872,6 +1490,7 @@ export function AnalyzeWorkspace() {
           >
             <SignalResult
               signal={signal}
+              analysisMode={analysisMode}
               stages={stages}
               progressPct={progressPct}
               isRejected={isRejected}
@@ -880,8 +1499,8 @@ export function AnalyzeWorkspace() {
               isCompleting={isCompletingScan}
               error={error}
               selectedPair={selectedPair}
-              selectedTimeframe={selectedTimeframe}
-              hasChart={Boolean(imageDataUrl)}
+              selectedTimeframe={isTopDownCrt ? 'H1 → M5' : selectedTimeframe}
+              hasChart={isReadyToAnalyze}
               onStopAnalysis={requestStopAnalysis}
               onTriggerUpload={handleTriggerUpload}
               onRetry={handleAnalyze}
@@ -894,7 +1513,7 @@ export function AnalyzeWorkspace() {
       <StopConfirmDialog
         open={stopConfirmOpen && isBusy}
         selectedPair={selectedPair}
-        selectedTimeframe={selectedTimeframe}
+        selectedTimeframe={isTopDownCrt ? 'H1 → M5' : selectedTimeframe}
         progressPct={progressPct}
         onConfirmStop={confirmStopAnalysis}
         onCancel={cancelStopConfirmation}

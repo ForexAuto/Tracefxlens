@@ -15,6 +15,23 @@ export interface TimeframeOption {
 
 export type SignalType = 'BUY' | 'SELL' | 'HOLD';
 
+export type AnalysisMode = 'single' | 'top_down_crt';
+
+export type CrtMacroBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+
+export interface CrtTopDownContext {
+  macroTimeframe: string;
+  executionTimeframe: string;
+  h1CrtValid: boolean;
+  h1Bias: CrtMacroBias;
+  crtRangeHigh?: string;
+  crtRangeLow?: string;
+  crtEquilibrium?: string;
+  crtSweepStatus: string;
+  m5ExecutionTrigger: string;
+  alignmentVerdict: string;
+}
+
 export type ExecutionCategory = 'Market Execution' | 'Stand Aside';
 
 export type ZoneRole =
@@ -181,13 +198,51 @@ export interface VisionEnhancementPayload {
   isLightBg?: boolean;
 }
 
+export type OhlcVerificationMode = 'live_spot' | 'atr_spot_only' | 'disabled';
+
+export type MacroSensitivityProfile =
+  | 'inverse_usd'
+  | 'direct_usd'
+  | 'gold_real_yield'
+  | 'jpy_yield_carry'
+  | 'risk_liquidity'
+  | 'usd_neutral_cross';
+
+export type MacroSignalAlignment = 'tailwind' | 'headwind' | 'mixed' | 'neutral';
+
+export interface MacroInstrumentSnapshot {
+  symbol: 'DXY' | 'US10Y';
+  value: string;
+  changeLabel: string;
+  h1Bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'RISING' | 'FALLING' | 'FLAT';
+  m5Impulse: 'UP' | 'DOWN' | 'FLAT';
+  sessionHigh?: string;
+  sessionLow?: string;
+  ageSeconds: number;
+  source: string;
+}
+
+export interface MacroCorrelationContext {
+  dxy: MacroInstrumentSnapshot | null;
+  us10y: MacroInstrumentSnapshot | null;
+  sensitivityProfile: MacroSensitivityProfile;
+  sensitivityLabel: string;
+  pairImpliedBias: CrtMacroBias;
+  signalAlignment: MacroSignalAlignment;
+  alignmentLabel: string;
+  summary: string;
+}
+
 export interface VisionVerificationMeta {
   rulerCalibrated?: boolean;
   rightEdgeZoomed?: boolean;
   subPanesDetected?: number;
   ohlcSynced?: boolean;
+  ohlcMode?: OhlcVerificationMode;
+  ohlcAgeSeconds?: number;
   ohlcSource?: string;
   ohlcAtr?: string;
+  macroSynced?: boolean;
   selfChecked?: boolean;
   selfCheckSummary?: string;
 }
@@ -195,6 +250,9 @@ export interface VisionVerificationMeta {
 export interface TradingSignalResponse {
   isValidChart: boolean;
   validationMessage?: string;
+  analysisMode?: AnalysisMode;
+  crtContext?: CrtTopDownContext;
+  macroContext?: MacroCorrelationContext;
   signalType: SignalType;
   executionCategory: ExecutionCategory;
   detectedPair: string;
@@ -213,6 +271,7 @@ export interface TradingSignalResponse {
   keyLevels: KeyPriceLevel[];
   invalidationCondition: string;
   chartMarkup?: ChartMarkupData;
+  macroChartMarkup?: ChartMarkupData;
   visionVerification?: VisionVerificationMeta;
   auditTrail?: Array<{
     step: number;
@@ -228,6 +287,9 @@ export interface SignalHistoryRecord {
   fingerprint: string;
   pair: string;
   timeframe: string;
+  analysisMode?: AnalysisMode;
+  crtContext?: CrtTopDownContext;
+  macroContext?: MacroCorrelationContext;
   signalType: SignalType;
   executionCategory: ExecutionCategory;
   currentMarketPrice: string;
@@ -278,8 +340,49 @@ export type AnalyzeStreamEvent =
 
 export function createInitialAnalysisStages(
   pair: string,
-  timeframe: string
+  timeframe: string,
+  analysisMode: AnalysisMode = 'single'
 ): AnalysisStageItem[] {
+  if (analysisMode === 'top_down_crt') {
+    return [
+      {
+        step: 1,
+        title: 'H1 & M5 Chart Verification & Axis Calibration',
+        waitingText: `Verifying both H1 macro and M5 execution ${pair} charts & calibrating axes...`,
+        finding: null,
+        status: 'active',
+      },
+      {
+        step: 2,
+        title: 'H1 Macro CRT Range, Purge & Bias Audit',
+        waitingText: 'Locked until both H1 and M5 charts are approved',
+        finding: null,
+        status: 'locked',
+      },
+      {
+        step: 3,
+        title: 'M5 Execution Structure, CHoCH & FVG Scan',
+        waitingText: 'Locked until H1 CRT macro range & bias are mapped',
+        finding: null,
+        status: 'locked',
+      },
+      {
+        step: 4,
+        title: 'H1 Dominance Filter & Signal Veto Check',
+        waitingText: 'Locked until M5 trigger alignment is checked against H1',
+        finding: null,
+        status: 'locked',
+      },
+      {
+        step: 5,
+        title: 'H1 Target Projection & M5 Tight Risk Validation',
+        waitingText: 'Locked until H1 dominance & M5 risk compression pass',
+        finding: null,
+        status: 'locked',
+      },
+    ];
+  }
+
   return [
     {
       step: 1,

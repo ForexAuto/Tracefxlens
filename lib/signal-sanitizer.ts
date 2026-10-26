@@ -6,6 +6,8 @@ import type {
   ChartMarkupSwing,
   ChartMarkupTrendline,
   ChartMarkupZone,
+  CrtMacroBias,
+  CrtTopDownContext,
   DetectedPlotBounds,
   ExecutionCategory,
   SignalType,
@@ -30,6 +32,117 @@ export function normalizeSignalType(raw: unknown): SignalType {
 export function deriveExecutionCategory(signal: SignalType): ExecutionCategory {
   if (signal === 'BUY' || signal === 'SELL') return 'Market Execution';
   return 'Stand Aside';
+}
+
+export function normalizeCrtBias(raw: unknown): CrtMacroBias {
+  const upper = String(raw || 'NEUTRAL')
+    .trim()
+    .toUpperCase();
+  if (upper.includes('BULL') || upper === 'BUY' || upper === 'LONG') {
+    return 'BULLISH';
+  }
+  if (upper.includes('BEAR') || upper === 'SELL' || upper === 'SHORT') {
+    return 'BEARISH';
+  }
+  return 'NEUTRAL';
+}
+
+export function sanitizeCrtContext(raw: unknown): CrtTopDownContext | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const h1Bias = normalizeCrtBias(r.h1Bias);
+  const rawValid =
+    typeof r.h1CrtValid === 'boolean'
+      ? r.h1CrtValid
+      : String(r.h1CrtValid || '').toLowerCase() === 'true';
+
+  const h1CrtValid = rawValid && h1Bias !== 'NEUTRAL';
+
+  return {
+    macroTimeframe: String(r.macroTimeframe || 'H1').trim() || 'H1',
+    executionTimeframe: String(r.executionTimeframe || 'M5').trim() || 'M5',
+    h1CrtValid,
+    h1Bias,
+    crtRangeHigh: r.crtRangeHigh ? String(r.crtRangeHigh).trim() : undefined,
+    crtRangeLow: r.crtRangeLow ? String(r.crtRangeLow).trim() : undefined,
+    crtEquilibrium: r.crtEquilibrium ? String(r.crtEquilibrium).trim() : undefined,
+    crtSweepStatus:
+      String(r.crtSweepStatus || '').trim() ||
+      (h1CrtValid
+        ? `Valid H1 ${h1Bias.toLowerCase()} CRT range reaction confirmed.`
+        : 'No valid H1 CRT range sweep or POI reaction present.'),
+    m5ExecutionTrigger:
+      String(r.m5ExecutionTrigger || '').trim() ||
+      'Evaluated M5 micro displacement and invalidation swing.',
+    alignmentVerdict:
+      String(r.alignmentVerdict || '').trim() ||
+      (h1CrtValid
+        ? `H1 ${h1Bias} CRT sets target draw · M5 refines entry & risk`
+        : 'Vetoed to HOLD — H1 CRT setup is invalid; M5 noise ignored'),
+  };
+}
+
+/**
+ * Hard deterministic guardrail enforcing the institutional Top-Down CRT law:
+ * 1. H1 always dominates. If H1 CRT is invalid or NEUTRAL, M5 by itself is meaningless -> HOLD.
+ * 2. M5 never overrides H1 macro bias: Bullish H1 cannot emit SELL; Bearish H1 cannot emit BUY.
+ */
+export function enforceTopDownCrtDominance(
+  rawSignal: SignalType,
+  crtContext?: CrtTopDownContext
+): {
+  signalType: SignalType;
+  crtContext?: CrtTopDownContext;
+  vetoReason?: string;
+} {
+  if (!crtContext) {
+    return { signalType: rawSignal };
+  }
+
+  if (!crtContext.h1CrtValid || crtContext.h1Bias === 'NEUTRAL') {
+    if (rawSignal !== 'HOLD') {
+      const vetoReason =
+        'H1 CRT setup is not valid — standalone M5 signal vetoed to HOLD.';
+      return {
+        signalType: 'HOLD',
+        vetoReason,
+        crtContext: {
+          ...crtContext,
+          h1CrtValid: false,
+          alignmentVerdict: vetoReason,
+        },
+      };
+    }
+    return { signalType: 'HOLD', crtContext };
+  }
+
+  if (crtContext.h1Bias === 'BULLISH' && rawSignal === 'SELL') {
+    const vetoReason =
+      'H1 CRT bias is BULLISH — counter-trend M5 bearish move cannot override H1 (forced HOLD).';
+    return {
+      signalType: 'HOLD',
+      vetoReason,
+      crtContext: {
+        ...crtContext,
+        alignmentVerdict: vetoReason,
+      },
+    };
+  }
+
+  if (crtContext.h1Bias === 'BEARISH' && rawSignal === 'BUY') {
+    const vetoReason =
+      'H1 CRT bias is BEARISH — counter-trend M5 bullish move cannot override H1 (forced HOLD).';
+    return {
+      signalType: 'HOLD',
+      vetoReason,
+      crtContext: {
+        ...crtContext,
+        alignmentVerdict: vetoReason,
+      },
+    };
+  }
+
+  return { signalType: rawSignal, crtContext };
 }
 
 export function normalizeZoneRole(

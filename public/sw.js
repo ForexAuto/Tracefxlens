@@ -5,6 +5,7 @@ var INLINE_OFFLINE_KEY = '/__tracefx_inline_offline__';
 
 var CORE_URLS = [
   '/',
+  '/news',
   '/history',
   '/offline',
   '/manifest.json',

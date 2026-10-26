@@ -87,6 +87,8 @@ function getDirectionVisual(signalType: SignalType) {
 function toSignalResponse(rec: SignalHistoryRecord): TradingSignalResponse {
   return {
     isValidChart: true,
+    analysisMode: rec.analysisMode,
+    crtContext: rec.crtContext,
     signalType: rec.signalType,
     executionCategory: rec.executionCategory,
     detectedPair: rec.pair,
@@ -781,6 +783,43 @@ export function HistoryWorkspace() {
                             </li>
                           ))}
                         </ul>
+                      )}
+
+                      {rec.macroContext && (
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-400 tabular-nums">
+                          <span className="font-semibold text-slate-200">
+                            Macro Filter:
+                          </span>
+                          <span
+                            className={
+                              rec.macroContext.signalAlignment === 'tailwind'
+                                ? 'text-emerald-400'
+                                : rec.macroContext.signalAlignment === 'headwind'
+                                ? 'text-rose-400'
+                                : rec.macroContext.signalAlignment === 'mixed'
+                                ? 'text-amber-400'
+                                : 'text-slate-300'
+                            }
+                          >
+                            {rec.macroContext.alignmentLabel}
+                          </span>
+                          {rec.macroContext.dxy && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-[family-name:var(--font-mono)]">
+                                DXY {rec.macroContext.dxy.value} ({rec.macroContext.dxy.changeLabel})
+                              </span>
+                            </>
+                          )}
+                          {rec.macroContext.us10y && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-[family-name:var(--font-mono)]">
+                                US10Y {rec.macroContext.us10y.value} ({rec.macroContext.us10y.changeLabel})
+                              </span>
+                            </>
+                          )}
+                        </div>
                       )}
 
                       {rec.invalidationCondition && (

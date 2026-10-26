@@ -1,4 +1,4 @@
-import { SignalType, TradingSignalResponse } from './trading-data';
+import { AnalysisMode, SignalType, TradingSignalResponse } from './trading-data';
 
 const DB_NAME = 'tracefx_lens_persistence';
 const DB_VERSION = 2;
@@ -10,7 +10,9 @@ const PREFS_LOCAL_KEY = 'tracefx_lens_prefs_v1';
 export interface PersistedWorkspaceState {
   selectedPair: string;
   selectedTimeframe: string;
+  analysisMode?: AnalysisMode;
   imageDataUrl: string | null;
+  macroImageDataUrl?: string | null;
   signal: TradingSignalResponse | null;
   rejectedFinding?: string | null;
   wasAnalyzing?: boolean;
@@ -20,6 +22,7 @@ export interface PersistedWorkspaceState {
 interface LightweightPrefs {
   selectedPair: string;
   selectedTimeframe: string;
+  analysisMode?: AnalysisMode;
 }
 
 export function openAppDatabase(): Promise<IDBDatabase> {
@@ -69,6 +72,8 @@ export function loadLightweightPrefs(): LightweightPrefs | null {
       return {
         selectedPair: String(parsed.selectedPair),
         selectedTimeframe: String(parsed.selectedTimeframe),
+        analysisMode:
+          parsed.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single',
       };
     }
     return null;
@@ -83,6 +88,7 @@ export async function saveWorkspaceState(
   saveLightweightPrefs({
     selectedPair: state.selectedPair,
     selectedTimeframe: state.selectedTimeframe,
+    analysisMode: state.analysisMode || 'single',
   });
 
   try {
@@ -159,7 +165,12 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
       return {
         selectedPair: record.selectedPair || fallbackPrefs?.selectedPair || 'XAU/USD',
         selectedTimeframe: record.selectedTimeframe || fallbackPrefs?.selectedTimeframe || 'H1',
+        analysisMode:
+          record.analysisMode === 'top_down_crt'
+            ? 'top_down_crt'
+            : fallbackPrefs?.analysisMode || 'single',
         imageDataUrl: record.imageDataUrl ?? null,
+        macroImageDataUrl: record.macroImageDataUrl ?? null,
         signal: sanitizePersistedSignal(record.signal),
         rejectedFinding: record.rejectedFinding ?? null,
         wasAnalyzing: Boolean(record.wasAnalyzing),
@@ -175,6 +186,9 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
           const parsed = JSON.parse(raw) as PersistedWorkspaceState;
           return {
             ...parsed,
+            analysisMode:
+              parsed.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single',
+            macroImageDataUrl: parsed.macroImageDataUrl ?? null,
             signal: sanitizePersistedSignal(parsed.signal),
           };
         }
@@ -188,7 +202,9 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
     return {
       selectedPair: fallbackPrefs.selectedPair,
       selectedTimeframe: fallbackPrefs.selectedTimeframe,
+      analysisMode: fallbackPrefs.analysisMode || 'single',
       imageDataUrl: null,
+      macroImageDataUrl: null,
       signal: null,
       wasAnalyzing: false,
       updatedAt: Date.now(),
