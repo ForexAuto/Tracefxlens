@@ -28,20 +28,8 @@ import {
   sanitizeChartMarkup,
   sanitizeCrtContext,
 } from '@/lib/signal-sanitizer';
-import {
-  hasGeminiKey,
-  hasOpenRouterKey,
-  type OpenRouterImageInput,
-  resolveOpenRouterVisionCascade,
-  streamOpenRouterVision,
-} from '@/lib/openrouter-server';
-import {
-  DEFAULT_VISION_MODEL_ID,
-  isOpenRouterModelSelection,
-} from '@/lib/vision-models';
 
 interface ModelCandidate {
-  provider: 'gemini' | 'openrouter';
   model: string;
   label: string;
   firstChunkTimeoutMs: number;
@@ -51,6 +39,22 @@ interface ModelCandidate {
     thinkingBudget?: number;
   };
 }
+
+const MODEL_CANDIDATES: ModelCandidate[] = [
+  {
+    model: 'gemini-3.1-flash-lite',
+    label: 'gemini-3.1-flash-lite',
+    firstChunkTimeoutMs: 12000,
+    stallTimeoutMs: 25000,
+    thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+  },
+  {
+    model: 'gemini-3.1-flash-lite',
+    label: 'gemini-3.1-flash-lite (retry)',
+    firstChunkTimeoutMs: 16000,
+    stallTimeoutMs: 25000,
+  },
+];
 
 function isRetryableModelError(err: unknown): boolean {
   const raw = err instanceof Error ? `${err.name} ${err.message}` : String(err);
@@ -62,15 +66,8 @@ function isRetryableModelError(err: unknown): boolean {
     upper.includes('MODEL_TIMEOUT') ||
     upper.includes('ABORT') ||
     upper.includes('TIMEOUT') ||
-    upper.includes('OPENROUTER ') ||
-    upper.includes('HARNESS') ||
     upper.includes('UPSTREAM') ||
-    upper.includes('PROVIDER') ||
-    upper.includes('400') ||
-    upper.includes('403') ||
-    upper.includes('404') ||
     upper.includes('408') ||
-    upper.includes('422') ||
     upper.includes('503') ||
     upper.includes('429') ||
     upper.includes('500') ||
@@ -356,14 +353,11 @@ async function nextChunkWithTimeout<T>(
 }
 
 export async function POST(req: NextRequest) {
-  const geminiReady = hasGeminiKey();
-  const openRouterReady = hasOpenRouterKey();
-
-  if (!geminiReady && !openRouterReady) {
+  if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json(
       {
         error:
-          'Neither GEMINI_API_KEY nor OPENROUTER_API_KEY is configured on the server. Add one in Settings > Secrets.',
+          'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets.',
       },
       { status: 500 }
     );
@@ -374,7 +368,6 @@ export async function POST(req: NextRequest) {
   let analysisMode: AnalysisMode = 'single';
   let selectedPair = 'EUR/USD';
   let selectedTimeframe = 'H1';
-  let visionModel = DEFAULT_VISION_MODEL_ID;
   let ohlcAssistEnabled = true;
   let visionEnhancement: VisionEnhancementPayload | undefined;
   let macroVisionEnhancement: VisionEnhancementPayload | undefined;
@@ -389,9 +382,6 @@ export async function POST(req: NextRequest) {
     selectedPair = body.pair || 'EUR/USD';
     selectedTimeframe =
       analysisMode === 'top_down_crt' ? 'H1 → M5' : body.timeframe || 'H1';
-    if (typeof body.visionModel === 'string' && body.visionModel.trim()) {
-      visionModel = body.visionModel.trim();
-    }
     if (typeof body.ohlcAssistEnabled === 'boolean') {
       ohlcAssistEnabled = body.ohlcAssistEnabled;
     }
@@ -407,17 +397,6 @@ export async function POST(req: NextRequest) {
     }
   } catch {
     return NextResponse.json({ error: 'Invalid request payload.' }, { status: 400 });
-  }
-
-  const wantsOpenRouter = isOpenRouterModelSelection(visionModel);
-  if (wantsOpenRouter && !openRouterReady) {
-    return NextResponse.json(
-      {
-        error:
-          'OPENROUTER_API_KEY is not configured yet. Add OPENROUTER_API_KEY in Settings > Secrets to use OpenRouter Free Vision models, or select Gemini 3.8 Flash.',
-      },
-      { status: 400 }
-    );
   }
 
   const isTopDownCrt = analysisMode === 'top_down_crt';
@@ -482,16 +461,14 @@ export async function POST(req: NextRequest) {
   );
   const macroHasSubPanes = macroSubPaneCount > 0;
 
-  const ai = geminiReady
-    ? new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      })
-    : null;
+  const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   // Build ordered multimodal image stack + dynamic image index mapping
   const imagePartsWithLabels: Array<{
@@ -584,17 +561,75 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  const formatOpticalAnchorDirectory = (
+    enh: VisionEnhancementPayload | undefined,
+    chartTitle: string
+  ): string[] => {
+    if (!enh) return [];
+    const lines: string[] = [];
+    const pb = enh.detectedPlotBox;
+    if (pb) {
+      lines.push(
+        `- ${chartTitle} Pre-Measured PlotBox: leftX=${pb.leftX}, rightX=${pb.rightX}, topY=${pb.topY}, bottomY=${pb.bottomY}${
+          enh.candleEnvelope
+            ? ` | Visible candles span X=${enh.candleEnvelope.firstCandleX}..${enh.candleEnvelope.lastCandleX} (latest close Y=${enh.candleEnvelope.lastCandleCloseY}, wick range Y=${enh.candleEnvelope.minHighY}..${enh.candleEnvelope.maxLowY}).`
+            : '.'
+        }`
+      );
+    }
+    if (enh.detectedAxisTicks && enh.detectedAxisTicks.length > 0) {
+      const tickList = enh.detectedAxisTicks
+        .map((t) => `${t.id}@Y=${t.y}`)
+        .join(', ');
+      const liveNote =
+        enh.liveBadgeY !== null && enh.liveBadgeY !== undefined
+          ? ` | Live price badge [LIVE]@Y=${enh.liveBadgeY}`
+          : '';
+      lines.push(
+        `- ${chartTitle} Pre-Measured Y-Axis Tick Pointers (stamped on 2x zoom strip): ${tickList}${liveNote}. In axisCalibration.axisTicks, read the exact printed number next to at least 4 of these [T#] pointers and output {"tickId":"T1","price":"<printed number>","y":<exact T# Y>}!`
+      );
+    }
+    if (enh.detectedPivots && enh.detectedPivots.length > 0) {
+      const pivList = enh.detectedPivots
+        .map((p) => `${p.id}(${p.kind === 'high' ? 'High' : 'Low'} X=${p.x},Y=${p.y})`)
+        .join(', ');
+      lines.push(
+        `- ${chartTitle} Pre-Measured Swing Wick Anchors (stamped on ruler grid): ${pivList}. Reference "pivotId":"H1" / "L1" on matching swings, BOS/CHoCH structureBreaks, or liquidityLevels to lock onto exact candle wick tips.`
+      );
+    }
+    if (enh.detectedFvgCandidates && enh.detectedFvgCandidates.length > 0) {
+      const gapList = enh.detectedFvgCandidates
+        .map(
+          (g) =>
+            `${g.id}(${g.tone} X=${g.startX}, topY=${g.topY}..bottomY=${g.bottomY}${
+              g.mitigatedEndX !== undefined ? `, mitigated@${g.mitigatedEndX}` : ', unmitigated'
+            })`
+        )
+        .join(', ');
+      lines.push(
+        `- ${chartTitle} Pre-Measured 3-Candle FVG Imbalance Anchors (stamped on ruler grid): ${gapList}. Reference "gapId":"G1" on matching fairValueGaps.`
+      );
+    }
+    return lines;
+  };
+
   const visionGuideLines: string[] = imagePartsWithLabels
     .map((x) => x.guideLine)
     .filter((g): g is string => Boolean(g));
 
-  if (!isTopDownCrt && detectedPlotBox) {
+  if (isTopDownCrt) {
     visionGuideLines.push(
-      `- Pre-AI Pixel Scan measured main candlestick plotBox bounds at approx leftX:${detectedPlotBox.leftX}, rightX:${detectedPlotBox.rightX}, topY:${detectedPlotBox.topY}, bottomY:${detectedPlotBox.bottomY}.${
-        hasSubPanes
-          ? ` CRITICAL SUB-PANE ALERT: ${subPaneCount} indicator sub-pane(s) (RSI/MACD/Volume) were detected BELOW Y=${detectedPlotBox.bottomY}. NEVER place candlestick zones, FVGs, swings, or axisTicks below Y=${detectedPlotBox.bottomY}! You MAY still read RSI/MACD divergence visually for technicalRationale confluence.`
-          : ''
-      }`
+      ...formatOpticalAnchorDirectory(macroVisionEnhancement, 'H1 Macro Chart'),
+      ...formatOpticalAnchorDirectory(visionEnhancement, 'M5 Execution Chart')
+    );
+  } else {
+    if (detectedPlotBox && hasSubPanes) {
+      visionGuideLines.push(
+        `- CRITICAL SUB-PANE ALERT: ${subPaneCount} indicator sub-pane(s) (RSI/MACD/Volume) were detected BELOW Y=${detectedPlotBox.bottomY}. NEVER place candlestick zones, FVGs, swings, or axisTicks below Y=${detectedPlotBox.bottomY}! You MAY still read RSI/MACD divergence visually for technicalRationale confluence.`
+      );
+    }
+    visionGuideLines.push(
+      ...formatOpticalAnchorDirectory(visionEnhancement, 'Main Chart')
     );
   }
 
@@ -623,24 +658,23 @@ Line 4 (Step 4 Directional Signal Classification):
 Line 5 (Step 5 Entry, Stop-Loss & TP1-TP3 Validation):
 {"event":"step","step":5,"finding":"<1 specific sentence confirming exact Entry, SL, and TP1-TP3 price ordering invariants and calculated R:R ratio>"}
 
-Line 6 (Final Validated Signal Ticket + Exhaustive Left-to-Right Spatial Chart Markup in [0..1000] image space where x:0=left..1000=right, y:0=top..1000=bottom):
-{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"<string>","currentMarketPrice":"<exact price>","entryPrice":"<exact price>","entryTriggerNote":"<1 concise sentence>","stopLoss":"<exact price>","takeProfit1":"<exact price>","takeProfit2":"<exact price>","takeProfit3":"<exact price>","riskRewardRatio":"<1 : X.X>","marketStructure":"<short label>","confidenceSummary":"<short confluence label>","technicalRationale":["<observation 1>","<observation 2>","<observation 3>","<observation 4>"],"keyLevels":[{"label":"<zone/OB/FVG/liquidity name>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise invalidation sentence>","chartMarkup":{"plotBox":{"leftX":18,"rightX":825,"topY":150,"bottomY":855},"axisCalibration":{"highRefPrice":"<top visible Y-axis price>","highRefY":195,"lowRefPrice":"<bottom visible Y-axis price>","lowRefY":810,"axisTicks":[{"price":"<visible axis label 1>","y":195},{"price":"<visible axis label 2>","y":400},{"price":"<visible axis label 3>","y":605},{"price":"<visible axis label 4>","y":810}],"lastCandleX":775,"lastCandleY":548},"zones":[{"label":"<Supply/Demand/OB/S&R name>","role":"<Demand Zone|Supply Zone|Support|Resistance|Bullish OB|Bearish OB>","startX":120,"endX":825,"topY":500,"bottomY":540,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":true}],"fairValueGaps":[{"label":"<Bullish FVG|Bearish FVG>","tone":"<bullish|bearish>","startX":340,"endX":825,"topY":440,"bottomY":468,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":false}],"structureBreaks":[{"kind":"<BOS|CHoCH>","label":"<BOS|CHoCH>","tone":"<bullish|bearish>","startX":280,"endX":465,"y":390,"price":"<broken swing price>","isPrimary":true}],"liquidityLevels":[{"kind":"<EQH|EQL|BSL|SSL|Sweep>","label":"<EQH|EQL|BSL|SSL|Liq Sweep>","tone":"<bullish|bearish|neutral>","startX":190,"endX":620,"y":240,"price":"<liquidity price>","swept":true,"isPrimary":false}],"trendlines":[{"label":"<Trendline|Channel Upper|Channel Lower>","role":"<Trendline|Channel Upper|Channel Lower>","x1":140,"y1":260,"x2":775,"y2":520,"style":"<solid|dashed>","tone":"<bullish|bearish|neutral>","isPrimary":false}],"swings":[{"tag":"<HH|HL|LH|LL>","x":145,"y":260,"position":"<above|below>","tone":"<bullish|bearish|neutral>","price":"<swing price>","isPrimary":false}]}}
+Line 6 (Final Validated Signal Ticket + Exhaustive Left-to-Right Spatial Chart Markup in [0..1000] image space where x:0=left..1000=right, y:0=top..1000=bottom; replace every <num> with REAL measured numbers from the ruler grid & [T#]/[H#]/[L#]/[G#] anchors — NEVER invent placeholder coordinates):
+{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"<string>","currentMarketPrice":"<exact price>","entryPrice":"<exact price>","entryTriggerNote":"<1 concise sentence>","stopLoss":"<exact price>","takeProfit1":"<exact price>","takeProfit2":"<exact price>","takeProfit3":"<exact price>","riskRewardRatio":"<1 : X.X>","marketStructure":"<short label>","confidenceSummary":"<short confluence label>","technicalRationale":["<observation 1>","<observation 2>","<observation 3>","<observation 4>"],"keyLevels":[{"label":"<zone/OB/FVG/liquidity name>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise invalidation sentence>","chartMarkup":{"plotBox":{"leftX":<num>,"rightX":<num>,"topY":<num>,"bottomY":<num>},"axisCalibration":{"highRefPrice":"<top visible Y-axis price>","highRefY":<num>,"lowRefPrice":"<bottom visible Y-axis price>","lowRefY":<num>,"axisTicks":[{"tickId":"<T1 or omit>","price":"<printed price at T1>","y":<num>},{"tickId":"<T2>","price":"<printed price>","y":<num>},{"tickId":"<T3>","price":"<printed price>","y":<num>},{"tickId":"<T4>","price":"<printed price>","y":<num>}],"lastCandleX":<num>,"lastCandleY":<num>},"zones":[{"label":"<Supply/Demand/OB/S&R name>","role":"<Demand Zone|Supply Zone|Support|Resistance|Bullish OB|Bearish OB>","startX":<origin candle X>,"endX":<mitigation X or rightX>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":true}],"fairValueGaps":[{"gapId":"<G1 if matching stamped FVG or omit>","label":"<Bullish FVG|Bearish FVG>","tone":"<bullish|bearish>","startX":<3-candle gap startX>,"endX":<mitigation X or rightX>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":false}],"structureBreaks":[{"pivotId":"<H1/L1 if matching stamped pivot or omit>","kind":"<BOS|CHoCH>","label":"<BOS|CHoCH>","tone":"<bullish|bearish>","startX":<broken swing wick X>,"endX":<breakout candle X>,"y":<swing wick Y>,"price":"<broken swing price>","isPrimary":true}],"liquidityLevels":[{"pivotId":"<H1/L1 or omit>","kind":"<EQH|EQL|BSL|SSL|Sweep>","label":"<EQH|EQL|BSL|SSL|Liq Sweep>","tone":"<bullish|bearish|neutral>","startX":<swing wick X>,"endX":<sweep candle X or rightX>,"y":<wick Y>,"price":"<liquidity price>","swept":true,"isPrimary":false}],"trendlines":[{"label":"<Trendline|Channel Upper|Channel Lower>","role":"<Trendline|Channel Upper|Channel Lower>","x1":<wick1 X>,"y1":<wick1 Y>,"x2":<wick2 X>,"y2":<wick2 Y>,"style":"<solid|dashed>","tone":"<bullish|bearish|neutral>","isPrimary":false}],"swings":[{"pivotId":"<H1/L1 if matching stamped pivot or omit>","tag":"<HH|HL|LH|LL>","x":<wick tip X>,"y":<wick tip Y>,"position":"<above|below>","tone":"<bullish|bearish|neutral>","price":"<swing price>","isPrimary":false}]}}
 
 EXHAUSTIVE LEFT-TO-RIGHT SMC & MARKET STRUCTURE MAPPING RULES (CRITICAL):
 - Scan the ENTIRE visible chart chronologically from left (plotBox.leftX) to right (lastCandleX). Do NOT stop at 1 or 2 annotations:
-  1. zones: Mark ALL distinct visible Supply Zones, Demand Zones, Support, Resistance, Bullish Order Blocks ("Bullish OB"), and Bearish Order Blocks ("Bearish OB") across the chart (aim for 4 to 10 zones when present). If an older zone was mitigated/broken at candle X, set endX to that mitigation X and mitigated:true; if unmitigated/active, omit endX or set endX to plotBox.rightX.
-  2. fairValueGaps: Mark ALL clear 3-candle Fair Value Gaps / imbalances across the chart (2 to 6 FVGs when visible) with accurate topPrice, bottomPrice, startX, and endX (mitigation candle X if filled, or plotBox.rightX if unmitigated).
-  3. structureBreaks: Mark ALL visible horizontal BOS (Break of Structure) and CHoCH (Change of Character) levels from left to right (2 to 8 breaks when visible), where startX is the broken swing high/low candle X, endX is the candle X that broke through it, and price/y is that exact swing level.
-  4. liquidityLevels: Mark visible Equal Highs ("EQH"), Equal Lows ("EQL"), Buy-Side Liquidity ("BSL"), Sell-Side Liquidity ("SSL"), and Liquidity Sweeps ("Sweep") (2 to 6 levels when visible).
-  5. trendlines: Mark visible diagonal Trendlines and parallel Price Channels ("Channel Upper", "Channel Lower") connecting real swing wicks (1 to 4 lines when present).
-  6. swings: Mark the FULL chronological swing structure sequence from left to right across the entire chart ("HH", "HL", "LH", "LL", 6 to 15 swing points) placed directly on each swing candle wick tip (position:"above" for highs HH/LH, position:"below" for lows HL/LL).
-  7. isPrimary: Set "isPrimary":true ONLY on the 1-2 key zones/FVGs/breaks/trendlines that directly anchor the current trade setup at the right edge; set "isPrimary":false on historical/secondary structures.
+  1. axisCalibration.axisTicks: Read the exact printed numbers next to the [T1]..[Tk] pointer boxes (and [LIVE] if present) on the 2x Right-Edge Y-Axis Zoom Crop, outputting 4 to 7 {"tickId":"T#","price":"<exact printed number>","y":<exact T# Y>} entries. This locks every horizontal price line with zero vertical drift!
+  2. zones: Mark ALL distinct visible Supply Zones, Demand Zones, Support, Resistance, Bullish Order Blocks ("Bullish OB"), and Bearish Order Blocks ("Bearish OB") across the chart (aim for 4 to 10 zones when present). ALWAYS set startX to the exact X coordinate of the origin candlestick/base that created the zone (NEVER float a zone in empty air!). Provide accurate topPrice and bottomPrice read from the Y-axis scale. If an older zone was mitigated/broken at candle X, set endX to that mitigation X and mitigated:true; if unmitigated/active, set endX to plotBox.rightX.
+  3. fairValueGaps: Mark ALL clear 3-candle Fair Value Gaps / imbalances across the chart (2 to 6 FVGs when visible) with accurate gapId (when matching a stamped G1..Gk tag), topPrice, bottomPrice, startX (first candle of the 3-candle gap), and endX (mitigation candle X if filled, or plotBox.rightX if unmitigated).
+  4. structureBreaks: Mark ALL visible horizontal BOS (Break of Structure) and CHoCH (Change of Character) levels from left to right (2 to 8 breaks when visible), where startX/y/pivotId is the broken swing high/low candle wick tip, endX is the exact candle X that broke through it, and price is that exact swing level.
+  5. liquidityLevels: Mark visible Equal Highs ("EQH"), Equal Lows ("EQL"), Buy-Side Liquidity ("BSL"), Sell-Side Liquidity ("SSL"), and Liquidity Sweeps ("Sweep") (2 to 6 levels when visible).
+  6. trendlines: Mark visible diagonal Trendlines and parallel Price Channels ("Channel Upper", "Channel Lower") connecting real swing wicks (1 to 4 lines when present).
+  7. swings: Mark the FULL chronological swing structure sequence from left to right across the entire chart ("HH", "HL", "LH", "LL", 6 to 15 swing points) placed directly on each swing candle wick tip (include pivotId when matching stamped H1..Hm / L1..Lm tags; position:"above" for highs HH/LH, position:"below" for lows HL/LL).
+  8. isPrimary: Set "isPrimary":true ONLY on the 1-2 key zones/FVGs/breaks/trendlines that directly anchor the current trade setup at the right edge; set "isPrimary":false on historical/secondary structures.
 - SPATIAL & MATHEMATICAL INVARIANTS:
   - ONLY output signalType as "BUY", "SELL", or "HOLD". NEVER output pending orders.
-  - All chartMarkup coordinates use normalized 0..1000 full-image coordinates (x=0 left edge, x=1000 right edge; y=0 top edge, y=1000 bottom edge).
-  - Set plotBox to frame ONLY the main price candlestick grid: topY below toolbars, bottomY above time-axis dates or RSI/MACD sub-panes, rightX at the vertical border before Y-axis price digits.
-  - Provide 4 to 6 exact visible Y-axis price labels and their y positions in axisCalibration.axisTicks so all prices map with zero vertical drift.
-  - Set axisCalibration.lastCandleX and lastCandleY to the exact x,y of the right-most latest candlestick close.
+  - All chartMarkup coordinates use normalized 0..1000 full-image coordinates (x=0 left edge, x=1000 right edge; y=0 top edge, y=1000 bottom edge),supporting both portrait and landscape mobile screenshots (TradingView Mobile & MT4/MT5 Mobile).
+  - Use the Pre-Measured PlotBox bounds when provided so plotBox frames ONLY the main price candlestick grid (excluding mobile status bars, top OHLC headers, right Y-axis digits, and bottom RSI/MACD sub-panes or navigation bars).
   - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
   - For BUY: entryPrice equals currentMarketPrice, and stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
   - For SELL: entryPrice equals currentMarketPrice, and stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
@@ -685,10 +719,10 @@ Line 6 (Final Validated Top-Down CRT Signal Ticket + Dual Spatial Markup for BOT
 {"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"H1 → M5","currentMarketPrice":"<exact M5 current price>","entryPrice":"<exact M5 entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking H1 CRT bias + M5 trigger>","stopLoss":"<exact tight M5 invalidation price>","takeProfit1":"<H1 CRT 50% EQ or first H1 internal target>","takeProfit2":"<Opposing H1 CRT Range High/Low draw on liquidity>","takeProfit3":"<External H1 swing/expansion liquidity target>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. H1 Bullish CRT + M5 CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or H1 Veto · Stand Aside>","crtContext":{"macroTimeframe":"H1","executionTimeframe":"M5","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact H1 CRT High price>","crtRangeLow":"<exact H1 CRT Low price>","crtEquilibrium":"<exact H1 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on H1 CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on M5 CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing H1 dominance + M5 execution outcome>"},"technicalRationale":["<H1 CRT range & purge observation>","<H1 draw-on-liquidity target rationale>","<M5 execution CHoCH/FVG & noise filter observation>","<Risk compression: tight M5 SL vs H1 reward math>"],"keyLevels":[{"label":"<e.g. H1 CRT High / H1 CRT Low / H1 50% EQ / M5 Bullish OB / M5 FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact M5 SL breach & H1 CRT invalidation>","chartMarkup":<full 0..1000 spatial markup object calibrated strictly to the M5 Execution Chart>,"macroChartMarkup":<full 0..1000 spatial markup object calibrated strictly to the H1 Macro Chart marking CRT High/Low liquidity, H1 OB/FVG zones, H1 BOS/CHoCH, and H1 swings>}
 
 DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
-- Both "chartMarkup" (for the M5 Execution Chart) and "macroChartMarkup" (for the H1 Macro Chart) MUST follow the exact schema:
-  {"plotBox":{"leftX":...,"rightX":...,"topY":...,"bottomY":...},"axisCalibration":{"highRefPrice":"...","highRefY":...,"lowRefPrice":"...","lowRefY":...,"axisTicks":[{"price":"...","y":...}],"lastCandleX":...,"lastCandleY":...},"zones":[...],"fairValueGaps":[...],"structureBreaks":[...],"liquidityLevels":[...],"trendlines":[...],"swings":[...]}
-- On "macroChartMarkup" (H1 Chart): mark the H1 CRT High & CRT Low in liquidityLevels (with swept:true on the purged side and isPrimary:true), mark H1 Supply/Demand/OB zones (3–7 zones), H1 FVGs, H1 BOS/CHoCH, and H1 HH/HL/LH/LL swings using the H1 chart's 0..1000 ruler coordinates and H1 Y-axis ticks!
-- On "chartMarkup" (M5 Chart): mark the M5 execution Order Blocks/Zones, M5 FVGs, M5 CHoCH/BOS trigger (isPrimary:true), M5 liquidity sweeps, and M5 swings using the M5 chart's 0..1000 ruler coordinates and M5 Y-axis ticks!
+- Both "chartMarkup" (for the M5 Execution Chart) and "macroChartMarkup" (for the H1 Macro Chart) MUST follow the exact schema (using REAL numbers from each chart's ruler grid & [T#]/[H#]/[L#]/[G#] anchors — never invent placeholder coordinates):
+  {"plotBox":{"leftX":<num>,"rightX":<num>,"topY":<num>,"bottomY":<num>},"axisCalibration":{"highRefPrice":"<price>","highRefY":<num>,"lowRefPrice":"<price>","lowRefY":<num>,"axisTicks":[{"tickId":"<T#>","price":"<printed price>","y":<num>}],"lastCandleX":<num>,"lastCandleY":<num>},"zones":[{"label":"<name>","role":"<role>","startX":<origin candle X>,"endX":<mitigation X or rightX>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":true}],"fairValueGaps":[{"gapId":"<G# or omit>","label":"<name>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":false}],"structureBreaks":[{"pivotId":"<H#/L# or omit>","kind":"<BOS|CHoCH>","label":"<BOS|CHoCH>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","isPrimary":true}],"liquidityLevels":[{"pivotId":"<H#/L# or omit>","kind":"<EQH|EQL|BSL|SSL|Sweep>","label":"<label>","tone":"<bullish|bearish|neutral>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","swept":true,"isPrimary":false}],"trendlines":[...],"swings":[{"pivotId":"<H#/L# or omit>","tag":"<HH|HL|LH|LL>","x":<num>,"y":<num>,"position":"<above|below>","tone":"<bullish|bearish|neutral>","price":"<price>","isPrimary":false}]}
+- On "macroChartMarkup" (H1 Chart): pair at least 4 H1 [T#] Y-axis ticks with their printed H1 prices, mark the H1 CRT High & CRT Low in liquidityLevels (with swept:true on the purged side and isPrimary:true), mark H1 Supply/Demand/OB zones anchored to real H1 origin candles, H1 FVGs, H1 BOS/CHoCH, and H1 HH/HL/LH/LL swings!
+- On "chartMarkup" (M5 Chart): pair at least 4 M5 [T#] Y-axis ticks with their printed M5 prices, mark M5 Order Blocks/Zones anchored to real M5 origin candles, M5 FVGs (referencing G# when matched), M5 CHoCH/BOS trigger (isPrimary:true), M5 liquidity sweeps, and M5 swings (referencing H#/L# when matched)!
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
 - For BUY: stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
 - For SELL: stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
@@ -993,7 +1027,8 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             rawSignalObj.chartMarkup,
             rawSignalObj.entryPrice,
             detectedPlotBox,
-            hasSubPanes
+            hasSubPanes,
+            visionEnhancement
           );
 
           const sanitizedMacroMarkup = isTopDownCrt
@@ -1001,7 +1036,8 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
                 rawSignalObj.macroChartMarkup,
                 rawSignalObj.entryPrice,
                 macroDetectedPlotBox,
-                macroHasSubPanes
+                macroHasSubPanes,
+                macroVisionEnhancement
               )
             : undefined;
 
@@ -1223,82 +1259,15 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
       };
 
       try {
-        const candidates: ModelCandidate[] = [];
-
-        if (wantsOpenRouter && openRouterReady) {
-          const orIds = await resolveOpenRouterVisionCascade(visionModel, 4);
-          for (const id of orIds) {
-            candidates.push({
-              provider: 'openrouter',
-              model: id,
-              label: id.replace(':free', ''),
-              firstChunkTimeoutMs: 18000,
-              stallTimeoutMs: 30000,
-            });
-          }
-          // Final safety net if all free OpenRouter providers are 429 saturated
-          if (geminiReady) {
-            candidates.push({
-              provider: 'gemini',
-              model: 'gemini-3.8-flash',
-              label: 'gemini-3.8-flash',
-              firstChunkTimeoutMs: 14000,
-              stallTimeoutMs: 25000,
-              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-            });
-          }
-        } else {
-          if (geminiReady) {
-            candidates.push(
-              {
-                provider: 'gemini',
-                model: 'gemini-3.8-flash',
-                label: 'gemini-3.8-flash',
-                firstChunkTimeoutMs: 12000,
-                stallTimeoutMs: 25000,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-              },
-              {
-                provider: 'gemini',
-                model: 'gemini-3.8-flash',
-                label: 'gemini-3.8-flash (retry)',
-                firstChunkTimeoutMs: 16000,
-                stallTimeoutMs: 25000,
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-              }
-            );
-          }
-          if (openRouterReady) {
-            const orBackupIds = await resolveOpenRouterVisionCascade(null, 3);
-            for (const id of orBackupIds) {
-              candidates.push({
-                provider: 'openrouter',
-                model: id,
-                label: `OpenRouter ${id.replace(':free', '')}`,
-                firstChunkTimeoutMs: 18000,
-                stallTimeoutMs: 30000,
-              });
-            }
-          }
-        }
-
-        const openRouterImages: OpenRouterImageInput[] = imagePartsWithLabels.map(
-          (item) => ({
-            mimeType: item.part.inlineData.mimeType,
-            data: item.part.inlineData.data,
-            essential: item.essential,
-          })
-        );
-
-        for (let attempt = 0; attempt < candidates.length; attempt++) {
+        for (let attempt = 0; attempt < MODEL_CANDIDATES.length; attempt++) {
           if (isAborted() || rejected || sentResult) break;
 
-          const candidate = candidates[attempt];
+          const candidate = MODEL_CANDIDATES[attempt];
 
           if (attempt > 0) {
             sendEvent({
               event: 'status',
-              message: `Switching to ${candidate.label} to complete verification...`,
+              message: `Retrying verification stream with ${candidate.model}...`,
             });
             await abortableDelay(300, req.signal);
             if (isAborted()) break;
@@ -1312,62 +1281,49 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             let buffer = '';
             let receivedAnyText = false;
 
-            const textPieceIterator: AsyncIterator<string> =
-              candidate.provider === 'openrouter'
-                ? streamOpenRouterVision({
-                    model: candidate.model,
+            const textPieceIterator: AsyncIterator<string> = (async function* () {
+              let connectTimer: ReturnType<typeof setTimeout> | null = null;
+              const multimodalParts: Array<
+                | { inlineData: { mimeType: string; data: string } }
+                | { text: string }
+              > = imagePartsWithLabels.map((item) => item.part);
+              multimodalParts.push({ text: promptText });
+
+              const responseStream = await Promise.race([
+                ai.models.generateContentStream({
+                  model: candidate.model,
+                  contents: {
+                    parts: multimodalParts,
+                  },
+                  config: {
                     systemInstruction,
-                    images: openRouterImages,
-                    promptText,
                     temperature: 0.2,
-                    signal: attemptController.signal,
-                  })[Symbol.asyncIterator]()
-                : (async function* () {
-                    if (!ai) {
-                      throw new Error('Gemini API key is not configured.');
-                    }
-                    let connectTimer: ReturnType<typeof setTimeout> | null = null;
-                    const multimodalParts: Array<
-                      | { inlineData: { mimeType: string; data: string } }
-                      | { text: string }
-                    > = imagePartsWithLabels.map((item) => item.part);
-                    multimodalParts.push({ text: promptText });
+                    abortSignal: attemptController.signal,
+                    ...(candidate.thinkingConfig
+                      ? { thinkingConfig: candidate.thinkingConfig }
+                      : {}),
+                  },
+                }),
+                new Promise<never>((_, reject) => {
+                  connectTimer = setTimeout(() => {
+                    attemptController.abort();
+                    reject(
+                      new Error(
+                        `MODEL_TIMEOUT: ${candidate.model} did not respond within ${candidate.firstChunkTimeoutMs}ms.`
+                      )
+                    );
+                  }, candidate.firstChunkTimeoutMs);
+                }),
+              ]).finally(() => {
+                if (connectTimer) clearTimeout(connectTimer);
+              });
 
-                    const responseStream = await Promise.race([
-                      ai.models.generateContentStream({
-                        model: candidate.model,
-                        contents: {
-                          parts: multimodalParts,
-                        },
-                        config: {
-                          systemInstruction,
-                          temperature: 0.2,
-                          abortSignal: attemptController.signal,
-                          ...(candidate.thinkingConfig
-                            ? { thinkingConfig: candidate.thinkingConfig }
-                            : {}),
-                        },
-                      }),
-                      new Promise<never>((_, reject) => {
-                        connectTimer = setTimeout(() => {
-                          attemptController.abort();
-                          reject(
-                            new Error(
-                              `MODEL_TIMEOUT: ${candidate.model} did not respond within ${candidate.firstChunkTimeoutMs}ms.`
-                            )
-                          );
-                        }, candidate.firstChunkTimeoutMs);
-                      }),
-                    ]).finally(() => {
-                      if (connectTimer) clearTimeout(connectTimer);
-                    });
-
-                    for await (const chunk of responseStream) {
-                      if (chunk?.text) {
-                        yield chunk.text;
-                      }
-                    }
-                  })()[Symbol.asyncIterator]();
+              for await (const chunk of responseStream) {
+                if (chunk?.text) {
+                  yield chunk.text;
+                }
+              }
+            })()[Symbol.asyncIterator]();
 
             while (!isAborted()) {
               const timeoutWindow = receivedAnyText
@@ -1413,7 +1369,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             lastError = new Error(
               'MODEL_STREAM_ENDED_EARLY: Stream closed before final signal coordinates.'
             );
-            if (attempt < candidates.length - 1) {
+            if (attempt < MODEL_CANDIDATES.length - 1) {
               continue;
             }
           } catch (attemptErr: unknown) {
@@ -1422,7 +1378,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
 
             if (
               isRetryableModelError(attemptErr) &&
-              attempt < candidates.length - 1
+              attempt < MODEL_CANDIDATES.length - 1
             ) {
               continue;
             }

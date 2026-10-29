@@ -971,9 +971,10 @@ export function HistoryWorkspace() {
                 onClick={(e) => e.stopPropagation()}
                 className="mt-3 flex max-w-full flex-col items-center gap-2"
               >
-                <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 overflow-x-auto max-w-[95vw]">
+                <div className="grid w-full max-w-[95vw] grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 sm:flex sm:w-auto sm:items-center">
                   {(
                     [
+                      { id: 'setup', label: 'Entry · SL · TP' },
                       { id: 'primary', label: 'Primary Setup' },
                       {
                         id: 'all',
@@ -992,7 +993,7 @@ export function HistoryWorkspace() {
                         setLayerFilter(opt.id);
                         if (opt.id === 'all') setSubLayer('all');
                       }}
-                      className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                      className={`min-h-[38px] rounded-lg px-3 text-xs font-medium transition-colors whitespace-nowrap tabular-nums ${
                         layerFilter === opt.id
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'

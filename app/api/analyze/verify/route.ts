@@ -5,6 +5,7 @@ import type {
   KeyPriceLevel,
   SignalType,
   TradingSignalResponse,
+  VisionEnhancementPayload,
 } from '@/lib/trading-data';
 import {
   deriveExecutionCategory,
@@ -15,17 +16,6 @@ import {
   sanitizeChartMarkup,
 } from '@/lib/signal-sanitizer';
 import { buildMacroCorrelationContext } from '@/lib/macro-correlation';
-import {
-  generateOpenRouterCompletion,
-  hasGeminiKey,
-  hasOpenRouterKey,
-  type OpenRouterImageInput,
-  resolveOpenRouterVisionCascade,
-} from '@/lib/openrouter-server';
-import {
-  DEFAULT_VISION_MODEL_ID,
-  isOpenRouterModelSelection,
-} from '@/lib/vision-models';
 
 function parseDataUrl(url?: string): { mimeType: string; data: string } | null {
   if (!url || typeof url !== 'string') return null;
@@ -94,7 +84,7 @@ export async function POST(req: NextRequest) {
   let rightEdgeZoomDataUrl = '';
   let detectedPlotBox: DetectedPlotBounds | undefined;
   let subPaneCount = 0;
-  let visionModel = DEFAULT_VISION_MODEL_ID;
+  let visionEnhancement: VisionEnhancementPayload | undefined;
 
   try {
     const body = await req.json();
@@ -108,10 +98,10 @@ export async function POST(req: NextRequest) {
     if (body.detectedPlotBox && typeof body.detectedPlotBox === 'object') {
       detectedPlotBox = body.detectedPlotBox as DetectedPlotBounds;
     }
-    subPaneCount = Math.max(0, Number(body.subPaneCount ?? 0));
-    if (typeof body.visionModel === 'string' && body.visionModel.trim()) {
-      visionModel = body.visionModel.trim();
+    if (body.visionEnhancement && typeof body.visionEnhancement === 'object') {
+      visionEnhancement = body.visionEnhancement as VisionEnhancementPayload;
     }
+    subPaneCount = Math.max(0, Number(body.subPaneCount ?? 0));
   } catch {
     return NextResponse.json({ error: 'Invalid verify payload.' }, { status: 400 });
   }
@@ -120,10 +110,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  const geminiReady = hasGeminiKey();
-  const openRouterReady = hasOpenRouterKey();
-
-  if (!geminiReady && !openRouterReady) {
+  if (!process.env.GEMINI_API_KEY) {
     return NextResponse.json({ signal: draftSignal });
   }
 
@@ -135,28 +122,51 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  const ai = geminiReady
-    ? new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      })
-    : null;
+  const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   const isTopDownCrt = draftSignal.analysisMode === 'top_down_crt';
   const hasSubPanes = subPaneCount > 0;
+  const opticalAnchorHint = [
+    visionEnhancement?.detectedAxisTicks && visionEnhancement.detectedAxisTicks.length > 0
+      ? `Pre-measured Y-axis tick pointers on Image 3: ${visionEnhancement.detectedAxisTicks
+          .map((t) => `${t.id}@Y=${t.y}`)
+          .join(', ')}${
+          visionEnhancement.liveBadgeY !== null && visionEnhancement.liveBadgeY !== undefined
+            ? `, LIVE@Y=${visionEnhancement.liveBadgeY}`
+            : ''
+        }. Keep tickId on axisCalibration.axisTicks paired with exact printed numbers.`
+      : '',
+    visionEnhancement?.detectedPivots && visionEnhancement.detectedPivots.length > 0
+      ? `Pre-measured swing wick anchors on Image 1: ${visionEnhancement.detectedPivots
+          .map((p) => `${p.id}(${p.kind} X=${p.x},Y=${p.y})`)
+          .join(', ')}.`
+      : '',
+    visionEnhancement?.detectedFvgCandidates && visionEnhancement.detectedFvgCandidates.length > 0
+      ? `Pre-measured 3-candle FVG anchors on Image 1: ${visionEnhancement.detectedFvgCandidates
+          .map((g) => `${g.id}(${g.tone} X=${g.startX},Y=${g.topY}..${g.bottomY})`)
+          .join(', ')}.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+
   const verifySystemInstruction = `You are a precision quantitative chart-markup visual auditor for TraceFX Lens (Pass 2 Visual Self-Check).
 You are given:
-- Image 1: The original ${isTopDownCrt ? 'M5 Execution ' : ''}chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900).
+- Image 1: The original ${isTopDownCrt ? 'M5 Execution ' : ''}chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900) plus [H#]/[L#] swing wick anchors and [G#] 3-candle FVG tags.
 - Image 2: The rendered Draft 1 technical markup drawn directly onto the chart (zones, FVGs, BOS/CHoCH, swings, Entry, SL, TP1-TP3).
-${zoomPart ? '- Image 3: A 2x magnified crop of the right-most active candles and Y-axis price scale.' : ''}
+${zoomPart ? '- Image 3: A 2x magnified crop of the right-most active candles and Y-axis price scale stamped with [T1]..[Tk] and [LIVE] tick pointers.' : ''}
+${opticalAnchorHint ? `\nOPTICAL ANCHOR DIRECTORY:\n${opticalAnchorHint}` : ''}
 
 Inspect Image 2 against Image 1${zoomPart ? ' and Image 3' : ''} for ANY visual or structural errors:
-1. Y-Axis Calibration Drift: Do Entry (${draftSignal.entryPrice}), Current Market (${draftSignal.currentMarketPrice}), SL, and TP lines align with the true printed Y-axis numbers? If drifted, fix axisCalibration.axisTicks, highRefPrice/Y, lowRefPrice/Y, lastCandleX/Y, and currentMarketPrice/entryPrice.
-2. Floating Zones / FVGs / BOS / Swings: Did any Supply/Demand/OB rectangle, FVG box, BOS/CHoCH line, or HH/HL/LH/LL tag float in empty space instead of sitting on the real candle wicks/bodies? Snap their 0..1000 coordinates (startX, endX, topY, bottomY, x, y) and prices onto the true candles read from Image 1's ruler grid.
+1. Y-Axis Calibration Drift: Do Entry (${draftSignal.entryPrice}), Current Market (${draftSignal.currentMarketPrice}), SL, and TP lines align with the true printed Y-axis numbers next to [T1]..[Tk] on Image 3? If drifted, fix axisCalibration.axisTicks (preserving exact tickId:"T#" + printed price), currentMarketPrice, and entryPrice.
+2. Floating Zones / FVGs / BOS / Swings: Did any Supply/Demand/OB rectangle, FVG box, BOS/CHoCH line, or HH/HL/LH/LL tag float in empty space instead of sitting on the real candle wicks/bodies? Snap their startX, endX, topPrice, bottomPrice, pivotId, gapId, x, and y onto the real origin candles and [H#]/[L#]/[G#] anchors read from Image 1.
 3. Indicator Sub-Pane Intrusion: ${
     hasSubPanes && detectedPlotBox
       ? `An indicator sub-pane exists below Y=${detectedPlotBox.bottomY}. Remove or move above Y=${detectedPlotBox.bottomY} any zone, FVG, swing, or trendline that bled into the bottom indicator pane.`
@@ -228,59 +238,21 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     text: verifyPromptText,
   });
 
-  const openRouterImages: OpenRouterImageInput[] = [
-    { ...refPart, essential: true },
-    { ...markedPart, essential: true },
-  ];
-  if (zoomPart) {
-    openRouterImages.push({ ...zoomPart, essential: false });
-  }
-
   const verifyCandidates: Array<{
-    provider: 'gemini' | 'openrouter';
     model: string;
     timeoutMs: number;
     thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
-  }> = [];
-
-  const wantsOpenRouter = isOpenRouterModelSelection(visionModel);
-  if (wantsOpenRouter && openRouterReady) {
-    const orIds = await resolveOpenRouterVisionCascade(visionModel, 3);
-    for (const id of orIds) {
-      verifyCandidates.push({
-        provider: 'openrouter',
-        model: id,
-        timeoutMs: 14000,
-      });
-    }
-    if (geminiReady) {
-      verifyCandidates.push({
-        provider: 'gemini',
-        model: 'gemini-3.8-flash',
-        timeoutMs: 11000,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      });
-    }
-  } else {
-    if (geminiReady) {
-      verifyCandidates.push({
-        provider: 'gemini',
-        model: 'gemini-3.8-flash',
-        timeoutMs: 11000,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
-      });
-    }
-    if (openRouterReady) {
-      const orIds = await resolveOpenRouterVisionCascade(null, 2);
-      for (const id of orIds) {
-        verifyCandidates.push({
-          provider: 'openrouter',
-          model: id,
-          timeoutMs: 14000,
-        });
-      }
-    }
-  }
+  }> = [
+    {
+      model: 'gemini-3.1-flash-lite',
+      timeoutMs: 11000,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+    },
+    {
+      model: 'gemini-3.1-flash-lite',
+      timeoutMs: 12000,
+    },
+  ];
 
   for (const candidate of verifyCandidates) {
     if (req.signal.aborted) break;
@@ -291,32 +263,20 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     req.signal.addEventListener('abort', onParentAbort, { once: true });
 
     try {
-      let responseText = '';
-      if (candidate.provider === 'openrouter') {
-        responseText = await generateOpenRouterCompletion({
-          model: candidate.model,
+      const response = await ai.models.generateContent({
+        model: candidate.model,
+        contents: { parts },
+        config: {
           systemInstruction: verifySystemInstruction,
-          images: openRouterImages,
-          promptText: verifyPromptText,
           temperature: 0.1,
-          signal: controller.signal,
-        });
-      } else if (ai) {
-        const response = await ai.models.generateContent({
-          model: candidate.model,
-          contents: { parts },
-          config: {
-            systemInstruction: verifySystemInstruction,
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-            abortSignal: controller.signal,
-            ...(candidate.thinkingConfig
-              ? { thinkingConfig: candidate.thinkingConfig }
-              : {}),
-          },
-        });
-        responseText = response.text || '';
-      }
+          responseMimeType: 'application/json',
+          abortSignal: controller.signal,
+          ...(candidate.thinkingConfig
+            ? { thinkingConfig: candidate.thinkingConfig }
+            : {}),
+        },
+      });
+      const responseText = response.text || '';
 
       const rawObj = extractJsonObject(responseText);
       if (!rawObj) continue;
@@ -362,7 +322,8 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
             rawObj.chartMarkup,
             orderingValid ? nextEntry : draftSignal.entryPrice,
             detectedPlotBox,
-            hasSubPanes
+            hasSubPanes,
+            visionEnhancement
           )
         : draftSignal.chartMarkup;
 

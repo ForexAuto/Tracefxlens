@@ -1,12 +1,6 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import type { EventAiMacroBrief, MacroCalendarEvent } from '@/lib/macro-news';
-import {
-  generateOpenRouterCompletion,
-  hasGeminiKey,
-  hasOpenRouterKey,
-  resolveOpenRouterVisionCascade,
-} from '@/lib/openrouter-server';
 
 const briefCache = new Map<string, EventAiMacroBrief>();
 
@@ -93,24 +87,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ brief: briefCache.get(cacheKey)! });
   }
 
-  const geminiReady = hasGeminiKey();
-  const openRouterReady = hasOpenRouterKey();
-
-  if (!geminiReady && !openRouterReady) {
+  if (!process.env.GEMINI_API_KEY) {
     const fallback = buildDeterministicBrief(event);
     return NextResponse.json({ brief: fallback });
   }
 
-  const ai = geminiReady
-    ? new GoogleGenAI({
-        apiKey: process.env.GEMINI_API_KEY,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          },
-        },
-      })
-    : null;
+  const ai = new GoogleGenAI({
+    apiKey: process.env.GEMINI_API_KEY,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   const pairsDesc = event.affectedPairs
     .map(
@@ -140,30 +129,20 @@ Given an economic calendar event, return ONLY a single valid JSON object (no mar
   ].join('\n');
 
   const candidates: Array<{
-    provider: 'gemini' | 'openrouter';
     model: string;
     timeoutMs: number;
     thinkingLevel?: ThinkingLevel;
-  }> = [];
-
-  if (geminiReady) {
-    candidates.push({
-      provider: 'gemini',
-      model: 'gemini-3.8-flash',
+  }> = [
+    {
+      model: 'gemini-3.1-flash-lite',
       timeoutMs: 8000,
       thinkingLevel: ThinkingLevel.LOW,
-    });
-  }
-  if (openRouterReady) {
-    const orIds = await resolveOpenRouterVisionCascade(null, 2);
-    for (const id of orIds) {
-      candidates.push({
-        provider: 'openrouter',
-        model: id,
-        timeoutMs: 10000,
-      });
-    }
-  }
+    },
+    {
+      model: 'gemini-3.1-flash-lite',
+      timeoutMs: 8500,
+    },
+  ];
 
   for (const cand of candidates) {
     if (req.signal.aborted) break;
@@ -173,31 +152,20 @@ Given an economic calendar event, return ONLY a single valid JSON object (no mar
     req.signal.addEventListener('abort', onAbort, { once: true });
 
     try {
-      let rawText = '';
-      if (cand.provider === 'openrouter') {
-        rawText = await generateOpenRouterCompletion({
-          model: cand.model,
+      const response = await ai.models.generateContent({
+        model: cand.model,
+        contents: prompt,
+        config: {
           systemInstruction,
-          promptText: prompt,
           temperature: 0.2,
-          signal: controller.signal,
-        });
-      } else if (ai) {
-        const response = await ai.models.generateContent({
-          model: cand.model,
-          contents: prompt,
-          config: {
-            systemInstruction,
-            temperature: 0.2,
-            responseMimeType: 'application/json',
-            abortSignal: controller.signal,
-            ...(cand.thinkingLevel
-              ? { thinkingConfig: { thinkingLevel: cand.thinkingLevel } }
-              : {}),
-          },
-        });
-        rawText = response.text || '';
-      }
+          responseMimeType: 'application/json',
+          abortSignal: controller.signal,
+          ...(cand.thinkingLevel
+            ? { thinkingConfig: { thinkingLevel: cand.thinkingLevel } }
+            : {}),
+        },
+      });
+      const rawText = response.text || '';
 
       const parsed = extractFirstJson(rawText);
       if (parsed && parsed.headlineVerdict) {

@@ -37,7 +37,6 @@ export const metadata: Metadata = {
   description:
     'AI-powered trading chart analysis delivering precise BUY, SELL, and HOLD signals with visual chart markup, entry, stop-loss, and take-profit levels across global currency, commodity, and cryptocurrency pairs.',
   applicationName: 'TraceFX Lens',
-  manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -75,8 +74,6 @@ export const metadata: Metadata = {
   },
 };
 
-const SW_MIGRATION_GUARD_SCRIPT = `(function(){try{if(navigator.onLine===false)return;var S='tracefx-shell-v7',T='tracefx-static-v7',M='__tfx_sw_v7_migrated';var hasCtrl=!!(navigator.serviceWorker&&navigator.serviceWorker.controller);var needsReset=hasCtrl&&!localStorage.getItem(M);if(!('caches' in window)&&!needsReset)return;Promise.resolve('caches' in window?caches.keys():[]).then(function(keys){var stale=keys.filter(function(k){return k.indexOf('tracefx-')===0&&k!==S&&k!==T;});if(stale.length===0&&!needsReset){if(hasCtrl)localStorage.setItem(M,'1');return;}localStorage.setItem(M,'1');return Promise.all(stale.map(function(k){return caches.delete(k);})).then(function(){if(!('serviceWorker' in navigator))return;return navigator.serviceWorker.getRegistrations().then(function(regs){return Promise.all(regs.map(function(r){return r.unregister();}));});}).then(function(){if(!sessionStorage.getItem(M)){sessionStorage.setItem(M,'1');location.reload();}});}).catch(function(){});}catch(e){}})();`;
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
@@ -84,13 +81,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       suppressHydrationWarning
       className={`${outfit.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} dark`}
     >
-      <head suppressHydrationWarning>
-        <script
-          id="tfx-sw-v7-guard"
-          suppressHydrationWarning
-          dangerouslySetInnerHTML={{ __html: SW_MIGRATION_GUARD_SCRIPT }}
-        />
-      </head>
       <body
         suppressHydrationWarning
         className="min-h-screen bg-[#090D16] font-[family-name:var(--font-sans)] text-slate-100 antialiased selection:bg-sky-500/25 selection:text-sky-100"

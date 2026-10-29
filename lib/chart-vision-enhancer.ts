@@ -3,6 +3,10 @@ import type {
   TradingSignalResponse,
   VisionEnhancementPayload,
 } from '@/lib/trading-data';
+import {
+  type ChartOpticalGeometry,
+  scanChartOpticalGeometry,
+} from '@/lib/chart-optical-scanner';
 import { renderMarkedChartToCanvas } from '@/lib/chart-markup';
 
 function clamp(v: number, min: number, max: number): number {
@@ -26,337 +30,39 @@ export interface SubPaneScanResult {
   isLightBg: boolean;
 }
 
-/**
- * Deterministic Pre-AI Pixel Scan:
- * - Detects background luminance (dark vs light theme)
- * - Detects vertical Y-axis divider line (rightX)
- * - Detects top toolbar border (topY)
- * - Detects horizontal sub-pane dividers (RSI / MACD / Volume / Stochastic stacked panes)
- *   so main candlestick plotBox.bottomY stops strictly above the first indicator sub-pane!
- */
 export function scanChartSubPanesAndBounds(
   img: HTMLImageElement
 ): SubPaneScanResult | null {
-  const natW = img.naturalWidth || img.width;
-  const natH = img.naturalHeight || img.height;
-  if (!natW || !natH) return null;
-
-  const maxSampleDim = 680;
-  const scale = Math.min(1, maxSampleDim / Math.max(natW, natH));
-  const sW = Math.max(80, Math.round(natW * scale));
-  const sH = Math.max(80, Math.round(natH * scale));
-
-  const sCanvas = document.createElement('canvas');
-  sCanvas.width = sW;
-  sCanvas.height = sH;
-  const sCtx = sCanvas.getContext('2d', { willReadFrequently: true });
-  if (!sCtx) return null;
-
-  sCtx.drawImage(img, 0, 0, sW, sH);
-  let data: Uint8ClampedArray;
-  try {
-    data = sCtx.getImageData(0, 0, sW, sH).data;
-  } catch {
-    return null;
-  }
-
-  const toSX = (nx: number) => clamp(Math.round((nx / 1000) * (sW - 1)), 0, sW - 1);
-  const toSY = (ny: number) => clamp(Math.round((ny / 1000) * (sH - 1)), 0, sH - 1);
-  const toNX = (sx: number) => Math.round((sx / Math.max(1, sW - 1)) * 1000);
-  const toNY = (sy: number) => Math.round((sy / Math.max(1, sH - 1)) * 1000);
-
-  // 1. Sample upper-middle candlestick region (Y=180..480) to get clean main chart background color
-  const rSamples: number[] = [];
-  const gSamples: number[] = [];
-  const bSamples: number[] = [];
-  for (let gx = 0; gx < 18; gx++) {
-    const sx = toSX(140 + gx * 30);
-    for (let gy = 0; gy < 16; gy++) {
-      const sy = toSY(180 + gy * 18);
-      const idx = (sy * sW + sx) * 4;
-      rSamples.push(data[idx]);
-      gSamples.push(data[idx + 1]);
-      bSamples.push(data[idx + 2]);
-    }
-  }
-  rSamples.sort((a, b) => a - b);
-  gSamples.sort((a, b) => a - b);
-  bSamples.sort((a, b) => a - b);
-  const mid = rSamples.length >> 1;
-  const bgR = rSamples[mid] ?? 15;
-  const bgG = gSamples[mid] ?? 20;
-  const bgB = bSamples[mid] ?? 30;
-  const bgLuma = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-  const isLightBg = bgLuma > 148;
-
-  const distBg = (idx: number) =>
-    Math.abs(data[idx] - bgR) +
-    Math.abs(data[idx + 1] - bgG) +
-    Math.abs(data[idx + 2] - bgB);
-
-  // 2. Detect leftX (optional left drawing toolbar on TradingView desktop)
-  let leftX = 18;
-  const vScanY0 = toSY(200);
-  const vScanY1 = toSY(520);
-  const vSpan = Math.max(1, vScanY1 - vScanY0 + 1);
-  for (let sx = toSX(24); sx <= toSX(120); sx++) {
-    let nonBg = 0;
-    let uniform = 0;
-    for (let sy = vScanY0; sy <= vScanY1; sy++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 16) nonBg++;
-      if (sy < vScanY1) {
-        const idxNext = ((sy + 1) * sW + sx) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 14) uniform++;
-      }
-    }
-    if (nonBg / vSpan >= 0.8 && uniform / Math.max(1, vSpan - 1) >= 0.78) {
-      // Confirm right of this vertical line matches main chart background
-      const checkSX = Math.min(sW - 1, sx + Math.max(4, Math.round(sW * 0.02)));
-      let rightBgMatches = 0;
-      for (let sy = vScanY0; sy <= vScanY1; sy += 3) {
-        if (distBg((sy * sW + checkSX) * 4) <= 28) rightBgMatches++;
-      }
-      if (rightBgMatches / Math.max(1, Math.ceil(vSpan / 3)) >= 0.65) {
-        leftX = clamp(toNX(sx) + 2, 12, 130);
-      }
-    }
-  }
-
-  // 3. Detect rightX (vertical Y-axis divider line before price scale labels)
-  let rightX = 875;
-  let foundAxisBorderSX = -1;
-  for (let sx = toSX(720); sx <= toSX(952); sx++) {
-    let nonBg = 0;
-    let uniform = 0;
-    for (let sy = vScanY0; sy <= vScanY1; sy++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 16) nonBg++;
-      if (sy < vScanY1) {
-        const idxNext = ((sy + 1) * sW + sx) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 15) uniform++;
-      }
-    }
-    if (nonBg / vSpan >= 0.78 && uniform / Math.max(1, vSpan - 1) >= 0.76) {
-      const checkX0 = Math.min(sW - 1, sx + Math.max(3, Math.round(sW * 0.015)));
-      const checkX1 = Math.min(sW - 1, sx + Math.max(8, Math.round(sW * 0.11)));
-      if (checkX1 > checkX0) {
-        let rightNonBg = 0;
-        let rightTotal = 0;
-        for (let rx = checkX0; rx <= checkX1; rx += 2) {
-          for (let ry = vScanY0; ry <= vScanY1; ry += 3) {
-            rightTotal++;
-            if (distBg((ry * sW + rx) * 4) > 35) rightNonBg++;
-          }
-        }
-        const rightDensity = rightNonBg / Math.max(1, rightTotal);
-        if (rightDensity >= 0.01 && rightDensity <= 0.5) {
-          foundAxisBorderSX = sx;
-        }
-      }
-    }
-  }
-
-  if (foundAxisBorderSX !== -1) {
-    rightX = clamp(toNX(foundAxisBorderSX), 720, 952);
-  } else {
-    let textStartSX = -1;
-    for (let sx = toSX(965); sx >= toSX(785); sx--) {
-      let highContrast = 0;
-      for (let sy = vScanY0; sy <= vScanY1; sy += 2) {
-        if (distBg((sy * sW + sx) * 4) > 85) highContrast++;
-      }
-      const density = highContrast / Math.max(1, Math.floor(vSpan / 2));
-      if (density >= 0.035 && density <= 0.38) {
-        textStartSX = sx;
-      }
-    }
-    if (textStartSX !== -1) {
-      rightX = clamp(toNX(textStartSX) - 10, 740, 945);
-    }
-  }
-
-  // 4. Detect topY (horizontal border below mobile OS bar + TradingView/MT5 top toolbar)
-  let topY = 52;
-  const rowX0 = toSX(leftX + 35);
-  const rowX1 = toSX(rightX - 16);
-  const rowSpanX = Math.max(1, rowX1 - rowX0 + 1);
-
-  for (let sy = toSY(18); sy <= toSY(220); sy++) {
-    let nonBg = 0;
-    let uniform = 0;
-    for (let sx = rowX0; sx <= rowX1; sx++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 16) nonBg++;
-      if (sx < rowX1) {
-        const idxNext = (sy * sW + sx + 1) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 14) uniform++;
-      }
-    }
-    if (nonBg / rowSpanX >= 0.78 && uniform / Math.max(1, rowSpanX - 1) >= 0.76) {
-      const belowSY = Math.min(sH - 1, sy + Math.max(4, Math.round(sH * 0.015)));
-      let belowBgMatch = 0;
-      for (let sx = rowX0; sx <= rowX1; sx += 3) {
-        if (distBg((belowSY * sW + sx) * 4) <= 28) belowBgMatch++;
-      }
-      if (belowBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.65) {
-        topY = clamp(toNY(sy) + 2, 16, 225);
-      }
-    }
-  }
-
-  // 5. Scan full lower range (Y=450..962) for ALL solid horizontal pane dividers:
-  //    - Divider between Main Candlestick Chart & Indicator Sub-Pane 1 (RSI / MACD / Stoch / Vol)
-  //    - Divider between Sub-Pane 1 & Sub-Pane 2
-  //    - Bottom Time-Axis / OS Navigation border
-  const rawDividerSYs: number[] = [];
-  for (let sy = toSY(455); sy <= toSY(962); sy++) {
-    let nonBg = 0;
-    let uniform = 0;
-    let coloredChroma = 0;
-    for (let sx = rowX0; sx <= rowX1; sx++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 15) nonBg++;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-      const chr = Math.max(r, g, b) - Math.min(r, g, b);
-      if (chr >= 24) coloredChroma++;
-
-      if (sx < rowX1) {
-        const idxNext = (sy * sW + sx + 1) * 4;
-        const stepDiff =
-          Math.abs(r - data[idxNext]) +
-          Math.abs(g - data[idxNext + 1]) +
-          Math.abs(b - data[idxNext + 2]);
-        if (stepDiff <= 12) uniform++;
-      }
-    }
-
-    // Pane dividers in TradingView / MT4 / MT5 / cTrader are low-chroma neutral borders (not colored Bid/Ask lines!)
-    const nonBgFrac = nonBg / rowSpanX;
-    const uniformFrac = uniform / Math.max(1, rowSpanX - 1);
-    const chromaFrac = coloredChroma / rowSpanX;
-
-    if (nonBgFrac >= 0.82 && uniformFrac >= 0.82 && chromaFrac <= 0.25) {
-      // Verify chart background immediately above this divider (excludes solid bottom toolbars)
-      const aboveSY = Math.max(0, sy - Math.max(4, Math.round(sH * 0.015)));
-      let aboveBgMatch = 0;
-      for (let sx = rowX0; sx <= rowX1; sx += 3) {
-        if (distBg((aboveSY * sW + sx) * 4) <= 30) aboveBgMatch++;
-      }
-      if (aboveBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.6) {
-        rawDividerSYs.push(sy);
-      }
-    }
-  }
-
-  // Merge adjacent 1-3px divider rows into distinct normalized Y positions
-  const mergedDividersNY: number[] = [];
-  if (rawDividerSYs.length > 0) {
-    let grpStart = 0;
-    for (let i = 1; i <= rawDividerSYs.length; i++) {
-      if (
-        i === rawDividerSYs.length ||
-        rawDividerSYs[i] - rawDividerSYs[i - 1] > Math.max(3, Math.round(sH * 0.012))
-      ) {
-        const slice = rawDividerSYs.slice(grpStart, i);
-        const avgSY = slice.reduce((a, b) => a + b, 0) / slice.length;
-        const ny = toNY(avgSY);
-        // Must leave at least 310 normalized height for main price pane
-        if (ny - topY >= 310) {
-          mergedDividersNY.push(ny);
-        }
-        grpStart = i;
-      }
-    }
-  }
-
-  let bottomY = 885;
-  let subPaneDividerYs: number[] = [];
-
-  if (mergedDividersNY.length >= 2) {
-    // Multiple horizontal dividers -> first divider is the exact bottom of the main candlestick pane,
-    // and the space below it contains 1 or more indicator sub-panes (RSI / MACD / Volume) before the time axis!
-    const firstDivider = mergedDividersNY[0];
-    const lastDivider = mergedDividersNY[mergedDividersNY.length - 1];
-    if (lastDivider - firstDivider >= 65) {
-      bottomY = clamp(firstDivider - 2, 460, 955);
-      subPaneDividerYs = mergedDividersNY.slice(0, -1);
-    } else {
-      bottomY = clamp(lastDivider - 2, 520, 962);
-    }
-  } else if (mergedDividersNY.length === 1) {
-    const onlyDivider = mergedDividersNY[0];
-    bottomY = clamp(onlyDivider - 2, 470, 962);
-    // Check if there is still a large chart-background indicator pane below this single divider (e.g. borderless bottom time axis)
-    if (onlyDivider <= 790) {
-      const probeY0 = toSY(onlyDivider + 22);
-      const probeY1 = toSY(Math.min(930, onlyDivider + 125));
-      if (probeY1 > probeY0 + 6) {
-        let bgLike = 0;
-        let inkLike = 0;
-        let total = 0;
-        for (let sy = probeY0; sy <= probeY1; sy += 3) {
-          for (let sx = rowX0; sx <= rowX1; sx += 4) {
-            total++;
-            const d = distBg((sy * sW + sx) * 4);
-            if (d <= 28) bgLike++;
-            if (d >= 48) inkLike++;
-          }
-        }
-        const bgFrac = bgLike / Math.max(1, total);
-        const inkFrac = inkLike / Math.max(1, total);
-        if (bgFrac >= 0.48 && inkFrac >= 0.015 && inkFrac <= 0.42) {
-          subPaneDividerYs = [onlyDivider];
-        }
-      }
-    }
-  }
-
+  const geo = scanChartOpticalGeometry(img);
+  if (!geo) return null;
   return {
-    detectedPlotBox: {
-      leftX,
-      rightX,
-      topY,
-      bottomY,
-    },
-    subPaneCount: subPaneDividerYs.length,
-    subPaneDividerYs,
-    isLightBg,
+    detectedPlotBox: geo.detectedPlotBox,
+    subPaneCount: geo.subPaneCount,
+    subPaneDividerYs: geo.subPaneDividerYs,
+    isLightBg: geo.isLightBg,
   };
 }
 
 /**
- * Generates an AI-only copy of the screenshot stamped with a subtle, razor-sharp
- * 0..1000 coordinate ruler grid (every 100 units, plus minor 50-unit ticks on Y)
- * and marks any detected indicator sub-pane boundary so Gemini never confuses
- * RSI/MACD sub-panes with candlestick price wicks.
+ * Generates an AI-only copy of the screenshot stamped with:
+ * 1. Exact plotBox border + shaded top/bottom chrome & indicator sub-pane exclusion zones.
+ * 2. Crisp 0..1000 coordinate ruler grid strictly inside the plotBox.
+ * 3. Pre-detected swing wick pivot anchors (`H1..H8` on high wicks, `L1..L8` on low wicks)
+ *    and 3-candle Fair Value Gap anchors (`G1..Gk`) so Gemini 3.1 can lock directly to
+ *    physical candle structures without guessing X/Y coordinates.
  */
 function buildRulerGridDataUrl(
   img: HTMLImageElement,
-  scan: SubPaneScanResult
+  scan: ChartOpticalGeometry
 ): string | undefined {
   const natW = img.naturalWidth || img.width;
   const natH = img.naturalHeight || img.height;
   if (!natW || !natH) return undefined;
 
-  const maxDim = 1080;
+  const maxDim = 1280;
   const scale = Math.min(1, maxDim / Math.max(natW, natH));
-  const W = Math.max(320, Math.round(natW * scale));
-  const H = Math.max(240, Math.round(natH * scale));
+  const W = Math.max(360, Math.round(natW * scale));
+  const H = Math.max(280, Math.round(natH * scale));
 
   const canvas = document.createElement('canvas');
   canvas.width = W;
@@ -364,36 +70,45 @@ function buildRulerGridDataUrl(
   const ctx = canvas.getContext('2d');
   if (!ctx) return undefined;
 
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, 0, 0, W, H);
 
   const sx = (nx: number) => (nx / 1000) * W;
   const sy = (ny: number) => (ny / 1000) * H;
-  const unit = Math.max(1, Math.min(W, H) / 860);
+  const unit = Math.max(1, Math.min(W, H) / 780);
   const light = scan.isLightBg;
+  const pb = scan.detectedPlotBox;
 
-  const majorStroke = light ? 'rgba(2, 132, 199, 0.28)' : 'rgba(56, 189, 248, 0.28)';
-  const minorStroke = light ? 'rgba(2, 132, 199, 0.14)' : 'rgba(56, 189, 248, 0.14)';
-  const badgeBg = light ? 'rgba(15, 23, 42, 0.78)' : 'rgba(2, 6, 23, 0.82)';
+  const majorStroke = light ? 'rgba(2, 132, 199, 0.26)' : 'rgba(56, 189, 248, 0.26)';
+  const minorStroke = light ? 'rgba(2, 132, 199, 0.13)' : 'rgba(56, 189, 248, 0.13)';
+  const badgeBg = light ? 'rgba(15, 23, 42, 0.82)' : 'rgba(2, 6, 23, 0.86)';
   const badgeFg = '#38BDF8';
 
   ctx.save();
-  ctx.font = `700 ${Math.max(9, Math.round(10 * unit))}px ui-monospace, SFMono-Regular, monospace`;
+  ctx.font = `700 ${Math.max(9, Math.round(9.8 * unit))}px ui-monospace, SFMono-Regular, monospace`;
 
-  // Vertical X coordinate lines (100..900)
+  const plotLeftPx = sx(pb.leftX);
+  const plotRightPx = sx(pb.rightX);
+  const plotTopPx = sy(pb.topY);
+  const plotBotPx = sy(pb.bottomY);
+
+  // Vertical X coordinate lines strictly inside plotBox
   for (let nx = 100; nx <= 900; nx += 100) {
+    if (nx < pb.leftX + 15 || nx > pb.rightX - 10) continue;
     const x = Math.round(sx(nx)) + 0.5;
     ctx.strokeStyle = majorStroke;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, H);
+    ctx.moveTo(x, plotTopPx);
+    ctx.lineTo(x, plotBotPx);
     ctx.stroke();
 
     const lbl = `X${nx}`;
     const tw = ctx.measureText(lbl).width;
-    const bx = clamp(x - tw / 2 - 3, 2, W - tw - 8);
-    const by = clamp(sy(scan.detectedPlotBox.topY) + 3, 2, H - 18);
+    const bx = clamp(x - tw / 2 - 3, plotLeftPx + 2, plotRightPx - tw - 8);
+    const by = clamp(plotTopPx + 3, 2, H - 18);
     ctx.setLineDash([]);
     ctx.fillStyle = badgeBg;
     ctx.fillRect(bx, by, tw + 6, 13 * unit);
@@ -401,23 +116,24 @@ function buildRulerGridDataUrl(
     ctx.fillText(lbl, bx + 3, by + 10 * unit);
   }
 
-  // Horizontal Y coordinate lines (50..950)
+  // Horizontal Y coordinate lines strictly inside plotBox
   for (let ny = 50; ny <= 950; ny += 50) {
+    if (ny < pb.topY + 12 || ny > pb.bottomY - 12) continue;
     const y = Math.round(sy(ny)) + 0.5;
     const isMajor = ny % 100 === 0;
     ctx.strokeStyle = isMajor ? majorStroke : minorStroke;
     ctx.lineWidth = 1;
     ctx.setLineDash(isMajor ? [4, 4] : [2, 5]);
     ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(W, y);
+    ctx.moveTo(plotLeftPx, y);
+    ctx.lineTo(plotRightPx, y);
     ctx.stroke();
 
     if (isMajor) {
       const lbl = `Y${ny}`;
       const tw = ctx.measureText(lbl).width;
-      const bx = clamp(sx(scan.detectedPlotBox.leftX) + 4, 2, W - tw - 10);
-      const by = clamp(y - 6.5 * unit, 2, H - 15 * unit);
+      const bx = clamp(plotLeftPx + 4, 2, W - tw - 10);
+      const by = clamp(y - 6.5 * unit, plotTopPx + 2, plotBotPx - 14 * unit);
       ctx.setLineDash([]);
       ctx.fillStyle = badgeBg;
       ctx.fillRect(bx, by, tw + 6, 13 * unit);
@@ -426,70 +142,115 @@ function buildRulerGridDataUrl(
     }
   }
 
-  // Highlight main candlestick plotBox border + shade out sub-pane region if present
-  const pb = scan.detectedPlotBox;
+  // Stamp pre-detected 3-candle FVG anchors (`G1..Gk`) lightly so Gemini can cite exact gapId
   ctx.setLineDash([]);
-  ctx.strokeStyle = 'rgba(16, 185, 129, 0.65)';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(
-    sx(pb.leftX),
-    sy(pb.topY),
-    sx(pb.rightX - pb.leftX),
-    sy(pb.bottomY - pb.topY)
-  );
+  ctx.font = `700 ${Math.max(8, Math.round(9 * unit))}px ui-monospace, SFMono-Regular, monospace`;
+  for (const gap of scan.detectedFvgCandidates.slice(0, 8)) {
+    const gx = sx(gap.startX);
+    const gy = sy((gap.topY + gap.bottomY) / 2);
+    const lbl = gap.id;
+    const tw = ctx.measureText(lbl).width;
+    const bx = clamp(gx + 3, plotLeftPx + 4, plotRightPx - tw - 8);
+    const by = clamp(gy - 6 * unit, plotTopPx + 4, plotBotPx - 13 * unit);
+    ctx.fillStyle = 'rgba(88, 28, 135, 0.85)';
+    ctx.fillRect(bx, by, tw + 5, 11.5 * unit);
+    ctx.fillStyle = '#F3E8FF';
+    ctx.fillText(lbl, bx + 2.5, by + 8.8 * unit);
+  }
 
-  if (scan.subPaneCount > 0) {
-    const subTopPx = sy(pb.bottomY);
-    ctx.fillStyle = light ? 'rgba(244, 63, 94, 0.08)' : 'rgba(244, 63, 94, 0.12)';
-    ctx.fillRect(0, subTopPx, W, H - subTopPx);
+  // Stamp pre-detected Swing Wick Pivot Anchors (`H1..H8` above high wicks, `L1..L8` below low wicks)
+  for (const piv of scan.detectedPivots) {
+    const px = sx(piv.x);
+    const py = sy(piv.y);
+    const isHigh = piv.kind === 'high';
+    const lbl = piv.id;
+    const tw = ctx.measureText(lbl).width;
+    const bw = tw + 6;
+    const bh = 12 * unit;
+    const bx = clamp(px - bw / 2, plotLeftPx + 2, plotRightPx - bw - 2);
+    const by = isHigh
+      ? clamp(py - bh - 5 * unit, plotTopPx + 2, plotBotPx - bh - 2)
+      : clamp(py + 5 * unit, plotTopPx + 2, plotBotPx - bh - 2);
 
-    ctx.strokeStyle = 'rgba(251, 113, 133, 0.85)';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = isHigh ? '#34D399' : '#FB7185';
+    ctx.lineWidth = 1.2;
     ctx.beginPath();
-    ctx.moveTo(0, subTopPx);
-    ctx.lineTo(W, subTopPx);
+    ctx.arc(px, py, 2.5 * unit, 0, Math.PI * 2);
     ctx.stroke();
 
-    const warn = `INDICATOR SUB-PANE BELOW Y=${pb.bottomY} (DO NOT PLACE PRICE ZONES HERE)`;
-    const wtw = ctx.measureText(warn).width;
-    const wx = clamp(sx(pb.leftX) + 44, 4, Math.max(4, W - wtw - 12));
-    const wy = clamp(subTopPx + 4, 4, H - 16 * unit);
-    ctx.fillStyle = 'rgba(136, 19, 55, 0.9)';
-    ctx.fillRect(wx, wy, Math.min(W - 8, wtw + 10), 14 * unit);
-    ctx.fillStyle = '#FFE4E6';
-    ctx.fillText(warn, wx + 5, wy + 10.5 * unit);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.88)';
+    ctx.fillRect(bx, by, bw, bh);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.fillStyle = isHigh ? '#6EE7B7' : '#FDA4AF';
+    ctx.fillText(lbl, bx + 3, by + 9.2 * unit);
+  }
+
+  // Frame main candlestick plotBox border & shade out excluded sub-panes / mobile bars
+  ctx.strokeStyle = 'rgba(16, 185, 129, 0.72)';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(
+    plotLeftPx,
+    plotTopPx,
+    plotRightPx - plotLeftPx,
+    plotBotPx - plotTopPx
+  );
+
+  if (pb.bottomY < 965) {
+    ctx.fillStyle = light ? 'rgba(244, 63, 94, 0.08)' : 'rgba(244, 63, 94, 0.13)';
+    ctx.fillRect(0, plotBotPx, W, H - plotBotPx);
+
+    if (scan.subPaneCount > 0) {
+      ctx.strokeStyle = 'rgba(251, 113, 133, 0.85)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, plotBotPx);
+      ctx.lineTo(W, plotBotPx);
+      ctx.stroke();
+
+      const warn = `INDICATOR SUB-PANE BELOW Y=${Math.round(pb.bottomY)} (KEEP PRICE MARKUP ABOVE)`;
+      const wtw = ctx.measureText(warn).width;
+      const wx = clamp(plotLeftPx + 20, 4, Math.max(4, W - wtw - 12));
+      const wy = clamp(plotBotPx + 4, 4, H - 16 * unit);
+      ctx.fillStyle = 'rgba(136, 19, 55, 0.92)';
+      ctx.fillRect(wx, wy, Math.min(W - 8, wtw + 10), 14 * unit);
+      ctx.fillStyle = '#FFE4E6';
+      ctx.fillText(warn, wx + 5, wy + 10.5 * unit);
+    }
   }
 
   ctx.restore();
-  return canvas.toDataURL('image/jpeg', 0.82);
+  return canvas.toDataURL('image/jpeg', 0.86);
 }
 
 /**
- * Generates a 2x magnified high-clarity crop of the right-most active candles
- * AND the entire Y-axis price scale, stamped with exact full-image Y-ruler ticks
- * so tiny mobile Y-axis digits and live Bid/Ask badges read with crystal clarity.
+ * Generates a 2× magnified crop of the right-most active candles + full Y-axis price column,
+ * stamping explicit `[T1]..[Tk]` pointer tags aligned to the exact pixel center of every
+ * printed Y-axis number (plus `[LIVE]` on any colored/inverted live price badge).
+ *
+ * Gemini 3.1 simply reads the printed number next to `[T1]..[Tk]` — eliminating 100% of
+ * AI Y-coordinate guessing error!
  */
 function buildRightEdgeZoomDataUrl(
   img: HTMLImageElement,
-  scan: SubPaneScanResult
+  scan: ChartOpticalGeometry
 ): string | undefined {
   const natW = img.naturalWidth || img.width;
   const natH = img.naturalHeight || img.height;
   if (!natW || !natH) return undefined;
 
   const pb = scan.detectedPlotBox;
-  const cropStartNX = clamp(pb.rightX - 310, 480, 760);
+  const candleMarginNX = scan.isPortrait ? 330 : 270;
+  const cropStartNX = clamp(pb.rightX - candleMarginNX, 380, 760);
   const cropEndNX = 1000;
-  const cropStartNY = clamp(pb.topY - 12, 0, 220);
-  const cropEndNY = clamp(pb.bottomY + 14, 520, 1000);
+  const cropStartNY = clamp(pb.topY - 12, 0, 275);
+  const cropEndNY = clamp(pb.bottomY + 12, 430, 1000);
 
   const srcX = Math.round((cropStartNX / 1000) * natW);
   const srcY = Math.round((cropStartNY / 1000) * natH);
   const srcW = Math.max(60, Math.round(((cropEndNX - cropStartNX) / 1000) * natW));
   const srcH = Math.max(80, Math.round(((cropEndNY - cropStartNY) / 1000) * natH));
 
-  // Upscale 2x (clamped to crisp max 1150px height so payload stays compact & fast on mobile)
-  const targetScale = clamp(960 / Math.max(srcW, srcH), 1.35, 2.25);
+  const targetScale = clamp(1220 / Math.max(srcW, srcH), 1.45, 2.5);
   const outW = Math.round(srcW * targetScale);
   const outH = Math.round(srcH * targetScale);
 
@@ -503,47 +264,109 @@ function buildRightEdgeZoomDataUrl(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, outW, outH);
 
-  // Stamp full-image Y-ruler markers along the left edge of the zoomed crop so Y values map 1:1
+  const spanNX = Math.max(1, cropEndNX - cropStartNX);
+  const spanNY = Math.max(1, cropEndNY - cropStartNY);
+  const toCropX = (nx: number) => ((nx - cropStartNX) / spanNX) * outW;
+  const toCropY = (ny: number) => ((ny - cropStartNY) / spanNY) * outH;
+  const axisBorderCropX = clamp(toCropX(pb.rightX), 44, outW - 28);
+
   ctx.save();
   ctx.font = '700 11px ui-monospace, SFMono-Regular, monospace';
-  const spanNY = Math.max(1, cropEndNY - cropStartNY);
-  for (let ny = Math.ceil(cropStartNY / 50) * 50; ny <= cropEndNY - 10; ny += 50) {
-    const py = ((ny - cropStartNY) / spanNY) * outH;
-    ctx.strokeStyle =
-      ny % 100 === 0 ? 'rgba(56, 189, 248, 0.34)' : 'rgba(56, 189, 248, 0.16)';
+
+  // Secondary subtle full-image Y=100..900 lines on left side of crop
+  for (let ny = Math.ceil(cropStartNY / 100) * 100; ny <= cropEndNY - 10; ny += 100) {
+    const py = toCropY(ny);
+    ctx.strokeStyle = 'rgba(56, 189, 248, 0.22)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 4]);
+    ctx.setLineDash([3, 5]);
     ctx.beginPath();
     ctx.moveTo(0, py);
-    ctx.lineTo(outW, py);
+    ctx.lineTo(axisBorderCropX - 4, py);
     ctx.stroke();
 
-    if (ny % 100 === 0) {
-      const tag = `Y=${ny}`;
-      const tw = ctx.measureText(tag).width;
-      ctx.setLineDash([]);
-      ctx.fillStyle = 'rgba(2, 6, 23, 0.84)';
-      ctx.fillRect(3, clamp(py - 8, 2, outH - 16), tw + 6, 14);
-      ctx.fillStyle = '#38BDF8';
-      ctx.fillText(tag, 6, clamp(py + 3, 12, outH - 4));
-    }
+    const tag = `Y${ny}`;
+    const tw = ctx.measureText(tag).width;
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.82)';
+    ctx.fillRect(3, clamp(py - 7, 2, outH - 15), tw + 6, 14);
+    ctx.fillStyle = '#7DD3FC';
+    ctx.fillText(tag, 6, clamp(py + 3.5, 12, outH - 4));
   }
-  ctx.restore();
 
-  return canvas.toDataURL('image/jpeg', 0.86);
+  // Primary `[T1]..[Tk]` exact axis-label pointers sitting immediately left of `rightX`
+  // pointing directly into each printed Y-axis price number!
+  ctx.font = '700 11.5px ui-monospace, SFMono-Regular, monospace';
+  for (const tick of scan.detectedAxisTicks) {
+    if (tick.y < cropStartNY || tick.y > cropEndNY) continue;
+    const py = toCropY(tick.y);
+    const label = tick.id;
+    const tw = ctx.measureText(label).width;
+    const boxW = tw + 8;
+    const boxH = 15;
+    const boxX = clamp(axisBorderCropX - boxW - 8, 38, outW - boxW - 24);
+    const boxY = clamp(py - boxH / 2, 2, outH - boxH - 2);
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(2, 6, 23, 0.92)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = '#38BDF8';
+    ctx.lineWidth = 1.25;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+    // Leader pointer line directly to the printed Y-axis label row
+    ctx.beginPath();
+    ctx.moveTo(boxX + boxW, py);
+    ctx.lineTo(axisBorderCropX + 2, py);
+    ctx.stroke();
+
+    ctx.fillStyle = '#38BDF8';
+    ctx.fillText(label, boxX + 4, boxY + 11.2);
+  }
+
+  // Stamp `[LIVE]` pointer if a colored/inverted live Bid/Ask pill badge exists on the axis
+  if (
+    scan.liveBadgeY !== null &&
+    scan.liveBadgeY >= cropStartNY &&
+    scan.liveBadgeY <= cropEndNY
+  ) {
+    const py = toCropY(scan.liveBadgeY);
+    const label = 'LIVE';
+    const tw = ctx.measureText(label).width;
+    const boxW = tw + 8;
+    const boxH = 15;
+    const boxX = clamp(axisBorderCropX - boxW - 8, 38, outW - boxW - 24);
+    const boxY = clamp(py - boxH / 2, 2, outH - boxH - 2);
+
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(6, 78, 59, 0.95)';
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = '#34D399';
+    ctx.lineWidth = 1.4;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+    ctx.beginPath();
+    ctx.moveTo(boxX + boxW, py);
+    ctx.lineTo(axisBorderCropX + 2, py);
+    ctx.stroke();
+
+    ctx.fillStyle = '#A7F3D0';
+    ctx.fillText(label, boxX + 4, boxY + 11.2);
+  }
+
+  ctx.restore();
+  return canvas.toDataURL('image/jpeg', 0.9);
 }
 
 /**
- * Runs the complete Pre-AI Vision Enhancer on the client before calling `/api/analyze`.
- * Wrapped in defensive error handling so if anything fails on an older WebView,
- * it returns `undefined` and `/api/analyze` runs seamlessly on the raw screenshot.
+ * Runs the complete Pre-AI Optical Scanner & Calibration Stamper on the client
+ * before calling `/api/analyze`.
  */
 export async function buildVisionEnhancementPayload(
   imageDataUrl: string
 ): Promise<VisionEnhancementPayload | undefined> {
   try {
     const img = await loadImageElement(imageDataUrl);
-    const scan = scanChartSubPanesAndBounds(img);
+    const scan = scanChartOpticalGeometry(img);
     if (!scan) return undefined;
 
     const rulerGridDataUrl = buildRulerGridDataUrl(img, scan);
@@ -556,6 +379,11 @@ export async function buildVisionEnhancementPayload(
       subPaneCount: scan.subPaneCount,
       subPaneDividerYs: scan.subPaneDividerYs,
       isLightBg: scan.isLightBg,
+      detectedAxisTicks: scan.detectedAxisTicks,
+      liveBadgeY: scan.liveBadgeY,
+      detectedPivots: scan.detectedPivots,
+      detectedFvgCandidates: scan.detectedFvgCandidates,
+      candleEnvelope: scan.candleEnvelope,
     };
   } catch {
     return undefined;
@@ -580,22 +408,22 @@ export async function renderDraftMarkupPreviewDataUrl(
       includeStamp: false,
     });
 
-    const maxDim = 1080;
+    const maxDim = 1180;
     const scale = Math.min(1, maxDim / Math.max(tempCanvas.width, tempCanvas.height));
     if (scale < 0.99) {
       const scaled = document.createElement('canvas');
-      scaled.width = Math.max(320, Math.round(tempCanvas.width * scale));
-      scaled.height = Math.max(240, Math.round(tempCanvas.height * scale));
+      scaled.width = Math.max(360, Math.round(tempCanvas.width * scale));
+      scaled.height = Math.max(260, Math.round(tempCanvas.height * scale));
       const sCtx = scaled.getContext('2d');
       if (sCtx) {
         sCtx.imageSmoothingEnabled = true;
         sCtx.imageSmoothingQuality = 'high';
         sCtx.drawImage(tempCanvas, 0, 0, scaled.width, scaled.height);
-        return scaled.toDataURL('image/jpeg', 0.84);
+        return scaled.toDataURL('image/jpeg', 0.86);
       }
     }
 
-    return tempCanvas.toDataURL('image/jpeg', 0.84);
+    return tempCanvas.toDataURL('image/jpeg', 0.86);
   } catch {
     return undefined;
   }

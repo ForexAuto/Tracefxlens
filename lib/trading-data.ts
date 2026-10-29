@@ -63,6 +63,7 @@ export interface ChartPlotBox {
 }
 
 export interface ChartAxisTick {
+  tickId?: string;
   price: string;
   y: number;
 }
@@ -98,6 +99,7 @@ export interface ChartMarkupZone {
 }
 
 export interface ChartMarkupFvg {
+  gapId?: string;
   label: string;
   tone: 'bullish' | 'bearish';
   startX: number;
@@ -111,6 +113,7 @@ export interface ChartMarkupFvg {
 }
 
 export interface ChartMarkupStructureBreak {
+  pivotId?: string;
   kind: 'BOS' | 'CHoCH';
   label?: string;
   tone: 'bullish' | 'bearish';
@@ -122,6 +125,7 @@ export interface ChartMarkupStructureBreak {
 }
 
 export interface ChartMarkupLiquidity {
+  pivotId?: string;
   kind: 'EQH' | 'EQL' | 'BSL' | 'SSL' | 'Sweep';
   label: string;
   tone: 'bullish' | 'bearish' | 'neutral';
@@ -146,6 +150,7 @@ export interface ChartMarkupTrendline {
 }
 
 export interface ChartMarkupSwing {
+  pivotId?: string;
   tag: string;
   x: number;
   y: number;
@@ -189,6 +194,49 @@ export interface DetectedPlotBounds {
   bottomY: number;
 }
 
+export interface DetectedAxisTickAnchor {
+  id: string;
+  y: number;
+  isLiveBadge?: boolean;
+}
+
+export interface DetectedCandleBar {
+  index: number;
+  x: number;
+  width: number;
+  highY: number;
+  lowY: number;
+  bodyTopY: number;
+  bodyBottomY: number;
+  polarity: 'bullish' | 'bearish' | 'neutral';
+}
+
+export interface DetectedPivotAnchor {
+  id: string;
+  kind: 'high' | 'low';
+  x: number;
+  y: number;
+  candleIndex: number;
+}
+
+export interface DetectedFvgCandidate {
+  id: string;
+  tone: 'bullish' | 'bearish';
+  startX: number;
+  topY: number;
+  bottomY: number;
+  mitigatedEndX?: number;
+}
+
+export interface DetectedCandleEnvelope {
+  candleCount: number;
+  firstCandleX: number;
+  lastCandleX: number;
+  lastCandleCloseY: number;
+  minHighY: number;
+  maxLowY: number;
+}
+
 export interface VisionEnhancementPayload {
   rulerGridDataUrl?: string;
   rightEdgeZoomDataUrl?: string;
@@ -196,6 +244,11 @@ export interface VisionEnhancementPayload {
   subPaneCount?: number;
   subPaneDividerYs?: number[];
   isLightBg?: boolean;
+  detectedAxisTicks?: DetectedAxisTickAnchor[];
+  liveBadgeY?: number | null;
+  detectedPivots?: DetectedPivotAnchor[];
+  detectedFvgCandidates?: DetectedFvgCandidate[];
+  candleEnvelope?: DetectedCandleEnvelope;
 }
 
 export type OhlcVerificationMode = 'live_spot' | 'atr_spot_only' | 'disabled';

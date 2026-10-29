@@ -199,11 +199,46 @@ export function parseNumPrice(raw: unknown): number | null {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
+function cleanAnchorId(raw: unknown): string | undefined {
+  if (!raw) return undefined;
+  const s = String(raw)
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  return s || undefined;
+}
+
 export function sanitizeChartMarkup(
   raw: unknown,
   entryPriceRaw?: unknown,
   detectedPlotBoxHint?: DetectedPlotBounds,
-  hasSubPaneIndicator = false
+  hasSubPaneIndicator = false,
+  opticalEnhancement?: {
+    detectedAxisTicks?: Array<{ id: string; y: number }>;
+    liveBadgeY?: number | null;
+    detectedPivots?: Array<{
+      id: string;
+      kind: 'high' | 'low';
+      x: number;
+      y: number;
+    }>;
+    detectedFvgCandidates?: Array<{
+      id: string;
+      tone: 'bullish' | 'bearish';
+      startX: number;
+      topY: number;
+      bottomY: number;
+      mitigatedEndX?: number;
+    }>;
+    candleEnvelope?: {
+      candleCount: number;
+      firstCandleX: number;
+      lastCandleX: number;
+      lastCandleCloseY: number;
+      minHighY: number;
+      maxLowY: number;
+    };
+  }
 ): ChartMarkupData | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const m = raw as Record<string, unknown>;
@@ -216,12 +251,84 @@ export function sanitizeChartMarkup(
       : {}
   ) as Record<string, unknown>;
 
-  const lastCandleX = Number.isFinite(Number(ac.lastCandleX))
+  const tickMap = new Map<string, number>();
+  for (const t of opticalEnhancement?.detectedAxisTicks || []) {
+    const id = cleanAnchorId(t.id);
+    if (id && Number.isFinite(t.y)) {
+      tickMap.set(id, t.y);
+    }
+  }
+  if (
+    opticalEnhancement?.liveBadgeY !== null &&
+    opticalEnhancement?.liveBadgeY !== undefined &&
+    Number.isFinite(opticalEnhancement.liveBadgeY)
+  ) {
+    tickMap.set('LIVE', opticalEnhancement.liveBadgeY);
+  }
+
+  const pivotMap = new Map<
+    string,
+    { id: string; kind: 'high' | 'low'; x: number; y: number }
+  >();
+  for (const p of opticalEnhancement?.detectedPivots || []) {
+    const id = cleanAnchorId(p.id);
+    if (id) pivotMap.set(id, p);
+  }
+
+  const gapMap = new Map<
+    string,
+    {
+      id: string;
+      tone: 'bullish' | 'bearish';
+      startX: number;
+      topY: number;
+      bottomY: number;
+      mitigatedEndX?: number;
+    }
+  >();
+  for (const g of opticalEnhancement?.detectedFvgCandidates || []) {
+    const id = cleanAnchorId(g.id);
+    if (id) gapMap.set(id, g);
+  }
+
+  const env = opticalEnhancement?.candleEnvelope;
+
+  // Prefer deterministic optical plotBox over LLM plotBox guesses!
+  const rawLeftX = detectedPlotBoxHint
+    ? detectedPlotBoxHint.leftX
+    : Number.isFinite(Number(pb.leftX))
+    ? Number(pb.leftX)
+    : 24;
+  const rawRightX = detectedPlotBoxHint
+    ? detectedPlotBoxHint.rightX
+    : Number.isFinite(Number(pb.rightX))
+    ? Number(pb.rightX)
+    : 880;
+  const rawTopY = detectedPlotBoxHint
+    ? detectedPlotBoxHint.topY
+    : Number.isFinite(Number(pb.topY))
+    ? Number(pb.topY)
+    : 58;
+  let resolvedBottomY = detectedPlotBoxHint
+    ? detectedPlotBoxHint.bottomY
+    : Number.isFinite(Number(pb.bottomY))
+    ? Number(pb.bottomY)
+    : 875;
+
+  if (hasSubPaneIndicator && detectedPlotBoxHint?.bottomY) {
+    resolvedBottomY = Math.min(resolvedBottomY, detectedPlotBoxHint.bottomY);
+  }
+
+  const lastCandleX = env?.lastCandleX
+    ? env.lastCandleX
+    : Number.isFinite(Number(ac.lastCandleX))
     ? Number(ac.lastCandleX)
-    : 760;
-  const lastCandleY = Number.isFinite(Number(ac.lastCandleY))
+    : Math.min(rawRightX - 35, 760);
+  const lastCandleY = env?.lastCandleCloseY
+    ? env.lastCandleCloseY
+    : Number.isFinite(Number(ac.lastCandleY))
     ? Number(ac.lastCandleY)
-    : 500;
+    : (rawTopY + resolvedBottomY) / 2;
 
   const zones: ChartMarkupZone[] = Array.isArray(m.zones)
     ? m.zones.slice(0, 12).map((z) => {
@@ -232,17 +339,23 @@ export function sanitizeChartMarkup(
         const labelStr = String(zr.label || zr.role || 'Zone');
         const validRole = normalizeZoneRole(zr.role, labelStr);
         const endXNum = Number(zr.endX);
+        const pId = cleanAnchorId(zr.pivotId);
+        const matchedPiv = pId ? pivotMap.get(pId) : undefined;
 
         return {
           label: labelStr,
           role: validRole,
-          startX: Number.isFinite(Number(zr.startX)) ? Number(zr.startX) : 180,
+          startX: matchedPiv
+            ? matchedPiv.x
+            : Number.isFinite(Number(zr.startX))
+            ? Number(zr.startX)
+            : Math.max(rawLeftX + 40, lastCandleX - 240),
           endX:
             Number.isFinite(endXNum) && endXNum > 0 ? endXNum : undefined,
-          topY: Number.isFinite(Number(zr.topY)) ? Number(zr.topY) : 460,
+          topY: Number.isFinite(Number(zr.topY)) ? Number(zr.topY) : lastCandleY - 15,
           bottomY: Number.isFinite(Number(zr.bottomY))
             ? Number(zr.bottomY)
-            : 500,
+            : lastCandleY + 15,
           topPrice: zr.topPrice ? String(zr.topPrice) : undefined,
           bottomPrice: zr.bottomPrice ? String(zr.bottomPrice) : undefined,
           mitigated: Boolean(zr.mitigated),
@@ -257,28 +370,48 @@ export function sanitizeChartMarkup(
           string,
           unknown
         >;
+        const gId = cleanAnchorId(fr.gapId);
+        const matchedGap = gId ? gapMap.get(gId) : undefined;
         const toneRaw = `${String(fr.tone || '')} ${String(
           fr.label || ''
         )}`.toLowerCase();
-        const tone: 'bullish' | 'bearish' = toneRaw.includes('bear')
+        const tone: 'bullish' | 'bearish' = matchedGap
+          ? matchedGap.tone
+          : toneRaw.includes('bear')
           ? 'bearish'
           : 'bullish';
         const endXNum = Number(fr.endX);
         return {
+          gapId: matchedGap?.id || gId,
           label: String(
             fr.label || (tone === 'bullish' ? 'Bullish FVG' : 'Bearish FVG')
           ),
           tone,
-          startX: Number.isFinite(Number(fr.startX)) ? Number(fr.startX) : 320,
-          endX:
-            Number.isFinite(endXNum) && endXNum > 0 ? endXNum : undefined,
-          topY: Number.isFinite(Number(fr.topY)) ? Number(fr.topY) : 470,
-          bottomY: Number.isFinite(Number(fr.bottomY))
+          startX: matchedGap
+            ? matchedGap.startX
+            : Number.isFinite(Number(fr.startX))
+            ? Number(fr.startX)
+            : Math.max(rawLeftX + 80, lastCandleX - 160),
+          endX: matchedGap?.mitigatedEndX
+            ? matchedGap.mitigatedEndX
+            : Number.isFinite(endXNum) && endXNum > 0
+            ? endXNum
+            : undefined,
+          topY: matchedGap
+            ? matchedGap.topY
+            : Number.isFinite(Number(fr.topY))
+            ? Number(fr.topY)
+            : lastCandleY - 12,
+          bottomY: matchedGap
+            ? matchedGap.bottomY
+            : Number.isFinite(Number(fr.bottomY))
             ? Number(fr.bottomY)
-            : 505,
+            : lastCandleY + 12,
           topPrice: fr.topPrice ? String(fr.topPrice) : undefined,
           bottomPrice: fr.bottomPrice ? String(fr.bottomPrice) : undefined,
-          mitigated: Boolean(fr.mitigated),
+          mitigated: matchedGap
+            ? Boolean(matchedGap.mitigatedEndX)
+            : Boolean(fr.mitigated),
           isPrimary: Boolean(fr.isPrimary),
         };
       })
@@ -292,6 +425,8 @@ export function sanitizeChartMarkup(
           string,
           unknown
         >;
+        const pId = cleanAnchorId(sbr.pivotId);
+        const matchedPiv = pId ? pivotMap.get(pId) : undefined;
         const kindUpper = String(sbr.kind || sbr.label || 'BOS').toUpperCase();
         const kind: 'BOS' | 'CHoCH' =
           kindUpper.includes('CHOCH') ||
@@ -304,14 +439,23 @@ export function sanitizeChartMarkup(
           ? 'bearish'
           : 'bullish';
         return {
+          pivotId: matchedPiv?.id || pId,
           kind,
           label: sbr.label ? String(sbr.label) : kind,
           tone,
-          startX: Number.isFinite(Number(sbr.startX))
+          startX: matchedPiv
+            ? matchedPiv.x
+            : Number.isFinite(Number(sbr.startX))
             ? Number(sbr.startX)
-            : 260,
-          endX: Number.isFinite(Number(sbr.endX)) ? Number(sbr.endX) : 480,
-          y: Number.isFinite(Number(sbr.y)) ? Number(sbr.y) : 450,
+            : Math.max(rawLeftX + 60, lastCandleX - 220),
+          endX: Number.isFinite(Number(sbr.endX))
+            ? Number(sbr.endX)
+            : lastCandleX,
+          y: matchedPiv
+            ? matchedPiv.y
+            : Number.isFinite(Number(sbr.y))
+            ? Number(sbr.y)
+            : lastCandleY,
           price: sbr.price ? String(sbr.price) : undefined,
           isPrimary: Boolean(sbr.isPrimary),
         };
@@ -326,6 +470,8 @@ export function sanitizeChartMarkup(
           string,
           unknown
         >;
+        const pId = cleanAnchorId(lqr.pivotId);
+        const matchedPiv = pId ? pivotMap.get(pId) : undefined;
         const rawKind = String(lqr.kind || lqr.label || 'BSL').toUpperCase();
         const kind: ChartMarkupLiquidity['kind'] = rawKind.includes('EQH')
           ? 'EQH'
@@ -344,16 +490,23 @@ export function sanitizeChartMarkup(
             ? 'bearish'
             : 'neutral';
         return {
+          pivotId: matchedPiv?.id || pId,
           kind,
           label: String(lqr.label || kind),
           tone,
-          startX: Number.isFinite(Number(lqr.startX))
+          startX: matchedPiv
+            ? matchedPiv.x
+            : Number.isFinite(Number(lqr.startX))
             ? Number(lqr.startX)
-            : 220,
+            : Math.max(rawLeftX + 50, lastCandleX - 260),
           endX: Number.isFinite(Number(lqr.endX))
             ? Number(lqr.endX)
             : lastCandleX,
-          y: Number.isFinite(Number(lqr.y)) ? Number(lqr.y) : 340,
+          y: matchedPiv
+            ? matchedPiv.y
+            : Number.isFinite(Number(lqr.y))
+            ? Number(lqr.y)
+            : lastCandleY,
           price: lqr.price ? String(lqr.price) : undefined,
           swept: Boolean(lqr.swept || kind === 'Sweep'),
           isPrimary: Boolean(lqr.isPrimary),
@@ -367,6 +520,11 @@ export function sanitizeChartMarkup(
           string,
           unknown
         >;
+        const p1Id = cleanAnchorId(tr.startPivotId);
+        const p2Id = cleanAnchorId(tr.endPivotId);
+        const piv1 = p1Id ? pivotMap.get(p1Id) : undefined;
+        const piv2 = p2Id ? pivotMap.get(p2Id) : undefined;
+
         const toneRaw = String(tr.tone || 'neutral').toLowerCase();
         const roleRaw = `${String(tr.role || '')} ${String(
           tr.label || ''
@@ -379,10 +537,26 @@ export function sanitizeChartMarkup(
         return {
           label: String(tr.label || role),
           role,
-          x1: Number.isFinite(Number(tr.x1)) ? Number(tr.x1) : 180,
-          y1: Number.isFinite(Number(tr.y1)) ? Number(tr.y1) : 540,
-          x2: Number.isFinite(Number(tr.x2)) ? Number(tr.x2) : 680,
-          y2: Number.isFinite(Number(tr.y2)) ? Number(tr.y2) : 440,
+          x1: piv1
+            ? piv1.x
+            : Number.isFinite(Number(tr.x1))
+            ? Number(tr.x1)
+            : Math.max(rawLeftX + 60, lastCandleX - 320),
+          y1: piv1
+            ? piv1.y
+            : Number.isFinite(Number(tr.y1))
+            ? Number(tr.y1)
+            : lastCandleY + 40,
+          x2: piv2
+            ? piv2.x
+            : Number.isFinite(Number(tr.x2))
+            ? Number(tr.x2)
+            : lastCandleX,
+          y2: piv2
+            ? piv2.y
+            : Number.isFinite(Number(tr.y2))
+            ? Number(tr.y2)
+            : lastCandleY - 20,
           style:
             String(tr.style || '').toLowerCase() === 'dashed'
               ? 'dashed'
@@ -404,15 +578,28 @@ export function sanitizeChartMarkup(
           string,
           unknown
         >;
+        const pId = cleanAnchorId(sr.pivotId);
+        const matchedPiv = pId ? pivotMap.get(pId) : undefined;
+        const tagStr = String(sr.tag || 'HH');
+        const inferredBelow =
+          matchedPiv?.kind === 'low' ||
+          tagStr.toUpperCase().endsWith('L') ||
+          String(sr.position || '').toLowerCase() === 'below';
         const toneRaw = String(sr.tone || 'neutral').toLowerCase();
         return {
-          tag: String(sr.tag || 'HH'),
-          x: Number.isFinite(Number(sr.x)) ? Number(sr.x) : 420,
-          y: Number.isFinite(Number(sr.y)) ? Number(sr.y) : 420,
-          position:
-            String(sr.position || 'above').toLowerCase() === 'below'
-              ? 'below'
-              : 'above',
+          pivotId: matchedPiv?.id || pId,
+          tag: tagStr,
+          x: matchedPiv
+            ? matchedPiv.x
+            : Number.isFinite(Number(sr.x))
+            ? Number(sr.x)
+            : Math.max(rawLeftX + 80, lastCandleX - 180),
+          y: matchedPiv
+            ? matchedPiv.y
+            : Number.isFinite(Number(sr.y))
+            ? Number(sr.y)
+            : lastCandleY,
+          position: inferredBelow ? 'below' : 'above',
           tone:
             toneRaw === 'bullish'
               ? 'bullish'
@@ -467,86 +654,109 @@ export function sanitizeChartMarkup(
     structureBreaks[latestIdx].isPrimary = true;
   }
 
-  const rawLeftX = Number.isFinite(Number(pb.leftX))
-    ? Number(pb.leftX)
-    : detectedPlotBoxHint?.leftX ?? 28;
-  const rawRightX = Number.isFinite(Number(pb.rightX))
-    ? Number(pb.rightX)
-    : detectedPlotBoxHint?.rightX ?? 885;
-  const rawTopY = Number.isFinite(Number(pb.topY))
-    ? Number(pb.topY)
-    : detectedPlotBoxHint?.topY ?? 55;
-  let resolvedBottomY = Number.isFinite(Number(pb.bottomY))
-    ? Number(pb.bottomY)
-    : detectedPlotBoxHint?.bottomY ?? 880;
-
-  if (hasSubPaneIndicator && detectedPlotBoxHint?.bottomY) {
-    resolvedBottomY = Math.min(resolvedBottomY, detectedPlotBoxHint.bottomY);
-  }
-
   const maxAllowedMainY = resolvedBottomY - 4;
   const minAllowedMainY = rawTopY + 4;
   const clampMainY = (yVal: number) =>
     Math.max(minAllowedMainY, Math.min(maxAllowedMainY, yVal));
 
-  const clampedZones = hasSubPaneIndicator
-    ? zones
-        .filter((z) => Math.min(z.topY, z.bottomY) < resolvedBottomY + 12)
-        .map((z) => ({
-          ...z,
-          topY: clampMainY(z.topY),
-          bottomY: clampMainY(z.bottomY),
-        }))
-    : zones;
+  const clampedZones = zones
+    .filter(
+      (z) =>
+        !hasSubPaneIndicator || Math.min(z.topY, z.bottomY) < resolvedBottomY + 12
+    )
+    .map((z) => ({
+      ...z,
+      topY: clampMainY(z.topY),
+      bottomY: clampMainY(z.bottomY),
+    }));
 
-  const clampedFvgs = hasSubPaneIndicator
-    ? fairValueGaps
-        .filter((f) => Math.min(f.topY, f.bottomY) < resolvedBottomY + 12)
-        .map((f) => ({
-          ...f,
-          topY: clampMainY(f.topY),
-          bottomY: clampMainY(f.bottomY),
-        }))
-    : fairValueGaps;
+  const clampedFvgs = fairValueGaps
+    .filter(
+      (f) =>
+        !hasSubPaneIndicator || Math.min(f.topY, f.bottomY) < resolvedBottomY + 12
+    )
+    .map((f) => ({
+      ...f,
+      topY: clampMainY(f.topY),
+      bottomY: clampMainY(f.bottomY),
+    }));
 
-  const clampedBreaks = hasSubPaneIndicator
-    ? structureBreaks
-        .filter((sb) => sb.y <= resolvedBottomY + 10)
-        .map((sb) => ({
-          ...sb,
-          y: clampMainY(sb.y),
-        }))
-    : structureBreaks;
+  const clampedBreaks = structureBreaks
+    .filter((sb) => !hasSubPaneIndicator || sb.y <= resolvedBottomY + 10)
+    .map((sb) => ({
+      ...sb,
+      y: clampMainY(sb.y),
+    }));
 
-  const clampedLiquidity = hasSubPaneIndicator
-    ? liquidityLevels
-        .filter((lq) => lq.y <= resolvedBottomY + 10)
-        .map((lq) => ({
-          ...lq,
-          y: clampMainY(lq.y),
-        }))
-    : liquidityLevels;
+  const clampedLiquidity = liquidityLevels
+    .filter((lq) => !hasSubPaneIndicator || lq.y <= resolvedBottomY + 10)
+    .map((lq) => ({
+      ...lq,
+      y: clampMainY(lq.y),
+    }));
 
-  const clampedTrendlines = hasSubPaneIndicator
-    ? trendlines
+  const clampedTrendlines = trendlines
+    .filter(
+      (t) =>
+        !hasSubPaneIndicator ||
+        (t.y1 <= resolvedBottomY + 15 && t.y2 <= resolvedBottomY + 15)
+    )
+    .map((t) => ({
+      ...t,
+      y1: clampMainY(t.y1),
+      y2: clampMainY(t.y2),
+    }));
+
+  const clampedSwings = swings
+    .filter((s) => !hasSubPaneIndicator || s.y <= resolvedBottomY + 12)
+    .map((s) => ({
+      ...s,
+      y: clampMainY(s.y),
+    }));
+
+  // Reconcile axisTicks against pre-measured pixel Y anchors (`T1..Tk` and `LIVE`)
+  const resolvedAxisTicks = Array.isArray(ac.axisTicks)
+    ? ac.axisTicks
+        .slice(0, 14)
+        .map((t) => {
+          const tr = (t && typeof t === 'object' ? t : {}) as Record<
+            string,
+            unknown
+          >;
+          const priceStr = tr.price ? String(tr.price).trim() : '';
+          if (!priceStr || parseNumPrice(priceStr) === null) return null;
+
+          const tickId = cleanAnchorId(tr.tickId || tr.id);
+          let yNum = tickId && tickMap.has(tickId) ? tickMap.get(tickId)! : Number(tr.y);
+
+          if (!Number.isFinite(yNum)) return null;
+
+          // If tickId was omitted, snap to nearest pre-measured optical tick within ±18 units
+          if (!tickId && tickMap.size > 0) {
+            let bestDist = 18;
+            tickMap.forEach((exactY) => {
+              const d = Math.abs(exactY - yNum);
+              if (d < bestDist) {
+                bestDist = d;
+                yNum = exactY;
+              }
+            });
+          }
+
+          if (yNum < rawTopY - 12 || yNum > resolvedBottomY + 12) {
+            return null;
+          }
+          return {
+            tickId,
+            price: priceStr,
+            y: yNum,
+          };
+        })
         .filter(
-          (t) => t.y1 <= resolvedBottomY + 15 && t.y2 <= resolvedBottomY + 15
+          (t): t is { tickId: string | undefined; price: string; y: number } =>
+            t !== null
         )
-        .map((t) => ({
-          ...t,
-          y1: clampMainY(t.y1),
-          y2: clampMainY(t.y2),
-        }))
-    : trendlines;
-
-  const clampedSwings = hasSubPaneIndicator
-    ? swings
-        .filter((s) => s.y <= resolvedBottomY + 12)
-        .map((s) => ({
-          ...s,
-          y: clampMainY(s.y),
-        }))
-    : swings;
+    : undefined;
 
   return {
     plotBox: {
@@ -564,26 +774,9 @@ export function sanitizeChartMarkup(
       lowRefY: Number.isFinite(Number(ac.lowRefY))
         ? Math.min(Number(ac.lowRefY), resolvedBottomY)
         : undefined,
-      axisTicks: Array.isArray(ac.axisTicks)
-        ? ac.axisTicks
-            .slice(0, 8)
-            .map((t) => {
-              const tr = (t && typeof t === 'object' ? t : {}) as Record<
-                string,
-                unknown
-              >;
-              const priceStr = tr.price ? String(tr.price).trim() : '';
-              const yNum = Number(tr.y);
-              if (!priceStr || !Number.isFinite(yNum)) return null;
-              if (hasSubPaneIndicator && yNum > resolvedBottomY + 12) {
-                return null;
-              }
-              return { price: priceStr, y: yNum };
-            })
-            .filter((t): t is { price: string; y: number } => t !== null)
-        : undefined,
+      axisTicks: resolvedAxisTicks,
       lastCandleX,
-      lastCandleY: hasSubPaneIndicator ? clampMainY(lastCandleY) : lastCandleY,
+      lastCandleY: clampMainY(lastCandleY),
     },
     zones: clampedZones,
     fairValueGaps: clampedFvgs,
@@ -593,3 +786,4 @@ export function sanitizeChartMarkup(
     swings: clampedSwings,
   };
 }
+

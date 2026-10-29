@@ -1,113 +1,117 @@
-# Independent High Impact News & Macro Calendar Page
+# Automatic Pixel- & Wick-Locked Chart Drawing Calibration
 
-Build a dedicated, standalone **High Impact News** workspace that delivers real-time Red-Folder macroeconomic releases, multi-timezone scheduling, actual-vs-forecast surprise scoring, and a complete institutional **Full Overview** inspector for every single calendar event.
+Eliminates vertical price drift and floating technical overlays on uploaded charts by replacing AI coordinate guessing with deterministic pixel-scanned Y-axis tick calibration, RANSAC scale fitting, and automatic candlestick body/wick snapping across both portrait and landscape mobile screenshots.
 
-## User Review & Critical Decisions
+### User Review & Critical Decisions
 
 > [!IMPORTANT]
-> All three architectural preferences from your review are locked into this plan, including Next.js transpilation and automatic cloud-server failover for the `forexfactory` package.
+> The calibration architecture below reflects your confirmed preferences from our Q&A and requires zero manual dragging or calibration steps from the user.
 
-- **Confirmed Decision 1 — Data Engine (`forexfactory` npm + Automatic Live JSON Fallback)**: Install and wire the `forexfactory` package (`ForexFactory` client + timezone formatting) as the primary adapter with Next.js TypeScript transpilation enabled, backed by an automatic zero-downtime failover and enrichment layer using Forex Factory's official FairEconomy weekly JSON feed and the live global economic calendar feed whenever cloud datacenter IPs hit Cloudflare `403` challenges or need real-time `actual` prints.
-- **Confirmed Decision 2 — Default Event Scope**: Default to **High Impact (Red-Folder)** events on load so noise is eliminated immediately, with instant interactive filter controls to toggle **Medium Impact**, **Bank Holidays**, **Currency (`USD`, `EUR`, `GBP`, `JPY`, `AUD`, `CAD`, `CHF`, `NZD`)**, and **Date Horizon (`Today`, `Tomorrow`, `This Week`, `Next Week`)**.
-- **Confirmed Decision 3 — Full Per-Event Overview Inspector**: Clicking any event opens a comprehensive **Full Overview** view combining **Official Indicator Specifications** (what it measures, reporting agency, usual currency/Gold effect, killzone window), a deterministic **Actual vs. Forecast Surprise Meter** (accounting for inverse indicators like Unemployment Rate), an **Affected Pairs Map** with 1-click jump to chart analysis, and an **AI Macro Trading Brief** covering pre-release liquidity sweep risk and post-release execution scenarios.
-
----
-
-## 1. Overview & Core Concept
-
-- **What It Does**: Provides an independent macroeconomic intelligence page accessible from the top navigation bar and sidebar drawer. Traders can scan upcoming and recently released Red-Folder catalysts with live countdowns in their preferred timezone, filter by currency or impact tier, and inspect a rich **Full Overview** dossier for every individual news release.
-- **Target Audience / Persona**: Intraday and swing FX, Gold (`XAU/USD`), and Crypto traders using SMC and Top-Down CRT strategies who need to know *when* spread-widening Red-Folder catalysts hit, *whether* a print beat or missed consensus, and *how* each release drives liquidity sweeps across major pairs.
-- **Key Value**: Combines the speed of a clean Red-Folder timetable with deep per-event macroeconomic context—turning raw calendar rows into actionable pre-release killzone warnings and post-release directional context without API keys or rate-limit friction.
+- **Confirmed Platform & Orientation Scope**: Optimized for both **portrait and landscape** screenshots from **TradingView Mobile** and **MT4 / MT5 Mobile** (supporting dark and light themes, hollow and solid candles, dashed MT4/MT5 period grids, and borderless TradingView price scales).
+- **Confirmed Alignment Targets**: Fixes all three core failure modes together:
+  1. Vertical price shift across Entry, Stop-Loss, Take-Profit, and key levels.
+  2. Supply, Demand, Order Block, and Fair Value Gap rectangles floating in empty space away from candles.
+  3. BOS, CHoCH, and HH/HL/LH/LL swing markers missing real candle wick tips.
+- **Confirmed Interaction Model**: **100% automatic pixel-and-wick lock**—drawings snap accurately out of the box with no manual drag handles or two-point ruler chores.
 
 ---
 
-## 2. User Experience & Visual Design
+### 1. Overview & Core Concept
+
+- **What It Does**: Upgrades the chart vision and canvas rendering pipeline so every technical drawing—Entry/SL/TP position boxes, Supply/Demand & Order Block zones, Fair Value Gaps, Liquidity sweeps, Trendlines, BOS/CHoCH breaks, and Swing pivots—is mathematically locked to the screenshot's true printed price axis and physical candlestick pixels.
+- **Target Audience / Persona**: Active Forex, Gold (`XAU/USD`), and Crypto traders scanning portrait or landscape screenshots directly from TradingView Mobile and MetaTrader (MT4/MT5) Mobile in Single-Chart or Top-Down CRT (`H1 → M5`) mode.
+- **Key Value**: Traders can trust that drawn Entry, Stop-Loss, Take-Profit, Order Block, FVG, and BOS lines sit on the exact price levels and candle wicks visible on their screenshot.
+
+---
+
+### 2. User Experience & Visual Design
 
 - **Key User Flows**:
-  1. **Immediate Red-Folder Scan**: Navigating to **High Impact News** loads the current week's **High Impact** schedule grouped cleanly by day, highlighting the **Next Imminent Catalyst** (live countdown timer) at the top KPI summary bar and auto-selecting the next upcoming Red-Folder event in the desktop overview pane.
-  2. **Timezone, Horizon & Currency Filtering**: Users switch display timezones (`Local Device`, `New York EDT/EST`, `London`, `Tokyo`, `UTC`) with persistent preference storage, toggle `High` / `Medium` / `Holiday` tiers, filter by currency (`ALL` or single G8 currency), switch horizons (`Today`, `Tomorrow`, `This Week`, `Next Week`), or search by indicator name (`CPI`, `NFP`, `FOMC`, `PMI`).
-  3. **Full Overview Inspection (Every Single Event)**:
-     - On desktop (`1440px` baseline), a sticky right-hand **Full Event Overview** inspector updates instantaneously when any row is clicked; on mobile/tablet viewports, selecting an event opens a full-height slide-over sheet with a crisp close control.
-     - Displays the **3-Column Print Grid (`Actual` · `Forecast` · `Previous`)**, deterministic **Surprise Verdict** (`Bullish Beat`, `Bearish Miss`, `In-Line`, or `Pending Release`), **Official Indicator Specs** (definition, source agency, release cadence, usual effect on currency & Gold), **Affected Pairs Map** (with 1-click `"Analyze Pair"` handoff), and a server-generated **AI Macro Playbook** (auto-cached per event with manual refresh).
+  1. **Zero-Friction Upload**: The trader uploads or pastes any portrait or landscape screenshot from TradingView Mobile or MT4/MT5 Mobile (in Single Chart or Top-Down CRT mode).
+  2. **Pre-AI Pixel & Axis Calibration**: During Step 1 of the scan, the client-side optical scanner isolates the exact candlestick plot area (excluding mobile status bars, top OHLC headers, bottom timeframe/navigation bars, and RSI/MACD sub-panes), locates every printed price label row on the right Y-axis, and segments individual candlesticks and wick tips left-to-right.
+  3. **Instant Locked Overlay Rendering**: As soon as Gemini 3.1 completes the analysis, the canvas renders crisp technical overlays locked to real candle wicks and true Y-axis prices across the inline preview, fullscreen lightbox, and downloadable PNG export.
 - **Visual Identity & Theme**:
-  - *Aesthetic Direction*: Institutional macro research terminal matching TraceFX Lens—calm, structured, high-contrast dark slate with zero visual clutter.
-  - *Color Palette & Mood*: Dominant `#090D16` background canvas (60%), `#111726` single-elevation structural containers and `#0D1320` recessed control bars with `1px` `border-slate-800/80` hairlines (30%), and focused semantic accents (10%): Crimson (`text-rose-400`) for `High Impact` & `Bearish Miss`, Amber (`text-amber-400`) for `Medium Impact` & imminent `< 30m` killzone alerts, Emerald (`text-emerald-400`) for `Bullish Beat`, and Sky (`text-sky-400`) for active interactive controls. Every semantic color is paired with explicit text (`High`, `Medium`, `Holiday`, `Beat`, `Miss`).
-  - *Typography & Hierarchy*: `Outfit` (`--font-display`) for page header, countdown anchor, and selected event title (`text-wrap: balance`); `Plus Jakarta Sans` (`--font-sans`) for readable macroeconomic explanations; and `JetBrains Mono` (`--font-mono` with `tabular-nums`) for all timestamps, countdowns, `Actual / Forecast / Previous` figures, and surprise deltas.
-  - *Component Styling & Layout*: Asymmetric `12-column` master-detail workspace on desktop (`7 columns` dense chronological event ledger + `5 columns` sticky Full Event Overview inspector) with compact `44px–52px` scannable rows separated by `1px` hairlines. Strictly enforces **zero static pill enclosures** (metadata rendered as unboxed `·`-separated text), **zero `border-l-4` stripes**, **zero nested cards-within-cards**, and **zero decorative pulsing dots**.
-- **Interactive Feedback & Motion**:
-  - Instant `≤ 150ms` row selection and filter transitions using compositor-only `opacity` and `transform` properties.
-  - Geometry-matched loading skeletons for both the event ledger and the AI Macro Playbook section, plus clear empty states (`"No High-Impact releases scheduled in this window"` with a 1-click `"Show Medium & All Week"` action) and graceful manual refresh controls.
+  - *Aesthetic Direction*: Institutional precision trading desk—high-contrast, distraction-free dark slate surfaces (`#0B101B` / `#111726`) with adaptive canvas overlays that automatically adjust stroke contrast for both dark-mode TradingView charts and light-mode MT4/MT5 white-background charts.
+  - *Color Palette & Mood*: Neutral obsidian and slate framing (`60%` canvas, `30%` structural borders) reserving semantic accents (`10%`) strictly for chart meaning: Emerald (`#10B981`) for Demand/Bullish OB/TP, Rose (`#F43F5E`) for Supply/Bearish OB/SL, Sky (`#38BDF8`) for Entry, Violet (`#A855F7`) & Amber (`#F59E0B`) for Bullish/Bearish FVGs and Liquidity.
+  - *Typography & Hierarchy*: Crisp geometric sans UI labels paired with tabular monospace numerals (`tabular-nums`) on all price callouts, R:R tags, and axis references so decimals align cleanly without jitter.
+  - *Component Styling & Layout*: Full-viewport desktop 12-column split and ergonomic single-column mobile stack with touch targets $\ge 44\text{px}$, zero nested card clutter, and non-overlapping callout label placement on narrow portrait charts.
+- **Interactive Feedback & Motion**: Smooth GPU scan-beam pass during analysis, instant `<150ms` layer toggling (`Primary Setup`, `Full Structure`, `Structure Only`, and SMC sub-layer filters), and Pass 2 visual self-check verification without layout shift.
 
 ---
 
-## 3. Key Product Decisions & Trade-Offs
+### 3. Key Product Decisions & Trade-Offs
 
-- **Decision 1: Resilient Dual-Layer Adapter Around the `forexfactory` Package**
-  - *Chosen Approach*: Configure Next.js to transpile the raw-TypeScript `forexfactory` package, invoke `ForexFactory` (`calendarEvents` + DST-corrected timestamp normalization) inside a bounded `2.2s` server timeout, and automatically fall back to / enrich with the official FairEconomy Forex Factory JSON feed plus live economic calendar actuals (`10-minute` server cache for schedule structure, `90-second` refresh for live `actual` prints).
-  - *Why*: Honors your advisor's `forexfactory` package workflow on networks that permit HTML scraping while guaranteeing `100%` reliability, accurate Daylight Saving Time offsets, multi-week horizons, and live released `actual` prints on cloud servers where Cloudflare blocks HTML scrapers.
-  - *Alternatives Considered*: Relying solely on HTML scraping (fails with `HTTP 403` on cloud datacenter IPs and shifts summer timestamps by 1 hour) or relying solely on weekly static JSON (lacks live `actual` numbers and official indicator descriptions).
+- **Decision 1: Pre-Measured Axis Tick Pointers (`[T1]..[Tk]`) + RANSAC Scale Solver Instead of AI Coordinate Guessing**
+  - *Chosen Approach*: Detect the exact pixel `Y` center of every printed price label on the right-hand Y-axis deterministically on the client canvas, stamp numbered tick markers (`[T1]`, `[T2]`, ...) onto a magnified right-axis calibration strip for Gemini 3.1, and ask the model to read the price digits at each numbered tick while removing all hardcoded example numbers from the prompt. Fit the price-to-pixel scale using outlier-resistant median-slope consensus (Theil-Sen / RANSAC).
+  - *Why*: Lightweight vision models drift when estimating `0..1000` Y coordinates from scratch or copy example Y numbers from prompts, but excel at reading crisp magnified digits next to explicit `[T1]` tags. Combining exact pixel-measured `Y` positions with RANSAC eliminates vertical drift even if one label is partially occluded.
+  - *Alternatives Considered*: Letting the LLM output raw `(price, y)` pairs directly (rejected—causes severe vertical offset) or requiring manual user two-point calibration (rejected—adds friction).
 
-- **Decision 2: Inverse-Indicator Aware Surprise Scoring**
-  - *Chosen Approach*: Parse numeric values and units (`%`, `K`, `M`, `B`) from `Actual` and `Forecast`, and invert polarity for labor-slack indicators (*Unemployment Rate*, *Claimant Count*, *Initial/Continuing Jobless Claims*) where a **lower** actual print is currency-bullish rather than bearish.
-  - *Why*: Naive `Actual > Forecast = Bullish` logic misclassifies Unemployment spikes as bullish; domain-accurate polarity ensures traders see the true hawkish/dovish currency impact immediately.
+- **Decision 2: Strict Verification Before Accepting Any Horizontal Current-Price Line**
+  - *Chosen Approach*: Disable blind horizontal colored-line hijacking; only anchor to a live Bid/Ask line when it connects directly into a detected right-axis price badge AND agrees with the RANSAC axis-tick price scale within tight tolerance.
+  - *Why*: MT4/MT5 and TradingView mobile screenshots routinely contain moving averages, session separators, or prior horizontal rays that previously fooled the line scanner and shifted the entire setup off true prices.
 
-- **Decision 3: Deterministic Official Specs + On-Demand Cached AI Macro Playbook**
-  - *Chosen Approach*: Render official indicator definitions, reporting source, usual currency/Gold effect, surprise math, and affected pairs **instantly (`0ms`)** on click using live metadata + a built-in institutional macro dictionary, while streaming/fetching the tailored **AI Macro Trading Playbook** asynchronously via a server-side Gemini endpoint cached by event ID and release state.
-  - *Why*: Clicking through 10 different news events feels instantaneous with zero waiting for an LLM just to read core specs, while still providing deep, event-specific SMC/CRT trading scenarios for every selected catalyst.
+- **Decision 3: Deterministic Candlestick Segmentation & Automatic Wick/Body Locking**
+  - *Chosen Approach*: Segment real candlestick columns (`centerX`, `highY`, `lowY`, `bodyTopY`, `bodyBottomY`) across both solid and hollow candle themes while filtering out MT4/MT5 dashed period grids, then snap every Zone, Order Block, FVG, BOS/CHoCH break, and Swing tag onto actual candle geometry.
+  - *Why*: Guarantees zones originate on real candles rather than empty background space, FVGs lock onto true 3-candle price imbalances, and BOS/CHoCH rays connect an actual broken swing wick tip horizontally to the exact breakout candle.
 
 ---
 
-## 4. Technical Architecture & Data Strategy *(Technical Reference)*
+### 4. Technical Architecture & Data Strategy *(Technical Reference)*
 
 - **Architecture & Component Diagram**:
 
-```text
+```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                 Global Navigation (Top Bar & Sidebar Drawer)                 │
-│     Analyze Chart  ·  Impact News (Active)  ·  Signal History  ·  TV Engine  │
-└──────────────────────────────────────┬───────────────────────────────────────┘
-                                       ▼
+│                     Uploaded Screenshot (Portrait / Landscape)               │
+│                 TradingView Mobile  ·  MT4 / MT5 Mobile (H1 / M5)            │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                     High Impact News Workspace (Client)                      │
-│  ┌────────────────────────────────────────────────────────────────────────┐  │
-│  │ Top KPI & Filter Strip: Next Red-Folder Countdown · Horizon Tabs       │  │
-│  │ Impact Filter (High Default | Medium | Holiday) · Currency · Timezone  │  │
-│  └───────────────────┬──────────────────────────────────┬─────────────────┘  │
-│                      │                                  │                    │
-│                      ▼ (7-Col Master Ledger)            ▼ (5-Col Inspector)  │
+│               1. Client Pre-AI Optical Geometry Scanner (Canvas)             │
+│  ┌─────────────────────────┐  ┌──────────────────────┐  ┌─────────────────┐  │
+│  │ PlotBox & Sub-Pane      │  │ Right Y-Axis Tick &  │  │ Candlestick &   │  │
+│  │ Boundary Isolator       │  │ Live-Badge Detector  │  │ Wick Extractor  │  │
+│  │ ( Portrait & Landscape )│  │ ([T1..Tk] Exact Ys)  │  │ (C[0..N] + Pivs)│  │
+│  └────────────┬────────────┘  └──────────┬───────────┘  └────────┬────────┘  │
+└───────────────┼──────────────────────────┼───────────────────────┼───────────┘
+                │                          │                       │
+                ▼                          ▼                       ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│            2. Stamped Calibration Visuals -> Gemini 3.1 Stream API           │
+│   • Zero template example coordinates (prevents prompt coordinate echoing)   │
+│   • 2x Y-Axis Strip stamped with [T1..Tk] & [LIVE] at exact pixel Ys         │
+│   • Plot-bounded 0..1000 Grid + Numbered Major Swing Pivot Anchors (P1..Pm)  │
+└───────────────────────────────────────┬──────────────────────────────────────┘
+                                        │
+                                        ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│            3. Deterministic Post-AI Scale & Candle-Wick Lock Engine          │
 │  ┌────────────────────────────────────┐  ┌────────────────────────────────┐  │
-│  │ Chronological Day-Grouped Ledger   │  │ Full Event Overview Panel      │  │
-│  │ • Time (TZ) · CCY · Title · Impact │─▶│ • Actual / Forecast / Previous │  │
-│  │ • Actual vs Forecast · Surprise    │  │ • Inverse-Aware Surprise Meter │  │
-│  │ • Mobile tap -> Slide-Over Sheet   │  │ • Official Specs & Usual Effect│  │
-│  └────────────────────────────────────┘  │ • Affected Pairs -> Analyze CTA│  │
-│                                          │ • AI Macro Playbook (Cached)   │  │
-│                                          └──────────────┬─────────────────┘  │
-└─────────────────────────────────────────────────────────┼────────────────────┘
-                                                          │
-                     ┌────────────────────────────────────┴────────────────┐
-                     ▼                                                     ▼
-┌─────────────────────────────────────────┐   ┌────────────────────────────────┐
-│   Calendar Feed Server Route (Cached)   │   │  Event AI Brief Server Route   │
-│  1. Primary: forexfactory npm client    │   │  • Server-side Gemini Flash    │
-│     (transpiled + DST offset guard)     │   │  • Pre-release killzone risk & │
-│  2. Auto-Fallback & Live Actuals Merge: │   │    post-release CRT sweep brief│
-│     FairEconomy FF JSON + Live Calendar │   │  • Keyed cache by event + print│
-└─────────────────────────────────────────┘   └────────────────────────────────┘
+│  │ RANSAC / Theil-Sen Y-Scale Solver  │  │ Structural Candle-Wick Locker  │  │
+│  │ • Pairs model tick prices with     │  │ • Zones/OB -> Origin candle X  │  │
+│  │   exact pixel-scanned tick Ys      │  │   & true wick/body bounds      │  │
+│  │ • Rejects misread tick outliers    │  │ • FVG -> 3-candle gap bounds   │  │
+│  │ • Undistorted Entry / SL / TP Y    │  │ • BOS/CHoCH -> Exact swing     │  │
+│  └─────────────────┬──────────────────┘  │   wick Y to breakout candle X  │  │
+│                    │                     │ • HH/HL/LH/LL -> True wick tip │  │
+│                    └──────────┬──────────┴────────────────┬───────────────┘  │
+└───────────────────────────────┼───────────────────────────┼──────────────────┘
+                                │                           │
+                                ▼                           ▼
+┌──────────────────────────────────────────────────────────────────────────────┐
+│          4. Pass 2 Visual Self-Check  &  High-DPI Canvas Renderer            │
+│   • Audits rendered Draft 1 overlay against ruled chart & tightens outliers  │
+│   • Identical pixel-locked output across Preview, Lightbox & Saved PNG       │
+└──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 - **Data Model & State**:
-  - **Normalized Macro Event**: Unified TypeScript record containing `eventId`, `title`, `currency` (`USD`, `EUR`, `GBP`, `JPY`, `AUD`, `CAD`, `CHF`, `NZD`), `countryCode`, `impact` (`High` | `Medium` | `Low` | `Holiday`), `timestampUtcMs` (true DST-accurate epoch ms), `actual`, `forecast`, `previous`, `surpriseDirection` (`bullish` | `bearish` | `inline` | `pending`), `surpriseDeltaText`, `officialOverview` (what it measures), `usualEffect`, `sourceAgency`, `sourceUrl`, `period`, `frequency`, and `affectedPairs` (mapped to TraceFX pair symbols and correlation polarity).
-  - **AI Event Playbook**: Structured JSON payload (`headlineVerdict`, `preReleaseKillzoneNote`, `bullishScenario`, `bearishScenario`, `crtExecutionTip`) cached in server memory (and client `Map`) keyed by `eventId + actual` so once generated—or re-scored after an `actual` print drops—subsequent views resolve immediately.
-  - **Client Filter & Timezone State**: Persists user's chosen `timezone` (defaulting to detected device IANA timezone with 1-click presets for `America/New_York`, `Europe/London`, `Asia/Tokyo`, `UTC`) in `localStorage`, while holding active `horizon` (`today` | `tomorrow` | `this_week` | `next_week`), `impactFilter` (`High` active by default, optional `Medium` and `Holiday`), `currencyFilter`, `searchQuery`, and `selectedEventId`.
+  - **Pre-AI Optical Payload**: Extends the client vision payload with `detectedAxisTicks` (array of `{ id: "T1", y: number }` measured directly from Y-axis text centroids plus optional `liveBadgeY`), `candleEnvelope` summary (detected candle count, right-most `lastCandleX`, highest visible wick `minHighY`, lowest visible wick `maxLowY`), and `detectedPivots` (`P1..Pm` with exact `{ id, kind: 'high' | 'low', x, y }`).
+  - **Sanitized Chart Markup**: Stores validated `axisTicks` reconciled against pre-measured `T1..Tk` pixel positions, `plotBox` locked to the optical scanner's toolbar/sub-pane boundaries, and wick-locked coordinates for `zones`, `fairValueGaps`, `structureBreaks`, `liquidityLevels`, `trendlines`, and `swings`.
 
 - **Interactive Component & State Mapping**:
-  - **Horizon & Refresh Controls**: Switching between `Today`, `Tomorrow`, `This Week`, and `Next Week` or clicking **Refresh Feed** fetches/filters normalized events and auto-focuses the next imminent High-Impact catalyst so the desktop Overview panel is never blank when events exist.
-  - **Impact, Currency & Search Bar**: Client-side instantaneous filtering across loaded events with live result counts and a 1-click **Reset Filters** escape hatch in empty states.
-  - **Timezone Selector**: Immediately reformats every event timestamp, day grouping header, and countdown tooltip using IANA timezone conversion (`ForexFactory.formatTimestamp` / `Intl.DateTimeFormat`).
-  - **Event Row Selection & Pair Handoff**: Clicking any row updates `selectedEventId` (opening the slide-over drawer on mobile viewports) and triggers the cached AI Macro Playbook fetch; clicking any pair in **Affected Pairs** navigates to `/?pair=<SYMBOL>` and pre-selects that instrument in the Analyze Chart workspace.
-
-- **Key Sequences & Integrations**:
-  1. **Package & Build Setup**: Install `forexfactory` (`v1.0.0`) and add it to Next.js `transpilePackages` so its TypeScript entrypoint compiles cleanly in both `next dev` and `next build`.
-  2. **Hybrid Calendar Resolution**: Server endpoint runs `ForexFactory.calendarEvents()` inside a `2.2s` `AbortController` guard; on Cloudflare `403` or missing fields, it seamlessly merges FairEconomy's official weekly Forex Factory JSON (`ff_calendar_thisweek.json`) with live multi-week economic calendar prints (`actual`, `comment`, `source`, `period`, `unit`), deduplicating by currency + normalized timestamp + indicator stem.
-  3. **Cross-Page Query Parameter Handoff**: Enhance the Analyze Chart workspace boot effect to optionally read `?pair=` from the URL (when no scan is currently running) so clicking `"Analyze XAU/USD"` from a USD CPI or FOMC overview lands directly on `XAU/USD` ready for chart upload.
+  - **Upload & Mode Selection**: Uploading single or dual (`H1 + M5`) mobile screenshots normalizes high-DPI phone captures while preserving crisp Y-axis numerals, triggering optical scanning for each slot independently.
+  - **Portrait vs. Landscape Boundary Detection**: Dynamically adapts X/Y scan windows to aspect ratio—handling wide right-axis columns (`16%–25%` width) and tall top/bottom mobile app bars on portrait screenshots as well as compact right axes (`7%–12%` width) on landscape screenshots, plus borderless TradingView mobile scales and MT4/MT5 multi-window indicator dividers.
+  - **Automatic Post-Stream Locking & Layer Filtering**: Toggling `Primary Setup`, `Full Structure`, `Structure Only`, or category filters (`Zones & OB`, `FVG`, `BOS & Swings`, `Liquidity`, `Trendlines`) immediately re-renders from the cached RANSAC + candle-locked geometry with zero drift between inline view, fullscreen modal, and exported PNG.
+  - **Graceful Fallback Recovery**: If a heavily cropped screenshot has fewer than two readable Y-axis labels, the scale solver automatically anchors top and bottom visible price extremes against the measured highest and lowest candlestick wick pixels (`minHighY` .. `maxLowY`) so drawings remain tightly bound to actual candles on screen.

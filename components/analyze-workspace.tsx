@@ -11,7 +11,6 @@ import {
 } from 'lucide-react';
 import { PairSelector } from '@/components/pair-selector';
 import { TimeframeSelector } from '@/components/timeframe-selector';
-import { VisionModelSelector } from '@/components/vision-model-selector';
 import { ChartUploader } from '@/components/chart-uploader';
 import { SignalResult } from '@/components/signal-result';
 import { StopConfirmDialog } from '@/components/stop-confirm-dialog';
@@ -25,13 +24,6 @@ import {
   MARKET_PAIRS,
   TradingSignalResponse,
 } from '@/lib/trading-data';
-import {
-  DEFAULT_VISION_MODEL_ID,
-  INITIAL_VISION_MODEL_CATALOG,
-  isRestrictedHarnessModelId,
-  OPENROUTER_AUTO_VISION_ID,
-  type VisionModelOption,
-} from '@/lib/vision-models';
 import {
   loadWorkspaceState,
   saveWorkspaceState,
@@ -47,7 +39,6 @@ import {
 
 const SELF_CHECK_PREF_KEY = 'tracefx_self_check_v1';
 const OHLC_ASSIST_PREF_KEY = 'tracefx_ohlc_assist_v1';
-const VISION_MODEL_PREF_KEY = 'tracefx_vision_model_v1';
 
 export function AnalyzeWorkspace() {
   const [selectedPair, setSelectedPair] = useState<string>('XAU/USD');
@@ -70,17 +61,11 @@ export function AnalyzeWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [selfCheckEnabled, setSelfCheckEnabled] = useState<boolean>(true);
   const [ohlcAssistEnabled, setOhlcAssistEnabled] = useState<boolean>(true);
-  const [visionModel, setVisionModel] = useState<string>(DEFAULT_VISION_MODEL_ID);
-  const [visionCatalog, setVisionCatalog] = useState<VisionModelOption[]>(
-    INITIAL_VISION_MODEL_CATALOG
-  );
-  const [openRouterConfigured, setOpenRouterConfigured] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const selfCheckEnabledRef = useRef<boolean>(true);
   const ohlcAssistEnabledRef = useRef<boolean>(true);
-  const visionModelRef = useRef<string>(DEFAULT_VISION_MODEL_ID);
   const latestStateRef = useRef({
     selectedPair: 'XAU/USD',
     selectedTimeframe: 'H1',
@@ -223,7 +208,6 @@ export function AnalyzeWorkspace() {
             macroImageDataUrl: isCrtMode ? macroChartUrl : undefined,
             pair,
             timeframe: effectiveTimeframe,
-            visionModel: visionModelRef.current,
             ohlcAssistEnabled: ohlcAssistEnabledRef.current,
             visionEnhancement,
             macroVisionEnhancement,
@@ -477,13 +461,24 @@ export function AnalyzeWorkspace() {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     draftSignal: verifiedSignal,
-                    visionModel: visionModelRef.current,
                     rulerOrCleanDataUrl:
                       visionEnhancement?.rulerGridDataUrl || chartUrl,
                     markedDraftDataUrl,
                     rightEdgeZoomDataUrl: visionEnhancement?.rightEdgeZoomDataUrl,
                     detectedPlotBox: visionEnhancement?.detectedPlotBox,
                     subPaneCount: visionEnhancement?.subPaneCount ?? 0,
+                    visionEnhancement: visionEnhancement
+                      ? {
+                          detectedPlotBox: visionEnhancement.detectedPlotBox,
+                          subPaneCount: visionEnhancement.subPaneCount,
+                          detectedAxisTicks: visionEnhancement.detectedAxisTicks,
+                          liveBadgeY: visionEnhancement.liveBadgeY,
+                          detectedPivots: visionEnhancement.detectedPivots,
+                          detectedFvgCandidates:
+                            visionEnhancement.detectedFvgCandidates,
+                          candleEnvelope: visionEnhancement.candleEnvelope,
+                        }
+                      : undefined,
                   }),
                   signal: controller.signal,
                 });
@@ -605,18 +600,6 @@ export function AnalyzeWorkspace() {
             const ohlcEnabled = savedOhlcAssist === '1';
             ohlcAssistEnabledRef.current = ohlcEnabled;
             setOhlcAssistEnabled(ohlcEnabled);
-          }
-          const savedVisionModel = window.localStorage.getItem(VISION_MODEL_PREF_KEY);
-          if (savedVisionModel && savedVisionModel.trim()) {
-            const rawModel = savedVisionModel.trim();
-            const safeModel = isRestrictedHarnessModelId(rawModel)
-              ? OPENROUTER_AUTO_VISION_ID
-              : rawModel;
-            visionModelRef.current = safeModel;
-            setVisionModel(safeModel);
-            if (safeModel !== rawModel) {
-              window.localStorage.setItem(VISION_MODEL_PREF_KEY, safeModel);
-            }
           }
         } catch {
           // Ignore storage restrictions
@@ -756,35 +739,6 @@ export function AnalyzeWorkspace() {
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
-    };
-  }, []);
-
-  // Hydrate live OpenRouter Free Vision catalog from server
-  useEffect(() => {
-    let active = true;
-    fetch('/api/openrouter/models', { cache: 'no-store' })
-      .then((res) => (res.ok ? res.json() : null))
-      .then(
-        (
-          data: {
-            openRouterConfigured?: boolean;
-            models?: VisionModelOption[];
-          } | null
-        ) => {
-          if (!active || !data) return;
-          if (typeof data.openRouterConfigured === 'boolean') {
-            setOpenRouterConfigured(data.openRouterConfigured);
-          }
-          if (Array.isArray(data.models) && data.models.length > 0) {
-            setVisionCatalog(data.models);
-          }
-        }
-      )
-      .catch(() => {
-        // Retain static initial catalog on offline error
-      });
-    return () => {
-      active = false;
     };
   }, []);
 
@@ -1083,18 +1037,6 @@ export function AnalyzeWorkspace() {
     }
   };
 
-  const handleVisionModelChange = (nextModelId: string) => {
-    if (isBusy) return;
-    visionModelRef.current = nextModelId;
-    setVisionModel(nextModelId);
-    setError(null);
-    try {
-      window.localStorage.setItem(VISION_MODEL_PREF_KEY, nextModelId);
-    } catch {
-      // Ignore storage restrictions
-    }
-  };
-
   return (
     <div className="min-h-screen flex flex-col">
       {/* Compact Sticky Top Bar with Navigation Sidebar */}
@@ -1220,15 +1162,6 @@ export function AnalyzeWorkspace() {
                 />
               )}
             </div>
-
-            {/* Vision Engine Selector: Gemini 3.8 Flash + OpenRouter Free Vision Models */}
-            <VisionModelSelector
-              value={visionModel}
-              onChange={handleVisionModelChange}
-              models={visionCatalog}
-              openRouterConfigured={openRouterConfigured}
-              disabled={isBusy}
-            />
 
             {/* Dual-Chart Slot Switcher in Top-Down CRT Mode */}
             {isTopDownCrt && (

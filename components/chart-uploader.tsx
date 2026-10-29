@@ -39,9 +39,9 @@ interface ChartUploaderProps {
 }
 
 /**
- * Normalizes and downscales ultra-high-res phone screenshots to crisp max 1440px
- * and compresses heavy uncompressed PNGs so network uploads and IndexedDB writes
- * are sub-second while keeping price-axis numerals razor sharp for Gemini Vision.
+ * Normalizes phone and desktop screenshots while preserving razor-sharp Y-axis digits
+ * and 1px candle wicks on tall portrait TradingView / MT4 / MT5 mobile screenshots
+ * (e.g. 1080x2400 stays >= 960px wide instead of blurring down to ~600px).
  */
 function normalizeImageFile(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -52,10 +52,14 @@ function normalizeImageFile(file: File): Promise<string> {
       const img = new window.Image();
       img.onerror = () => reject(new Error('Invalid image file.'));
       img.onload = () => {
-        const maxDim = 1440;
         let { width, height } = img;
-        const needsResize = width > maxDim || height > maxDim;
-        const isHeavyPayload = resultStr.length > 450_000;
+        const isPortrait = height > width * 1.15;
+        // Portrait mobile charts have tall aspect ratios (~9:20): allow up to 2240px height
+        // so horizontal width stays >= ~1000px and small right-axis numerals stay sharp.
+        const maxLongEdge = isPortrait ? 2240 : 1920;
+        const longEdge = Math.max(width, height);
+        const needsResize = longEdge > maxLongEdge;
+        const isHeavyPayload = resultStr.length > 750_000;
 
         if (!needsResize && !isHeavyPayload) {
           resolve(resultStr);
@@ -63,7 +67,12 @@ function normalizeImageFile(file: File): Promise<string> {
         }
 
         if (needsResize) {
-          const scale = Math.min(maxDim / width, maxDim / height);
+          let scale = maxLongEdge / longEdge;
+          // Ensure short edge stays at least 960px if original short edge was >= 960px (capped at 2560px long edge)
+          const minShortTarget = Math.min(960, Math.min(width, height));
+          if (Math.min(width, height) * scale < minShortTarget) {
+            scale = Math.min(2560 / longEdge, minShortTarget / Math.min(width, height));
+          }
           width = Math.round(width * scale);
           height = Math.round(height * scale);
         }
@@ -76,10 +85,12 @@ function normalizeImageFile(file: File): Promise<string> {
           resolve(resultStr);
           return;
         }
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.fillStyle = '#0B101B';
         ctx.fillRect(0, 0, width, height);
         ctx.drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', 0.92));
+        resolve(canvas.toDataURL('image/jpeg', 0.93));
       };
       img.src = resultStr;
     };
@@ -273,7 +284,9 @@ export function ChartUploader({
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <label className="text-xs font-medium text-slate-400">
           {hasValidSignal && showMarkup
-            ? layerFilter === 'primary'
+            ? layerFilter === 'setup'
+              ? `${markedPrefix} · Entry, SL & TPs`
+              : layerFilter === 'primary'
               ? `${markedPrefix} · Primary Setup`
               : layerFilter === 'structure'
               ? `${markedPrefix} · Structure Only`
@@ -460,12 +473,23 @@ export function ChartUploader({
                   <div
                     role="group"
                     aria-label="Chart structure mode"
-                    className="flex items-center gap-0.5 rounded-lg border border-slate-800 bg-[#090D16] p-0.5 overflow-x-auto max-w-full"
+                    className="grid w-full grid-cols-2 gap-1 rounded-lg border border-slate-800 bg-[#090D16] p-1 sm:flex sm:w-auto sm:items-center sm:gap-0.5 sm:p-0.5"
                   >
                     <button
                       type="button"
+                      onClick={() => setLayerFilter('setup')}
+                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
+                        layerFilter === 'setup'
+                          ? 'bg-sky-500 text-slate-950 font-semibold'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      Entry · SL · TP
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setLayerFilter('primary')}
-                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
                         layerFilter === 'primary'
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-400 hover:text-slate-200'
@@ -479,13 +503,13 @@ export function ChartUploader({
                         setLayerFilter('all');
                         setSubLayer('all');
                       }}
-                      className={`flex min-h-[34px] items-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      className={`flex min-h-[34px] items-center justify-center gap-1 rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
                         layerFilter === 'all'
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'
                       }`}
                     >
-                      <Layers className="h-3 w-3" />
+                      <Layers className="h-3 w-3 shrink-0" />
                       <span>
                         Full Structure
                         {structureCounts.total > 0
@@ -496,7 +520,7 @@ export function ChartUploader({
                     <button
                       type="button"
                       onClick={() => setLayerFilter('structure')}
-                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap shrink-0 ${
+                      className={`min-h-[34px] rounded-md px-2.5 text-[11px] font-medium transition-colors whitespace-nowrap ${
                         layerFilter === 'structure'
                           ? 'bg-slate-800 text-white'
                           : 'text-slate-400 hover:text-slate-200'
@@ -702,9 +726,10 @@ export function ChartUploader({
                 onClick={(e) => e.stopPropagation()}
                 className="mt-3 flex max-w-full flex-col items-center gap-2"
               >
-                <div className="flex items-center gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 overflow-x-auto max-w-[95vw]">
+                <div className="grid w-full max-w-[95vw] grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 sm:flex sm:w-auto sm:items-center">
                   {(
                     [
+                      { id: 'setup', label: 'Entry · SL · TP' },
                       { id: 'primary', label: 'Primary Setup' },
                       {
                         id: 'all',
@@ -723,7 +748,7 @@ export function ChartUploader({
                         setLayerFilter(opt.id);
                         if (opt.id === 'all') setSubLayer('all');
                       }}
-                      className={`min-h-[38px] rounded-lg px-3.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
+                      className={`min-h-[38px] rounded-lg px-3 text-xs font-medium transition-colors whitespace-nowrap tabular-nums ${
                         layerFilter === opt.id
                           ? 'bg-sky-500 text-slate-950 font-semibold'
                           : 'text-slate-300 hover:text-white'

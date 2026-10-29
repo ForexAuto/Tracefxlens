@@ -3,9 +3,15 @@ import type {
   ChartMarkupSwing,
   ChartMarkupTrendline,
   ChartMarkupZone,
+  DetectedAxisTickAnchor,
+  DetectedCandleBar,
+  DetectedCandleEnvelope,
+  DetectedFvgCandidate,
+  DetectedPivotAnchor,
   SignalType,
   TradingSignalResponse,
 } from '@/lib/trading-data';
+import { scanChartOpticalGeometry } from '@/lib/chart-optical-scanner';
 
 export type MarkupLayerFilter = 'primary' | 'all' | 'setup' | 'structure';
 
@@ -151,6 +157,13 @@ export interface ChartPixelGeometry {
   detectedCurrentLineY: number | null;
   detectedLastCandleX: number | null;
   axisLabelCentroidsY: number[];
+  detectedAxisTicks: DetectedAxisTickAnchor[];
+  liveBadgeY: number | null;
+  verifiedBidAskLineY: number | null;
+  candles: DetectedCandleBar[];
+  detectedPivots: DetectedPivotAnchor[];
+  detectedFvgCandidates: DetectedFvgCandidate[];
+  candleEnvelope?: DetectedCandleEnvelope;
   snapToCandleWick: (
     nx: number,
     ny: number,
@@ -158,6 +171,18 @@ export interface ChartPixelGeometry {
     radiusNX?: number,
     radiusNY?: number
   ) => { x: number; y: number } | null;
+  findOriginCandleForBand: (
+    prefStartX: number,
+    bandTopY: number,
+    bandBotY: number,
+    roleTone: 'bullish' | 'bearish' | 'neutral',
+    isOrderBlock: boolean
+  ) => DetectedCandleBar | null;
+  findBreakoutCandleX: (
+    originX: number,
+    levelY: number,
+    tone: 'bullish' | 'bearish'
+  ) => number | null;
   stampAnchor: 'bottom-left' | 'top-right';
 }
 
@@ -233,605 +258,84 @@ function getZoneTone(role: string): 'bullish' | 'bearish' | 'neutral' {
 }
 
 /**
- * Deterministic <3ms client-side pixel scanner that detects exact chart pane borders
- * (rightX price-axis divider, topY/bottomY toolbars), background theme (light vs dark),
- * live horizontal Bid/Ask current-price line Y, Y-axis printed label centroids,
- * right-most latest candlestick X, and local candle-wick tips.
+ * High-resolution portrait & landscape optical scanner shared 1:1 with the pre-AI
+ * vision enhancer (`scanChartOpticalGeometry`). Extracts exact `plotBox` bounds,
+ * printed Y-axis tick centroids (`T1..Tk`), verified live-price pill (`LIVE`),
+ * segmented candlesticks, swing wick pivots (`H1..H8`, `L1..L8`), and 3-candle FVGs (`G1..G10`).
  */
 export function analyzeChartPixels(
   img: HTMLImageElement,
   signal: TradingSignalResponse
 ): ChartPixelGeometry | null {
-  if (typeof document === 'undefined') return null;
-  const natW = img.naturalWidth || img.width;
-  const natH = img.naturalHeight || img.height;
-  if (natW < 80 || natH < 80) return null;
+  const optical = scanChartOpticalGeometry(img, signal.chartMarkup?.plotBox);
+  if (!optical) return null;
 
-  const maxSampleDim = 720;
-  const sScale = Math.min(1, maxSampleDim / Math.max(natW, natH));
-  const sW = Math.max(80, Math.round(natW * sScale));
-  const sH = Math.max(80, Math.round(natH * sScale));
-
-  const sCanvas = document.createElement('canvas');
-  sCanvas.width = sW;
-  sCanvas.height = sH;
-  const sCtx = sCanvas.getContext('2d', { willReadFrequently: true });
-  if (!sCtx) return null;
-
-  sCtx.drawImage(img, 0, 0, sW, sH);
-  let data: Uint8ClampedArray;
-  try {
-    data = sCtx.getImageData(0, 0, sW, sH).data;
-  } catch {
-    return null;
-  }
-
-  const toSX = (nx: number) => clamp(Math.round((nx / 1000) * (sW - 1)), 0, sW - 1);
-  const toSY = (ny: number) => clamp(Math.round((ny / 1000) * (sH - 1)), 0, sH - 1);
-  const toNX = (sx: number) => (sx / Math.max(1, sW - 1)) * 1000;
-  const toNY = (sy: number) => (sy / Math.max(1, sH - 1)) * 1000;
-
-  // 1. Sample interior plot area to find exact median chart background color
-  const rSamples: number[] = [];
-  const gSamples: number[] = [];
-  const bSamples: number[] = [];
-  for (let gx = 0; gx < 20; gx++) {
-    const sx = toSX(150 + gx * 27);
-    for (let gy = 0; gy < 20; gy++) {
-      const sy = toSY(225 + gy * 22);
-      const idx = (sy * sW + sx) * 4;
-      rSamples.push(data[idx]);
-      gSamples.push(data[idx + 1]);
-      bSamples.push(data[idx + 2]);
-    }
-  }
-  rSamples.sort((a, b) => a - b);
-  gSamples.sort((a, b) => a - b);
-  bSamples.sort((a, b) => a - b);
-  const mid = rSamples.length >> 1;
-  const bgR = rSamples[mid];
-  const bgG = gSamples[mid];
-  const bgB = bSamples[mid];
-  const bgLuma = 0.299 * bgR + 0.587 * bgG + 0.114 * bgB;
-  const isLightBg = bgLuma > 148;
-
-  const distBg = (idx: number) =>
-    Math.abs(data[idx] - bgR) +
-    Math.abs(data[idx + 1] - bgG) +
-    Math.abs(data[idx + 2] - bgB);
-
-  const chromaAt = (idx: number) => {
-    const r = data[idx];
-    const g = data[idx + 1];
-    const b = data[idx + 2];
-    const mx = r > g ? (r > b ? r : b) : g > b ? g : b;
-    const mn = r < g ? (r < b ? r : b) : g < b ? g : b;
-    return mx - mn;
-  };
-
-  const rawMarkup = signal.chartMarkup;
-  const hintLeftX = clamp(Number(rawMarkup?.plotBox?.leftX ?? 20), 6, 180);
-  const hintRightX = clamp(Number(rawMarkup?.plotBox?.rightX ?? 860), 700, 965);
-  const hintTopY = clamp(Number(rawMarkup?.plotBox?.topY ?? 60), 14, 250);
-  const hintBottomY = clamp(Number(rawMarkup?.plotBox?.bottomY ?? 870), 540, 968);
-
-  // 2. Detect exact vertical price-axis divider rightX
-  let rightX = hintRightX;
-  const scanY0 = toSY(220);
-  const scanY1 = toSY(720);
-  const scanSpanY = Math.max(1, scanY1 - scanY0 + 1);
-  let foundAxisBorderSX = -1;
-
-  for (let sx = toSX(720); sx <= toSX(948); sx++) {
-    let nonBg = 0;
-    let uniform = 0;
-    for (let sy = scanY0; sy <= scanY1; sy++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 18) nonBg++;
-      if (sy < scanY1) {
-        const idxNext = ((sy + 1) * sW + sx) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 15) uniform++;
-      }
-    }
-    const nonBgFrac = nonBg / scanSpanY;
-    const uniformFrac = uniform / Math.max(1, scanSpanY - 1);
-
-    if (nonBgFrac >= 0.8 && uniformFrac >= 0.78) {
-      // Confirm right side contains sparse Y-axis label space (not solid chrome)
-      const checkX0 = Math.min(sW - 1, sx + Math.max(3, Math.round(sW * 0.015)));
-      const checkX1 = Math.min(sW - 1, sx + Math.max(8, Math.round(sW * 0.11)));
-      if (checkX1 > checkX0) {
-        let rightNonBg = 0;
-        let rightTotal = 0;
-        for (let rx = checkX0; rx <= checkX1; rx += 2) {
-          for (let ry = scanY0; ry <= scanY1; ry += 3) {
-            rightTotal++;
-            if (distBg((ry * sW + rx) * 4) > 35) rightNonBg++;
-          }
-        }
-        const rightDensity = rightNonBg / Math.max(1, rightTotal);
-        if (rightDensity >= 0.01 && rightDensity <= 0.5) {
-          foundAxisBorderSX = sx;
-        }
-      }
-    }
-  }
-
-  if (foundAxisBorderSX !== -1) {
-    rightX = clamp(toNX(foundAxisBorderSX), 720, 952);
-  } else {
-    // Borderless chart fallback: ensure rightX stays left of right-axis text column
-    let textStartSX = -1;
-    for (let sx = toSX(965); sx >= toSX(785); sx--) {
-      let highContrast = 0;
-      for (let sy = scanY0; sy <= scanY1; sy += 2) {
-        if (distBg((sy * sW + sx) * 4) > 85) highContrast++;
-      }
-      const density = highContrast / Math.max(1, Math.floor(scanSpanY / 2));
-      if (density >= 0.035 && density <= 0.38) {
-        textStartSX = sx;
-      }
-    }
-    if (textStartSX !== -1) {
-      rightX = clamp(Math.min(hintRightX, toNX(textStartSX) - 10), 740, 945);
-    }
-  }
-
-  // 3. Detect exact topY (below mobile/desktop toolbars) & bottomY (above time axis / sub-pane)
-  let topY = hintTopY;
-  const rowX0 = toSX(80);
-  const rowX1 = toSX(rightX - 16);
-  const rowSpanX = Math.max(1, rowX1 - rowX0 + 1);
-
-  for (let sy = toSY(18); sy <= toSY(225); sy++) {
-    let nonBg = 0;
-    let uniform = 0;
-    for (let sx = rowX0; sx <= rowX1; sx++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 18) nonBg++;
-      if (sx < rowX1) {
-        const idxNext = (sy * sW + sx + 1) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 15) uniform++;
-      }
-    }
-    if (nonBg / rowSpanX >= 0.8 && uniform / Math.max(1, rowSpanX - 1) >= 0.78) {
-      const belowSY = Math.min(sH - 1, sy + Math.max(4, Math.round(sH * 0.015)));
-      let belowBgMatch = 0;
-      for (let sx = rowX0; sx <= rowX1; sx += 3) {
-        if (distBg((belowSY * sW + sx) * 4) <= 28) belowBgMatch++;
-      }
-      if (belowBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.65) {
-        topY = clamp(toNY(sy) + 2, 16, 235);
-      }
-    }
-  }
-
-  let bottomY = hintBottomY;
-  const botSearchStart = toSY(455);
-  const botSearchEnd = toSY(962);
-  const rawBotDividerSYs: number[] = [];
-
-  for (let sy = botSearchStart; sy <= botSearchEnd; sy++) {
-    let nonBg = 0;
-    let uniform = 0;
-    let coloredChroma = 0;
-    for (let sx = rowX0; sx <= rowX1; sx++) {
-      const idx = (sy * sW + sx) * 4;
-      if (distBg(idx) > 16) nonBg++;
-      if (chromaAt(idx) >= 24) coloredChroma++;
-      if (sx < rowX1) {
-        const idxNext = (sy * sW + sx + 1) * 4;
-        const stepDiff =
-          Math.abs(data[idx] - data[idxNext]) +
-          Math.abs(data[idx + 1] - data[idxNext + 1]) +
-          Math.abs(data[idx + 2] - data[idxNext + 2]);
-        if (stepDiff <= 14) uniform++;
-      }
-    }
-    if (
-      nonBg / rowSpanX >= 0.8 &&
-      uniform / Math.max(1, rowSpanX - 1) >= 0.78 &&
-      coloredChroma / rowSpanX <= 0.28
-    ) {
-      const aboveSY = Math.max(0, sy - Math.max(4, Math.round(sH * 0.015)));
-      let aboveBgMatch = 0;
-      for (let sx = rowX0; sx <= rowX1; sx += 3) {
-        if (distBg((aboveSY * sW + sx) * 4) <= 30) aboveBgMatch++;
-      }
-      if (aboveBgMatch / Math.max(1, Math.ceil(rowSpanX / 3)) >= 0.6) {
-        rawBotDividerSYs.push(sy);
-      }
-    }
-  }
-
-  const mergedDividersNY: number[] = [];
-  if (rawBotDividerSYs.length > 0) {
-    let grpStart = 0;
-    for (let i = 1; i <= rawBotDividerSYs.length; i++) {
-      if (
-        i === rawBotDividerSYs.length ||
-        rawBotDividerSYs[i] - rawBotDividerSYs[i - 1] > Math.max(3, Math.round(sH * 0.012))
-      ) {
-        const slice = rawBotDividerSYs.slice(grpStart, i);
-        const avgSY = slice.reduce((a, b) => a + b, 0) / slice.length;
-        const ny = toNY(avgSY);
-        if (ny - topY >= 305) {
-          mergedDividersNY.push(ny);
-        }
-        grpStart = i;
-      }
-    }
-  }
-
-  if (mergedDividersNY.length >= 2) {
-    const firstDiv = mergedDividersNY[0];
-    const lastDiv = mergedDividersNY[mergedDividersNY.length - 1];
-    if (lastDiv - firstDiv >= 65) {
-      // Sub-pane detected below firstDiv: keep main candlestick plotBox strictly above firstDiv
-      bottomY = clamp(firstDiv - 2, 460, 960);
-    } else {
-      let bestDist = Infinity;
-      for (const divNY of mergedDividersNY) {
-        const d = Math.abs(divNY - hintBottomY);
-        if (d < bestDist) {
-          bestDist = d;
-          bottomY = clamp(divNY - 2, 480, 964);
-        }
-      }
-    }
-  } else if (mergedDividersNY.length === 1) {
-    bottomY = clamp(mergedDividersNY[0] - 2, 470, 964);
-  }
-
-  const leftX = hintLeftX;
-
-  // 4. Detect Y-axis printed price label centroids (right of rightX)
-  const axisX0 = toSX(Math.min(990, rightX + 6));
-  const axisX1 = toSX(Math.min(996, rightX + 145));
-  const axisLabelCentroidsY: number[] = [];
-
-  if (axisX1 - axisX0 >= 6) {
-    const axR: number[] = [];
-    const axG: number[] = [];
-    const axB: number[] = [];
-    for (let sy = toSY(topY + 12); sy <= toSY(bottomY - 12); sy += 4) {
-      for (let sx = axisX0; sx <= axisX1; sx += 3) {
-        const idx = (sy * sW + sx) * 4;
-        axR.push(data[idx]);
-        axG.push(data[idx + 1]);
-        axB.push(data[idx + 2]);
-      }
-    }
-    axR.sort((a, b) => a - b);
-    axG.sort((a, b) => a - b);
-    axB.sort((a, b) => a - b);
-    const am = axR.length >> 1;
-    const abR = axR[am] ?? bgR;
-    const abG = axG[am] ?? bgG;
-    const abB = axB[am] ?? bgB;
-
-    const axisSpanW = Math.max(1, axisX1 - axisX0 + 1);
-    let bandStart = -1;
-    for (let sy = toSY(topY + 6); sy <= toSY(bottomY - 6); sy++) {
-      let ink = 0;
-      let coloredFill = 0;
-      for (let sx = axisX0; sx <= axisX1; sx++) {
-        const idx = (sy * sW + sx) * 4;
-        const d =
-          Math.abs(data[idx] - abR) +
-          Math.abs(data[idx + 1] - abG) +
-          Math.abs(data[idx + 2] - abB);
-        if (d > 75) ink++;
-        if (chromaAt(idx) >= 26 && d > 45) coloredFill++;
-      }
-      // Exclude solid colored live-price badges so regular scale ticks stay distinct
-      const isTextRow =
-        coloredFill / axisSpanW < 0.42 && ink / axisSpanW >= 0.045;
-      if (isTextRow) {
-        if (bandStart === -1) bandStart = sy;
-      } else if (bandStart !== -1) {
-        const bandH = toNY(sy - 1) - toNY(bandStart);
-        if (bandH >= 3 && bandH <= 22) {
-          axisLabelCentroidsY.push(toNY((bandStart + sy - 1) / 2));
-        }
-        bandStart = -1;
-      }
-    }
-  }
-
-  // 5. Estimate approximate current price Y to bound Bid/Ask line & latest candle search
-  const currentNum = parseChartPrice(signal.currentMarketPrice);
-  const highRefP = parseChartPrice(rawMarkup?.axisCalibration?.highRefPrice);
-  const lowRefP = parseChartPrice(rawMarkup?.axisCalibration?.lowRefPrice);
-  const highRefY = Number(rawMarkup?.axisCalibration?.highRefY);
-  const lowRefY = Number(rawMarkup?.axisCalibration?.lowRefY);
-  let approxCurrentNY = clamp(
-    Number(rawMarkup?.axisCalibration?.lastCandleY ?? 500),
-    topY + 20,
-    bottomY - 20
-  );
-  if (
-    currentNum !== null &&
-    highRefP !== null &&
-    lowRefP !== null &&
-    Number.isFinite(highRefY) &&
-    Number.isFinite(lowRefY) &&
-    highRefP > lowRefP &&
-    lowRefY - highRefY > 100
-  ) {
-    const est =
-      highRefY + ((highRefP - currentNum) / (highRefP - lowRefP)) * (lowRefY - highRefY);
-    approxCurrentNY = clamp(est, topY + 15, bottomY - 15);
-  }
-
-  // 6. Detect exact horizontal Bid/Ask / current-price line across plotBox
-  let detectedCurrentLineY: number | null = null;
-  const lineSearchY0 = toSY(Math.max(topY + 8, approxCurrentNY - 85));
-  const lineSearchY1 = toSY(Math.min(bottomY - 8, approxCurrentNY + 85));
-  const plotSX0 = toSX(leftX + 12);
-  const plotSX1 = toSX(rightX - 4);
-  const plotSpanW = Math.max(1, plotSX1 - plotSX0 + 1);
-
-  const candidateLineRows: Array<{ sy: number; score: number; badgeAttached: boolean }> = [];
-  for (let sy = lineSearchY0; sy <= lineSearchY1; sy++) {
-    let colored = 0;
-    for (let sx = plotSX0; sx <= plotSX1; sx++) {
-      const idx = (sy * sW + sx) * 4;
-      if (chromaAt(idx) >= 20 && distBg(idx) >= 34) {
-        colored++;
-      }
-    }
-    const coloredFrac = colored / plotSpanW;
-    if (coloredFrac >= 0.36) {
-      // Check if a colored live-price badge sits on the right axis near this row
-      let badgeHits = 0;
-      if (axisX1 > axisX0) {
-        for (let sx = axisX0; sx <= Math.min(sW - 1, axisX0 + 28); sx++) {
-          const idx = (sy * sW + sx) * 4;
-          if (chromaAt(idx) >= 24 && distBg(idx) >= 40) badgeHits++;
-        }
-      }
-      const badgeAttached = badgeHits >= 5;
-      candidateLineRows.push({
-        sy,
-        score: coloredFrac + (badgeAttached ? 0.35 : 0),
-        badgeAttached,
-      });
-    }
-  }
-
-  if (candidateLineRows.length > 0) {
-    // Merge adjacent 1-2px rows into distinct horizontal lines
-    const mergedLines: Array<{ centerSY: number; score: number; badgeAttached: boolean }> = [];
-    let grpStart = 0;
-    for (let i = 1; i <= candidateLineRows.length; i++) {
-      if (
-        i === candidateLineRows.length ||
-        candidateLineRows[i].sy - candidateLineRows[i - 1].sy > 2
-      ) {
-        const slice = candidateLineRows.slice(grpStart, i);
-        const avgSY = slice.reduce((acc, r) => acc + r.sy, 0) / slice.length;
-        const maxScore = Math.max(...slice.map((r) => r.score));
-        const hasBadge = slice.some((r) => r.badgeAttached);
-        mergedLines.push({ centerSY: avgSY, score: maxScore, badgeAttached: hasBadge });
-        grpStart = i;
-      }
-    }
-
-    mergedLines.sort((a, b) => b.score - a.score);
-    const best = mergedLines[0];
-    // If MT4/MT5 shows dual Ask (upper) + Bid (lower) lines within 8 normalized units,
-    // pick Bid (lower Y -> larger NY) for SELL and Ask/badge line for BUY.
-    const twin = mergedLines.find(
-      (m) =>
-        m !== best &&
-        Math.abs(toNY(m.centerSY) - toNY(best.centerSY)) <= 9 &&
-        m.score >= 0.55
-    );
-    if (twin) {
-      const upperSY = Math.min(best.centerSY, twin.centerSY);
-      const lowerSY = Math.max(best.centerSY, twin.centerSY);
-      detectedCurrentLineY = toNY(signal.signalType === 'SELL' ? lowerSY : upperSY);
-    } else {
-      detectedCurrentLineY = toNY(best.centerSY);
-    }
-  }
-
-  // 7. Build clean 2D candlestick/wick column profile (ignoring grid lines & watermarks)
-  const pY0 = toSY(topY + 6);
-  const pY1 = toSY(bottomY - 6);
-  const pX0 = toSX(leftX + 6);
-  const pX1 = toSX(rightX - 4);
-
-  // Identify full-width horizontal lines so they never pollute candle wick detection
-  const isFullHorizRow = new Uint8Array(sH);
-  for (let sy = pY0; sy <= pY1; sy++) {
-    let nonBg = 0;
-    for (let sx = pX0; sx <= pX1; sx += 2) {
-      if (distBg((sy * sW + sx) * 4) > 32) nonBg++;
-    }
-    if (nonBg / Math.max(1, Math.ceil((pX1 - pX0 + 1) / 2)) > 0.58) {
-      isFullHorizRow[sy] = 1;
-    }
-  }
-
-  const colCount = new Uint16Array(sW);
-  const colMinSY = new Uint16Array(sW);
-  const colMaxSY = new Uint16Array(sW);
-  colMinSY.fill(sH);
-
-  const watermarkMaxSX = toSX(leftX + 255);
-  const watermarkMaxSY = toSY(topY + 68);
-
-  for (let sx = pX0; sx <= pX1; sx++) {
-    for (let sy = pY0; sy <= pY1; sy++) {
-      if (isFullHorizRow[sy]) continue;
-      if (sx <= watermarkMaxSX && sy <= watermarkMaxSY) continue;
-
-      const idx = (sy * sW + sx) * 4;
-      const d = distBg(idx);
-      if (d < 40) continue;
-
-      const chr = chromaAt(idx);
-      let isCandle = chr >= 24 && d >= 40;
-      if (!isCandle && d >= 115) {
-        // High-contrast monochrome candle/wick: require vertical continuity to reject dotted grids
-        let vNeighbors = 0;
-        if (sy > pY0 && distBg(((sy - 1) * sW + sx) * 4) >= 95) vNeighbors++;
-        if (sy < pY1 && distBg(((sy + 1) * sW + sx) * 4) >= 95) vNeighbors++;
-        if (sy > pY0 + 1 && distBg(((sy - 2) * sW + sx) * 4) >= 95) vNeighbors++;
-        if (sy < pY1 - 1 && distBg(((sy + 2) * sW + sx) * 4) >= 95) vNeighbors++;
-        if (vNeighbors >= 2) isCandle = true;
-      }
-
-      if (isCandle) {
-        colCount[sx]++;
-        if (sy < colMinSY[sx]) colMinSY[sx] = sy;
-        if (sy > colMaxSY[sx]) colMaxSY[sx] = sy;
-      }
-    }
-  }
-
-  // Filter isolated 1px noise columns
-  const validCandleCol = new Uint8Array(sW);
-  for (let sx = pX0; sx <= pX1; sx++) {
-    if (colCount[sx] < 3) continue;
-    let neighborhood = 0;
-    for (let k = Math.max(pX0, sx - 2); k <= Math.min(pX1, sx + 2); k++) {
-      neighborhood += colCount[k];
-    }
-    if (neighborhood >= 6) {
-      validCandleCol[sx] = 1;
-    }
-  }
-
-  // Detect right-most latest candlestick X near current price
-  let detectedLastCandleX: number | null = null;
-  const refPriceNY = detectedCurrentLineY ?? approxCurrentNY;
-  const priceBandMinSY = toSY(Math.max(topY + 6, refPriceNY - 130));
-  const priceBandMaxSY = toSY(Math.min(bottomY - 6, refPriceNY + 130));
-
-  for (let sx = pX1 - 1; sx >= toSX(leftX + 140); sx--) {
-    if (!validCandleCol[sx] || colCount[sx] < 4) continue;
-    // Must overlap vertically with active current-price region
-    if (colMinSY[sx] <= priceBandMaxSY && colMaxSY[sx] >= priceBandMinSY) {
-      let clusterSum = 0;
-      for (let k = Math.max(pX0, sx - 4); k <= Math.min(pX1, sx + 1); k++) {
-        if (validCandleCol[k]) clusterSum += colCount[k];
-      }
-      if (clusterSum >= 9) {
-        // Step slightly inward to center on the right-most candle body/wick
-        const centeredSX = validCandleCol[sx - 1] ? sx - 1 : sx;
-        detectedLastCandleX = clamp(toNX(centeredSX), leftX + 140, rightX - 12);
-        break;
-      }
-    }
-  }
-
-  const snapToCandleWick = (
-    nx: number,
-    ny: number,
-    mode: 'high' | 'low' | 'nearest',
-    radiusNX = 44,
-    radiusNY = 95
-  ): { x: number; y: number } | null => {
-    const cx = toSX(nx);
-    const cy = toSY(ny);
-    const rx = Math.max(4, Math.round((radiusNX / 1000) * sW));
-    const ry = Math.max(6, Math.round((radiusNY / 1000) * sH));
-
-    let bestSX = -1;
-    let bestSY = -1;
-    let bestScore = mode === 'high' ? Infinity : -Infinity;
-
-    for (let sx = Math.max(pX0, cx - rx); sx <= Math.min(pX1, cx + rx); sx++) {
-      if (!validCandleCol[sx]) continue;
-      const distPenalty = Math.abs(sx - cx) * 0.32;
-
-      if (mode === 'high') {
-        const topWick = colMinSY[sx];
-        if (Math.abs(topWick - cy) <= ry) {
-          const score = topWick + distPenalty;
-          if (score < bestScore) {
-            bestScore = score;
-            bestSX = sx;
-            bestSY = topWick;
-          }
-        }
-      } else if (mode === 'low') {
-        const botWick = colMaxSY[sx];
-        if (Math.abs(botWick - cy) <= ry) {
-          const score = botWick - distPenalty;
-          if (score > bestScore) {
-            bestScore = score;
-            bestSX = sx;
-            bestSY = botWick;
-          }
-        }
-      } else {
-        const nearY = clamp(cy, colMinSY[sx], colMaxSY[sx]);
-        const d = Math.hypot(sx - cx, nearY - cy);
-        if (-d > bestScore) {
-          bestScore = -d;
-          bestSX = sx;
-          bestSY = nearY;
-        }
-      }
-    }
-
-    if (bestSX === -1) return null;
-    return { x: toNX(bestSX), y: toNY(bestSY) };
-  };
-
-  // Check whether bottom-left of plotBox is uncluttered for export stamp
-  let blHits = 0;
-  for (let sx = toSX(leftX + 8); sx <= toSX(leftX + 240); sx++) {
-    if (validCandleCol[sx] && colMaxSY[sx] >= toSY(bottomY - 46)) {
-      blHits++;
-    }
-  }
-  const stampAnchor: 'bottom-left' | 'top-right' =
-    blHits <= 3 ? 'bottom-left' : 'top-right';
+  const verifiedLiveY = optical.verifiedBidAskLineY ?? optical.liveBadgeY;
 
   return {
-    isLightBg,
-    plotBox: { leftX, rightX, topY, bottomY },
-    detectedCurrentLineY,
-    detectedLastCandleX,
-    axisLabelCentroidsY,
-    snapToCandleWick,
-    stampAnchor,
+    isLightBg: optical.isLightBg,
+    plotBox: { ...optical.detectedPlotBox },
+    detectedCurrentLineY: verifiedLiveY,
+    detectedLastCandleX: optical.candleEnvelope?.lastCandleX ?? null,
+    axisLabelCentroidsY: optical.detectedAxisTicks.map((t) => t.y),
+    detectedAxisTicks: optical.detectedAxisTicks,
+    liveBadgeY: optical.liveBadgeY,
+    verifiedBidAskLineY: optical.verifiedBidAskLineY,
+    candles: optical.candles,
+    detectedPivots: optical.detectedPivots,
+    detectedFvgCandidates: optical.detectedFvgCandidates,
+    candleEnvelope: optical.candleEnvelope,
+    snapToCandleWick: (nx, ny, mode, radiusNX, radiusNY) => {
+      const res = optical.snapToCandleWick(nx, ny, mode, radiusNX, radiusNY);
+      return res ? { x: res.x, y: res.y } : null;
+    },
+    findOriginCandleForBand: optical.findOriginCandleForBand,
+    findBreakoutCandleX: optical.findBreakoutCandleX,
+    stampAnchor: optical.stampAnchor,
   };
 }
 
 function snapTickYToAxisCentroid(
   rawY: number,
   centroids: number[]
-): number {
-  if (centroids.length === 0) return rawY;
+): { y: number; snapped: boolean } {
+  if (centroids.length === 0) return { y: rawY, snapped: false };
   let closest = rawY;
-  let minDiff = 14.5;
+  let minDiff = 16;
+  let snapped = false;
   for (const c of centroids) {
     const diff = Math.abs(c - rawY);
     if (diff < minDiff) {
       minDiff = diff;
       closest = c;
+      snapped = true;
     }
   }
-  return closest;
+  return { y: closest, snapped };
+}
+
+function weightedMedian(items: Array<{ value: number; weight: number }>): number {
+  if (items.length === 0) return 0;
+  const sorted = [...items].sort((a, b) => a.value - b.value);
+  const totalWeight = sorted.reduce((acc, it) => acc + Math.max(1e-6, it.weight), 0);
+  let acc = 0;
+  for (const it of sorted) {
+    acc += Math.max(1e-6, it.weight);
+    if (acc >= totalWeight * 0.5) {
+      return it.value;
+    }
+  }
+  return sorted[sorted.length - 1].value;
+}
+
+function normalizeAnchorKey(raw?: string): string {
+  if (!raw) return '';
+  return raw.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 /**
  * Computes a pixel-accurate, mathematically undistorted 0..1000 technical drawing
- * layout calibrated directly against the chart's price axis and candlestick wicks.
+ * layout calibrated directly against the chart's price axis and physical candlestick wicks.
  */
 export function computeResolvedChartMarkup(
   signal: TradingSignalResponse,
@@ -842,29 +346,38 @@ export function computeResolvedChartMarkup(
 
   const leftX = pixelGeo
     ? pixelGeo.plotBox.leftX
-    : clamp(Number(rawMarkup?.plotBox?.leftX ?? 22), 6, 200);
+    : clamp(Number(rawMarkup?.plotBox?.leftX ?? 20), 6, 200);
   const rightX = pixelGeo
     ? pixelGeo.plotBox.rightX
-    : clamp(Number(rawMarkup?.plotBox?.rightX ?? 860), 700, 965);
+    : clamp(Number(rawMarkup?.plotBox?.rightX ?? 850), 680, 965);
   const topY = pixelGeo
     ? pixelGeo.plotBox.topY
-    : clamp(Number(rawMarkup?.plotBox?.topY ?? 60), 16, 250);
+    : clamp(Number(rawMarkup?.plotBox?.topY ?? 65), 14, 280);
   const bottomY = pixelGeo
     ? pixelGeo.plotBox.bottomY
-    : clamp(Number(rawMarkup?.plotBox?.bottomY ?? 870), 540, 968);
+    : clamp(Number(rawMarkup?.plotBox?.bottomY ?? 865), 420, 968);
 
   const minPlotY = topY + 10;
   const maxPlotY = bottomY - 10;
 
-  const rawLastX = Number(rawMarkup?.axisCalibration?.lastCandleX ?? 755);
+  const rawLastX = Number(rawMarkup?.axisCalibration?.lastCandleX ?? rightX - 65);
   const lastCandleX =
     pixelGeo?.detectedLastCandleX !== null && pixelGeo?.detectedLastCandleX !== undefined
       ? pixelGeo.detectedLastCandleX
-      : clamp(rawLastX, leftX + 140, rightX - 18);
+      : clamp(rawLastX, leftX + 120, rightX - 14);
 
-  const rawLastY = Number(rawMarkup?.axisCalibration?.lastCandleY ?? 500);
+  const rawLastY = Number(
+    rawMarkup?.axisCalibration?.lastCandleY ??
+      pixelGeo?.candleEnvelope?.lastCandleCloseY ??
+      (minPlotY + maxPlotY) / 2
+  );
+  const verifiedLiveY =
+    pixelGeo?.verifiedBidAskLineY ?? pixelGeo?.liveBadgeY ?? pixelGeo?.detectedCurrentLineY ?? null;
+
   const fallbackCurrentY =
-    pixelGeo?.detectedCurrentLineY ?? clamp(rawLastY, minPlotY + 20, maxPlotY - 20);
+    verifiedLiveY ??
+    pixelGeo?.candleEnvelope?.lastCandleCloseY ??
+    clamp(rawLastY, minPlotY + 16, maxPlotY - 16);
 
   const currentNum = parseChartPrice(signal.currentMarketPrice);
   const entryNum = parseChartPrice(signal.entryPrice);
@@ -873,18 +386,55 @@ export function computeResolvedChartMarkup(
   const tp2Num = parseChartPrice(signal.takeProfit2);
   const tp3Num = parseChartPrice(signal.takeProfit3);
 
-  // Collect multi-point Y-axis calibration anchors (snapping each to printed Y-axis label centroids when close)
+  // Build lookup maps for exact pixel-detected anchors (T1..Tk, LIVE, H1..H8, L1..L8, G1..G10)
+  const opticalTickMap = new Map<string, number>();
+  for (const t of pixelGeo?.detectedAxisTicks || []) {
+    const key = normalizeAnchorKey(t.id);
+    if (key) opticalTickMap.set(key, t.y);
+  }
+  if (pixelGeo?.liveBadgeY !== null && pixelGeo?.liveBadgeY !== undefined) {
+    opticalTickMap.set('LIVE', pixelGeo.liveBadgeY);
+  }
+
+  const opticalPivotMap = new Map<string, DetectedPivotAnchor>();
+  for (const p of pixelGeo?.detectedPivots || []) {
+    const key = normalizeAnchorKey(p.id);
+    if (key) opticalPivotMap.set(key, p);
+  }
+
+  const opticalFvgMap = new Map<string, DetectedFvgCandidate>();
+  for (const g of pixelGeo?.detectedFvgCandidates || []) {
+    const key = normalizeAnchorKey(g.id);
+    if (key) opticalFvgMap.set(key, g);
+  }
+
+  // Collect multi-point Y-axis calibration anchors and solve scale via outlier-proof Theil-Sen / RANSAC
   const centroids = pixelGeo?.axisLabelCentroidsY ?? [];
-  const calibPairs: Array<{ price: number; y: number }> = [];
+  const rawCalibCandidates: Array<{ price: number; y: number; weight: number }> = [];
 
   if (Array.isArray(rawMarkup?.axisCalibration?.axisTicks)) {
     for (const tick of rawMarkup.axisCalibration.axisTicks) {
       const p = parseChartPrice(tick.price);
-      const y = Number(tick.y);
-      if (p !== null && Number.isFinite(y) && y >= topY - 15 && y <= bottomY + 15) {
-        calibPairs.push({
+      if (p === null) continue;
+
+      const tKey = normalizeAnchorKey(tick.tickId);
+      const exactTickY = tKey ? opticalTickMap.get(tKey) : undefined;
+      if (exactTickY !== undefined && exactTickY >= topY - 12 && exactTickY <= bottomY + 12) {
+        rawCalibCandidates.push({
           price: p,
-          y: snapTickYToAxisCentroid(clamp(y, topY, bottomY), centroids),
+          y: clamp(exactTickY, topY, bottomY),
+          weight: 2.8,
+        });
+        continue;
+      }
+
+      const rawY = Number(tick.y);
+      if (Number.isFinite(rawY) && rawY >= topY - 18 && rawY <= bottomY + 18) {
+        const snapped = snapTickYToAxisCentroid(clamp(rawY, topY, bottomY), centroids);
+        rawCalibCandidates.push({
+          price: p,
+          y: snapped.y,
+          weight: snapped.snapped ? 1.8 : 1.0,
         });
       }
     }
@@ -901,9 +451,11 @@ export function computeResolvedChartMarkup(
     highRefY >= topY - 15 &&
     highRefY <= bottomY + 15
   ) {
-    calibPairs.push({
+    const snapped = snapTickYToAxisCentroid(clamp(highRefY, topY, bottomY), centroids);
+    rawCalibCandidates.push({
       price: highRefPrice,
-      y: snapTickYToAxisCentroid(clamp(highRefY, topY, bottomY), centroids),
+      y: snapped.y,
+      weight: snapped.snapped ? 1.3 : 0.75,
     });
   }
   if (
@@ -912,43 +464,105 @@ export function computeResolvedChartMarkup(
     lowRefY >= topY - 15 &&
     lowRefY <= bottomY + 15
   ) {
-    calibPairs.push({
+    const snapped = snapTickYToAxisCentroid(clamp(lowRefY, topY, bottomY), centroids);
+    rawCalibCandidates.push({
       price: lowRefPrice,
-      y: snapTickYToAxisCentroid(clamp(lowRefY, topY, bottomY), centroids),
+      y: snapped.y,
+      weight: snapped.snapped ? 1.3 : 0.75,
     });
   }
 
-  if (
-    currentNum !== null &&
-    pixelGeo?.detectedCurrentLineY !== null &&
-    pixelGeo?.detectedCurrentLineY !== undefined
-  ) {
-    calibPairs.push({
+  if (currentNum !== null && verifiedLiveY !== null) {
+    rawCalibCandidates.push({
       price: currentNum,
-      y: pixelGeo.detectedCurrentLineY,
+      y: clamp(verifiedLiveY, topY, bottomY),
+      weight: 2.4,
     });
   }
 
-  // Ordinary least-squares regression for exact Y-units-per-price slope
-  let calibratedSlope: number | null = null;
-  let meanPrice = 0;
-  let meanY = 0;
-
-  if (calibPairs.length >= 2) {
-    meanPrice = calibPairs.reduce((s, pt) => s + pt.price, 0) / calibPairs.length;
-    meanY = calibPairs.reduce((s, pt) => s + pt.y, 0) / calibPairs.length;
-    let num = 0;
-    let den = 0;
-    for (const pt of calibPairs) {
-      const dp = meanPrice - pt.price;
-      const dy = pt.y - meanY;
-      num += dp * dy;
-      den += dp * dp;
+  // Merge duplicate price anchors (keeping highest-weight / exact optical Y)
+  const dedupedCalib: Array<{ price: number; y: number; weight: number }> = [];
+  for (const cand of rawCalibCandidates) {
+    const existingIdx = dedupedCalib.findIndex(
+      (c) => Math.abs(c.price - cand.price) / Math.max(cand.price, 1e-9) < 1e-5
+    );
+    if (existingIdx === -1) {
+      dedupedCalib.push(cand);
+    } else if (cand.weight > dedupedCalib[existingIdx].weight) {
+      dedupedCalib[existingIdx] = cand;
     }
-    if (den > 1e-12) {
-      const slope = num / den; // positive when higher price -> smaller Y
-      if (slope > 0) {
-        calibratedSlope = slope;
+  }
+
+  // Outlier-proof Theil-Sen median pairwise slope + RANSAC inlier refinement
+  let calibratedSlope: number | null = null;
+  let calibratedInterceptB = 0; // y(p) = calibratedInterceptB - calibratedSlope * p
+  let inlierCount = 0;
+
+  if (dedupedCalib.length >= 2) {
+    const pairwiseSlopes: Array<{ value: number; weight: number }> = [];
+    for (let i = 0; i < dedupedCalib.length; i++) {
+      for (let j = i + 1; j < dedupedCalib.length; j++) {
+        const dp = dedupedCalib[i].price - dedupedCalib[j].price;
+        const dy = dedupedCalib[j].y - dedupedCalib[i].y; // positive when higher price has smaller Y
+        if (Math.abs(dp) > 1e-10 && Math.abs(dy) >= 16) {
+          const slope = dy / dp;
+          if (slope > 0 && Number.isFinite(slope)) {
+            pairwiseSlopes.push({
+              value: slope,
+              weight:
+                dedupedCalib[i].weight *
+                dedupedCalib[j].weight *
+                Math.min(350, Math.abs(dy)),
+            });
+          }
+        }
+      }
+    }
+
+    if (pairwiseSlopes.length > 0) {
+      const medianSlope = weightedMedian(pairwiseSlopes);
+      const intercepts = dedupedCalib.map((pt) => ({
+        value: pt.y + medianSlope * pt.price,
+        weight: pt.weight,
+      }));
+      const medianInterceptB = weightedMedian(intercepts);
+
+      // Filter out misread digits or echoed prompt coordinates (> 18 Y-units residual)
+      const inliers = dedupedCalib.filter(
+        (pt) => Math.abs(medianInterceptB - medianSlope * pt.price - pt.y) <= 18
+      );
+      inlierCount = inliers.length;
+
+      if (inliers.length >= 2) {
+        let wSum = 0;
+        let pMean = 0;
+        let yMean = 0;
+        for (const pt of inliers) {
+          wSum += pt.weight;
+          pMean += pt.weight * pt.price;
+          yMean += pt.weight * pt.y;
+        }
+        pMean /= Math.max(1e-9, wSum);
+        yMean /= Math.max(1e-9, wSum);
+
+        let num = 0;
+        let den = 0;
+        for (const pt of inliers) {
+          const dp = pMean - pt.price;
+          const dy = pt.y - yMean;
+          num += pt.weight * dp * dy;
+          den += pt.weight * dp * dp;
+        }
+        if (den > 1e-12 && num / den > 0) {
+          calibratedSlope = num / den;
+          calibratedInterceptB = yMean + calibratedSlope * pMean;
+        } else {
+          calibratedSlope = medianSlope;
+          calibratedInterceptB = medianInterceptB;
+        }
+      } else {
+        calibratedSlope = medianSlope;
+        calibratedInterceptB = medianInterceptB;
       }
     }
   }
@@ -966,30 +580,40 @@ export function computeResolvedChartMarkup(
   let rawPriceToY: (price: number) => number;
 
   if (calibratedSlope !== null) {
-    // Pin intercept directly to detected live horizontal price line when present for zero-offset Entry alignment
-    if (
-      currentNum !== null &&
-      pixelGeo?.detectedCurrentLineY !== null &&
-      pixelGeo?.detectedCurrentLineY !== undefined
-    ) {
-      const anchorY = pixelGeo.detectedCurrentLineY;
-      rawPriceToY = (p: number) => anchorY + (currentNum - p) * calibratedSlope!;
+    // ONLY anchor intercept to verified live Y-axis badge if it agrees with the multi-tick Y-scale
+    // (or if fewer than 2 regular scale ticks existed). Never let a stray line shift true axis ticks!
+    if (currentNum !== null && verifiedLiveY !== null) {
+      const predictedLiveY = calibratedInterceptB - calibratedSlope * currentNum;
+      if (inlierCount < 2 || Math.abs(predictedLiveY - verifiedLiveY) <= 16) {
+        const blendedLiveY =
+          inlierCount >= 3
+            ? verifiedLiveY * 0.65 + predictedLiveY * 0.35
+            : verifiedLiveY;
+        rawPriceToY = (p: number) => blendedLiveY + (currentNum - p) * calibratedSlope!;
+      } else {
+        rawPriceToY = (p: number) => calibratedInterceptB - calibratedSlope! * p;
+      }
     } else {
-      rawPriceToY = (p: number) => meanY + (meanPrice - p) * calibratedSlope!;
+      rawPriceToY = (p: number) => calibratedInterceptB - calibratedSlope! * p;
     }
   } else if (setupNums.length >= 2) {
+    // Cropped-axis fallback calibrated to real detected candle envelope
     const minP = Math.min(...setupNums);
     const maxP = Math.max(...setupNums);
     const span = Math.max(maxP - minP, 1e-6);
-    const fallbackSlope = ((maxPlotY - minPlotY) * 0.78) / span;
+    const envSpanY = pixelGeo?.candleEnvelope
+      ? Math.max(140, pixelGeo.candleEnvelope.maxLowY - pixelGeo.candleEnvelope.minHighY)
+      : (maxPlotY - minPlotY) * 0.76;
+    const fallbackSlope = envSpanY / span;
     if (currentNum !== null) {
       rawPriceToY = (p: number) =>
         fallbackCurrentY + (currentNum - p) * fallbackSlope;
     } else {
-      const topP = maxP + span * 0.12;
-      const botP = minP - span * 0.12;
-      rawPriceToY = (p: number) =>
-        minPlotY + ((topP - p) / (topP - botP)) * (maxPlotY - minPlotY);
+      const envMidY = pixelGeo?.candleEnvelope
+        ? (pixelGeo.candleEnvelope.minHighY + pixelGeo.candleEnvelope.maxLowY) / 2
+        : (minPlotY + maxPlotY) / 2;
+      const midP = (minP + maxP) / 2;
+      rawPriceToY = (p: number) => envMidY + (midP - p) * fallbackSlope;
     }
   } else {
     rawPriceToY = () => fallbackCurrentY;
@@ -1043,7 +667,9 @@ export function computeResolvedChartMarkup(
   const tp2Y = tp2Mapped.y;
   const tp3Y = tp3Mapped.y;
 
-  // Resolve Supply / Demand / S&R / Order Block Zones across full left-to-right chart
+  const maxAllowedZoneHeight = Math.max(54, (bottomY - topY) * 0.36);
+
+  // Resolve Supply / Demand / S&R / Order Block Zones — automatically locked onto real origin candles
   const resolvedZones: ResolvedZoneRect[] = [];
   const rawZones = rawMarkup?.zones ?? [];
   const rawFvgs = rawMarkup?.fairValueGaps ?? [];
@@ -1055,17 +681,23 @@ export function computeResolvedChartMarkup(
     rawZones.slice(0, 12).forEach((z, idx) => {
       const topPriceNum = parseChartPrice(z.topPrice);
       const botPriceNum = parseChartPrice(z.bottomPrice);
+      const tone = getZoneTone(z.role);
+      const isOrderBlock =
+        z.role === 'Bullish OB' ||
+        z.role === 'Bearish OB' ||
+        z.label.toLowerCase().includes('ob') ||
+        z.label.toLowerCase().includes('order block');
 
       let zTop =
         topPriceNum !== null
-          ? clamp(rawPriceToY(topPriceNum), topY + 6, bottomY - 16)
-          : clamp(Number(z.topY ?? 450), topY + 8, bottomY - 24);
+          ? clamp(rawPriceToY(topPriceNum), topY + 5, bottomY - 14)
+          : clamp(Number(z.topY ?? 450), topY + 6, bottomY - 20);
       let zBot =
         botPriceNum !== null
-          ? clamp(rawPriceToY(botPriceNum), topY + 14, bottomY - 6)
+          ? clamp(rawPriceToY(botPriceNum), topY + 13, bottomY - 5)
           : topPriceNum !== null
-          ? clamp(zTop + 20, topY + 16, bottomY - 6)
-          : clamp(Number(z.bottomY ?? zTop + 26), topY + 16, bottomY - 6);
+          ? clamp(zTop + 18, topY + 15, bottomY - 5)
+          : clamp(Number(z.bottomY ?? zTop + 24), topY + 15, bottomY - 5);
 
       if (zTop > zBot) {
         const tmp = zTop;
@@ -1073,34 +705,88 @@ export function computeResolvedChartMarkup(
         zBot = tmp;
       }
 
-      const height = clamp(zBot - zTop, 12, 72);
-      const startX = clamp(
+      let startX = clamp(
         Number(z.startX ?? leftX + 60),
         leftX + 6,
-        Math.max(leftX + 50, lastCandleX - 28)
+        Math.max(leftX + 44, lastCandleX - 20)
       );
+      let isMitigated = Boolean(z.mitigated);
       const rawEndX = Number(z.endX);
-      const effectiveEndX =
-        z.mitigated && Number.isFinite(rawEndX) && rawEndX > startX + 35
-          ? clamp(rawEndX, startX + 45, rightX)
+      let effectiveEndX =
+        isMitigated && Number.isFinite(rawEndX) && rawEndX > startX + 32
+          ? clamp(rawEndX, startX + 40, rightX)
           : rightX;
 
-      const isOrderBlock =
-        z.role === 'Bullish OB' ||
-        z.role === 'Bearish OB' ||
-        z.label.toLowerCase().includes('ob') ||
-        z.label.toLowerCase().includes('order block');
+      // Lock zone startX (and Order Block wick/body bounds) onto the real origin candle on the chart!
+      if (pixelGeo && pixelGeo.candles.length > 0) {
+        const originCandle = pixelGeo.findOriginCandleForBand(
+          startX,
+          zTop,
+          zBot,
+          tone,
+          isOrderBlock
+        );
+
+        if (originCandle) {
+          startX = clamp(
+            originCandle.x - originCandle.width * 0.5,
+            leftX + 4,
+            Math.max(leftX + 36, lastCandleX - 16)
+          );
+
+          // Tighten Order Blocks (or zones lacking explicit dual price bounds) to physical candle body+wick
+          const hasDualPriceBounds = topPriceNum !== null && botPriceNum !== null;
+          if (isOrderBlock || !hasDualPriceBounds) {
+            const obTop =
+              tone === 'bearish'
+                ? originCandle.highY
+                : Math.min(originCandle.lowY - 8, originCandle.bodyTopY);
+            const obBot =
+              tone === 'bearish'
+                ? Math.max(originCandle.highY + 8, originCandle.bodyBottomY)
+                : originCandle.lowY;
+
+            const midDiff = Math.abs((obTop + obBot) / 2 - (zTop + zBot) / 2);
+            if (!hasDualPriceBounds || calibratedSlope === null || midDiff <= 22) {
+              zTop = clamp(obTop, topY + 5, bottomY - 14);
+              zBot = clamp(Math.max(zTop + 8, obBot), topY + 13, bottomY - 5);
+            }
+          }
+
+          // Verify mitigation candle X when zone is marked mitigated
+          if (isMitigated) {
+            const zMid = (zTop + zBot) / 2;
+            for (let k = originCandle.index + 3; k < pixelGeo.candles.length; k++) {
+              const c = pixelGeo.candles[k];
+              const pierced =
+                tone === 'bullish'
+                  ? c.lowY >= zMid
+                  : tone === 'bearish'
+                  ? c.highY <= zMid
+                  : c.highY <= zBot && c.lowY >= zTop;
+              if (pierced && c.x > startX + 28) {
+                effectiveEndX = clamp(c.x + c.width * 0.5, startX + 36, rightX);
+                break;
+              }
+            }
+          } else {
+            effectiveEndX = rightX;
+          }
+        }
+      }
+
+      const height = clamp(zBot - zTop, 8, maxAllowedZoneHeight);
 
       resolvedZones.push({
         id: `zone-${idx}`,
         label: z.label || z.role,
         role: z.role,
-        tone: getZoneTone(z.role),
+        tone,
         isOrderBlock,
-        mitigated: Boolean(z.mitigated),
+        mitigated: isMitigated,
         isPrimary: anyExplicitPrimaryZone ? Boolean(z.isPrimary) : idx === 0,
         x: startX,
-        width: Math.max(55, effectiveEndX - startX),
+        width: Math.max(44, effectiveEndX - startX),
         topY: clamp(zTop, topY + 5, bottomY - height - 5),
         height,
         priceText: z.topPrice || z.bottomPrice || '',
@@ -1110,51 +796,77 @@ export function computeResolvedChartMarkup(
     signal.keyLevels.slice(0, 8).forEach((lvl, idx) => {
       const pNum = parseChartPrice(lvl.price);
       if (pNum === null) return;
-      const centerY = clamp(rawPriceToY(pNum), topY + 16, bottomY - 16);
-      const height = 20;
-      const startX = clamp(
-        leftX + 80 + (idx % 4) * 55,
-        leftX + 12,
-        Math.max(leftX + 60, lastCandleX - 40)
-      );
+      const centerY = clamp(rawPriceToY(pNum), topY + 14, bottomY - 14);
+      const height = 18;
+      let zTop = clamp(centerY - height / 2, topY + 5, bottomY - height - 5);
+      const zBot = zTop + height;
+      const tone = getZoneTone(lvl.role);
       const role: ChartMarkupZone['role'] =
         lvl.role === 'Fair Value Gap' || lvl.role === 'Structure Break'
           ? 'Support'
           : lvl.role;
+      const isOrderBlock = role === 'Bullish OB' || role === 'Bearish OB';
+
+      let startX = clamp(
+        leftX + 70 + (idx % 4) * 50,
+        leftX + 10,
+        Math.max(leftX + 50, lastCandleX - 32)
+      );
+      if (pixelGeo && pixelGeo.candles.length > 0) {
+        const originCandle = pixelGeo.findOriginCandleForBand(
+          startX,
+          zTop,
+          zBot,
+          tone,
+          isOrderBlock
+        );
+        if (originCandle) {
+          startX = clamp(
+            originCandle.x - originCandle.width * 0.5,
+            leftX + 6,
+            Math.max(leftX + 36, lastCandleX - 18)
+          );
+        }
+      }
+
       resolvedZones.push({
         id: `fallback-zone-${idx}`,
         label: lvl.label,
         role,
-        tone: getZoneTone(lvl.role),
-        isOrderBlock: role === 'Bullish OB' || role === 'Bearish OB',
+        tone,
+        isOrderBlock,
         mitigated: false,
         isPrimary: idx === 0,
         x: startX,
-        width: Math.max(70, rightX - startX),
-        topY: clamp(centerY - height / 2, topY + 6, bottomY - height - 6),
+        width: Math.max(55, rightX - startX),
+        topY: zTop,
         height,
         priceText: lvl.price,
       });
     });
   }
 
-  // Resolve Fair Value Gaps (FVG / Imbalances) with 50% Consequent Encroachment midline
+  // Resolve Fair Value Gaps (FVG / Imbalances) — locked onto real 3-candle wick-to-wick gaps
+  const consumedGapIds = new Set<string>();
+  const maxAllowedFvgHeight = Math.max(46, (bottomY - topY) * 0.28);
+
   const fairValueGaps: ResolvedFvgRect[] = rawFvgs
     .slice(0, 8)
     .map((f, idx): ResolvedFvgRect => {
+      const fTone: 'bullish' | 'bearish' = f.tone === 'bearish' ? 'bearish' : 'bullish';
       const topP = parseChartPrice(f.topPrice);
       const botP = parseChartPrice(f.bottomPrice);
 
       let fTop =
         topP !== null
-          ? clamp(rawPriceToY(topP), topY + 6, bottomY - 16)
-          : clamp(Number(f.topY ?? 460), topY + 8, bottomY - 22);
+          ? clamp(rawPriceToY(topP), topY + 5, bottomY - 14)
+          : clamp(Number(f.topY ?? 460), topY + 6, bottomY - 20);
       let fBot =
         botP !== null
-          ? clamp(rawPriceToY(botP), topY + 14, bottomY - 6)
+          ? clamp(rawPriceToY(botP), topY + 12, bottomY - 5)
           : topP !== null
-          ? clamp(fTop + 18, topY + 16, bottomY - 6)
-          : clamp(Number(f.bottomY ?? fTop + 22), topY + 16, bottomY - 6);
+          ? clamp(fTop + 16, topY + 14, bottomY - 5)
+          : clamp(Number(f.bottomY ?? fTop + 20), topY + 14, bottomY - 5);
 
       if (fTop > fBot) {
         const tmp = fTop;
@@ -1162,27 +874,93 @@ export function computeResolvedChartMarkup(
         fBot = tmp;
       }
 
-      const height = clamp(fBot - fTop, 11, 64);
-      const startX = clamp(
+      let startX = clamp(
         Number(f.startX ?? leftX + 120),
-        leftX + 8,
-        Math.max(leftX + 50, lastCandleX - 22)
+        leftX + 6,
+        Math.max(leftX + 42, lastCandleX - 16)
       );
+      let isMitigated = Boolean(f.mitigated);
       const rawEndX = Number(f.endX);
-      const effectiveEndX =
-        f.mitigated && Number.isFinite(rawEndX) && rawEndX > startX + 30
-          ? clamp(rawEndX, startX + 38, rightX)
+      let effectiveEndX =
+        isMitigated && Number.isFinite(rawEndX) && rawEndX > startX + 28
+          ? clamp(rawEndX, startX + 34, rightX)
           : rightX;
 
+      // 1. Exact ID match or spatial match against pre-detected physical 3-candle FVG gaps
+      let matchedGap: DetectedFvgCandidate | undefined;
+      const gKey = normalizeAnchorKey(f.gapId);
+      if (gKey && opticalFvgMap.has(gKey)) {
+        const cand = opticalFvgMap.get(gKey)!;
+        if (!consumedGapIds.has(cand.id)) {
+          matchedGap = cand;
+        }
+      }
+
+      if (!matchedGap && pixelGeo && pixelGeo.detectedFvgCandidates.length > 0) {
+        const fMid = (fTop + fBot) / 2;
+        let bestDist = Infinity;
+        for (const cand of pixelGeo.detectedFvgCandidates) {
+          if (consumedGapIds.has(cand.id) || cand.tone !== fTone) continue;
+          const cMid = (cand.topY + cand.bottomY) / 2;
+          const dx = Math.abs(cand.startX - startX);
+          const dy = Math.abs(cMid - fMid);
+          const maxDy = calibratedSlope !== null && topP !== null ? 32 : 56;
+          if (dx <= 85 && dy <= maxDy) {
+            const d = dy * 1.35 + dx * 0.45;
+            if (d < bestDist) {
+              bestDist = d;
+              matchedGap = cand;
+            }
+          }
+        }
+      }
+
+      if (matchedGap) {
+        consumedGapIds.add(matchedGap.id);
+        startX = clamp(
+          matchedGap.startX,
+          leftX + 6,
+          Math.max(leftX + 36, lastCandleX - 14)
+        );
+        fTop = clamp(matchedGap.topY, topY + 5, bottomY - 12);
+        fBot = clamp(Math.max(fTop + 6, matchedGap.bottomY), topY + 11, bottomY - 5);
+        if (matchedGap.mitigatedEndX !== undefined) {
+          isMitigated = true;
+          effectiveEndX = clamp(matchedGap.mitigatedEndX, startX + 24, rightX);
+        } else if (!isMitigated) {
+          effectiveEndX = rightX;
+        }
+      } else if (pixelGeo && pixelGeo.candles.length > 0) {
+        // Fallback: anchor FVG startX directly onto the displacement candle at [fTop..fBot]
+        const impulseCandle = pixelGeo.findOriginCandleForBand(
+          startX,
+          fTop,
+          fBot,
+          fTone,
+          false
+        );
+        if (impulseCandle) {
+          startX = clamp(
+            impulseCandle.x - impulseCandle.width * 0.5,
+            leftX + 6,
+            Math.max(leftX + 36, lastCandleX - 14)
+          );
+          if (!isMitigated) {
+            effectiveEndX = rightX;
+          }
+        }
+      }
+
+      const height = clamp(fBot - fTop, 6, maxAllowedFvgHeight);
       const clampedTop = clamp(fTop, topY + 5, bottomY - height - 5);
       return {
         id: `fvg-${idx}`,
-        label: f.label || (f.tone === 'bearish' ? 'Bearish FVG' : 'Bullish FVG'),
-        tone: f.tone === 'bearish' ? 'bearish' : 'bullish',
-        mitigated: Boolean(f.mitigated),
+        label: f.label || (fTone === 'bearish' ? 'Bearish FVG' : 'Bullish FVG'),
+        tone: fTone,
+        mitigated: isMitigated,
         isPrimary: Boolean(f.isPrimary),
         x: startX,
-        width: Math.max(45, effectiveEndX - startX),
+        width: Math.max(36, effectiveEndX - startX),
         topY: clampedTop,
         height,
         midY: clampedTop + height / 2,
@@ -1190,39 +968,60 @@ export function computeResolvedChartMarkup(
       };
     });
 
-  // Resolve Horizontal BOS & CHoCH Market Structure Breaks (snapped to origin swing wick)
+  // Resolve Horizontal BOS & CHoCH Market Structure Breaks (locked to true swing wick + breakout candle)
   const rawBreaks = rawMarkup?.structureBreaks ?? [];
   const anyExplicitPrimaryBreak = rawBreaks.some((b) => Boolean(b.isPrimary));
   const structureBreaks: ResolvedStructureBreak[] = rawBreaks
     .slice(0, 10)
     .map((sb, idx): ResolvedStructureBreak => {
+      const sbTone: 'bullish' | 'bearish' = sb.tone === 'bearish' ? 'bearish' : 'bullish';
       const pNum = parseChartPrice(sb.price);
       let y =
         pNum !== null
           ? clamp(rawPriceToY(pNum), topY + 10, bottomY - 10)
           : clamp(Number(sb.y ?? 450), topY + 10, bottomY - 10);
 
-      let x1 = clamp(Number(sb.startX ?? leftX + 80), leftX + 8, lastCandleX - 24);
+      let x1 = clamp(Number(sb.startX ?? leftX + 80), leftX + 8, lastCandleX - 20);
       let x2 = clamp(
         Number(sb.endX ?? x1 + 140),
-        x1 + 32,
-        Math.min(rightX - 8, lastCandleX + 18)
+        x1 + 30,
+        Math.min(rightX - 6, lastCandleX + 16)
       );
 
       if (pixelGeo) {
-        const wickSnap = pixelGeo.snapToCandleWick(
-          x1,
-          y,
-          sb.tone === 'bullish' ? 'high' : 'low',
-          40,
-          pNum !== null ? 24 : 75
-        );
-        if (wickSnap) {
-          x1 = clamp(wickSnap.x, leftX + 8, lastCandleX - 20);
-          if (pNum === null || Math.abs(wickSnap.y - y) <= 20) {
-            y = wickSnap.y;
+        const pKey = normalizeAnchorKey(sb.pivotId);
+        const matchedPivot = pKey ? opticalPivotMap.get(pKey) : undefined;
+        const maxWickPullY = pNum !== null && calibratedSlope !== null ? 28 : 82;
+
+        if (
+          matchedPivot &&
+          ((sbTone === 'bullish' && matchedPivot.kind === 'high') ||
+            (sbTone === 'bearish' && matchedPivot.kind === 'low')) &&
+          Math.abs(matchedPivot.y - y) <= maxWickPullY + 12
+        ) {
+          x1 = clamp(matchedPivot.x, leftX + 8, lastCandleX - 16);
+          y = clamp(matchedPivot.y, topY + 8, bottomY - 8);
+        } else {
+          const wickSnap = pixelGeo.snapToCandleWick(
+            x1,
+            y,
+            sbTone === 'bullish' ? 'high' : 'low',
+            62,
+            maxWickPullY
+          );
+          if (wickSnap) {
+            x1 = clamp(wickSnap.x, leftX + 8, lastCandleX - 16);
+            if (pNum === null || calibratedSlope === null || Math.abs(wickSnap.y - y) <= 28) {
+              y = clamp(wickSnap.y, topY + 8, bottomY - 8);
+            }
           }
-          x2 = Math.max(x2, x1 + 36);
+        }
+
+        const breakoutX = pixelGeo.findBreakoutCandleX(x1, y, sbTone);
+        if (breakoutX !== null && breakoutX > x1 + 16) {
+          x2 = clamp(breakoutX, x1 + 26, Math.min(rightX - 6, lastCandleX + 12));
+        } else {
+          x2 = clamp(Math.max(x2, x1 + 34), x1 + 28, Math.min(rightX - 6, lastCandleX + 14));
         }
       }
 
@@ -1230,7 +1029,7 @@ export function computeResolvedChartMarkup(
         id: `sb-${idx}`,
         kind: sb.kind === 'CHoCH' ? 'CHoCH' : 'BOS',
         label: sb.label || sb.kind,
-        tone: sb.tone === 'bearish' ? 'bearish' : 'bullish',
+        tone: sbTone,
         x1,
         x2,
         y,
@@ -1241,7 +1040,7 @@ export function computeResolvedChartMarkup(
       };
     });
 
-  // Resolve Liquidity Pools & Sweeps (EQH, EQL, BSL, SSL, Sweep)
+  // Resolve Liquidity Pools & Sweeps (EQH, EQL, BSL, SSL, Sweep) locked onto true high/low wicks
   const liquidityLevels: ResolvedLiquidityLine[] = (
     rawMarkup?.liquidityLevels ?? []
   )
@@ -1253,10 +1052,11 @@ export function computeResolvedChartMarkup(
           ? clamp(rawPriceToY(pNum), topY + 8, bottomY - 8)
           : clamp(Number(lq.y ?? 350), topY + 8, bottomY - 8);
 
-      let x1 = clamp(Number(lq.startX ?? leftX + 70), leftX + 8, lastCandleX - 20);
+      let x1 = clamp(Number(lq.startX ?? leftX + 70), leftX + 8, lastCandleX - 18);
+      const isSwept = Boolean(lq.swept || lq.kind === 'Sweep');
       let x2 = clamp(
-        Number(lq.endX ?? lastCandleX),
-        x1 + 36,
+        Number(lq.endX ?? (isSwept ? lastCandleX : rightX - 6)),
+        x1 + 32,
         rightX - 6
       );
 
@@ -1266,19 +1066,47 @@ export function computeResolvedChartMarkup(
         (lq.kind === 'Sweep' && lq.tone === 'bearish');
 
       if (pixelGeo) {
-        const snap = pixelGeo.snapToCandleWick(
-          x1,
-          y,
-          isUpperLiq ? 'high' : 'low',
-          42,
-          pNum !== null ? 22 : 70
-        );
-        if (snap) {
-          x1 = clamp(snap.x, leftX + 8, lastCandleX - 18);
-          if (pNum === null || Math.abs(snap.y - y) <= 18) {
-            y = snap.y;
+        const pKey = normalizeAnchorKey(lq.pivotId);
+        const matchedPivot = pKey ? opticalPivotMap.get(pKey) : undefined;
+        const maxWickPullY = pNum !== null && calibratedSlope !== null ? 26 : 76;
+
+        if (
+          matchedPivot &&
+          ((isUpperLiq && matchedPivot.kind === 'high') ||
+            (!isUpperLiq && matchedPivot.kind === 'low')) &&
+          Math.abs(matchedPivot.y - y) <= maxWickPullY + 12
+        ) {
+          x1 = clamp(matchedPivot.x, leftX + 8, lastCandleX - 16);
+          y = clamp(matchedPivot.y, topY + 8, bottomY - 8);
+        } else {
+          const snap = pixelGeo.snapToCandleWick(
+            x1,
+            y,
+            isUpperLiq ? 'high' : 'low',
+            62,
+            maxWickPullY
+          );
+          if (snap) {
+            x1 = clamp(snap.x, leftX + 8, lastCandleX - 16);
+            if (pNum === null || calibratedSlope === null || Math.abs(snap.y - y) <= 26) {
+              y = clamp(snap.y, topY + 8, bottomY - 8);
+            }
           }
-          x2 = Math.max(x2, x1 + 36);
+        }
+
+        if (isSwept) {
+          const sweepX = pixelGeo.findBreakoutCandleX(
+            x1,
+            y,
+            isUpperLiq ? 'bullish' : 'bearish'
+          );
+          if (sweepX !== null && sweepX > x1 + 16) {
+            x2 = clamp(sweepX + 8, x1 + 28, rightX - 6);
+          } else {
+            x2 = Math.max(x2, x1 + 32);
+          }
+        } else {
+          x2 = Math.max(x2, rightX - 8);
         }
       }
 
@@ -1291,7 +1119,7 @@ export function computeResolvedChartMarkup(
         x2,
         y,
         priceText: lq.price || '',
-        swept: Boolean(lq.swept || lq.kind === 'Sweep'),
+        swept: isSwept,
         isPrimary: Boolean(lq.isPrimary),
       };
     });
@@ -1315,7 +1143,7 @@ export function computeResolvedChartMarkup(
             : tl.role === 'Channel Lower' || tone === 'bullish'
             ? 'low'
             : 'nearest';
-        const snap1 = pixelGeo.snapToCandleWick(x1, y1, wickMode, 52, 105);
+        const snap1 = pixelGeo.snapToCandleWick(x1, y1, wickMode, 56, 95);
         if (snap1) {
           x1 = snap1.x;
           y1 = snap1.y;
@@ -1328,12 +1156,12 @@ export function computeResolvedChartMarkup(
             Math.min(x2, lastCandleX),
             y2,
             wickMode,
-            46,
-            95
+            52,
+            90
           );
-          if (snap2 && Math.abs(snap2.x - x1) >= 42) {
+          if (snap2 && Math.abs(snap2.x - x1) >= 40) {
             const slope = (snap2.y - y1) / (snap2.x - x1);
-            const targetX2 = clamp(Math.max(snap2.x, lastCandleX), x1 + 42, rightX - 8);
+            const targetX2 = clamp(Math.max(snap2.x, lastCandleX), x1 + 40, rightX - 8);
             const projectedY2 = y1 + slope * (targetX2 - x1);
             if (projectedY2 >= topY + 8 && projectedY2 <= bottomY - 8) {
               x2 = targetX2;
@@ -1360,29 +1188,49 @@ export function computeResolvedChartMarkup(
     })
     .filter((tl) => Math.hypot(tl.x2 - tl.x1, tl.y2 - tl.y1) >= 40);
 
-  // Snap Full Left-to-Right Swing Structure Pivot Tags (HH, HL, LH, LL, EH, EL, Sweep)
+  // Snap Full Left-to-Right Swing Structure Pivot Tags (HH, HL, LH, LL) directly onto candle wick tips
   const rawSwings = (rawMarkup?.swings || []).slice(0, 18);
   const candidateSwings: ChartMarkupSwing[] = rawSwings.map((sw): ChartMarkupSwing => {
-    const position: 'above' | 'below' =
-      sw.position === 'below' ? 'below' : 'above';
+    const tagUpper = String(sw.tag || '').toUpperCase();
+    const inferredBelow =
+      sw.position === 'below' ||
+      tagUpper === 'HL' ||
+      tagUpper === 'LL' ||
+      tagUpper === 'EQL' ||
+      tagUpper === 'SSL';
+    const position: 'above' | 'below' = inferredBelow ? 'below' : 'above';
     const pNum = parseChartPrice(sw.price);
-    let x = clamp(Number(sw.x ?? 450), leftX + 12, lastCandleX + 6);
+    let x = clamp(Number(sw.x ?? 450), leftX + 10, lastCandleX + 6);
     let y =
       pNum !== null
-        ? clamp(rawPriceToY(pNum), topY + 18, bottomY - 18)
-        : clamp(Number(sw.y ?? 450), topY + 18, bottomY - 18);
+        ? clamp(rawPriceToY(pNum), topY + 14, bottomY - 14)
+        : clamp(Number(sw.y ?? 450), topY + 14, bottomY - 14);
 
     if (pixelGeo) {
-      const snapped = pixelGeo.snapToCandleWick(
-        x,
-        y,
-        position === 'above' ? 'high' : 'low',
-        40,
-        pNum !== null ? 55 : 95
-      );
-      if (snapped) {
-        x = clamp(snapped.x, leftX + 12, rightX - 14);
-        y = clamp(snapped.y, topY + 16, bottomY - 16);
+      const pKey = normalizeAnchorKey(sw.pivotId);
+      const matchedPivot = pKey ? opticalPivotMap.get(pKey) : undefined;
+      const maxSwingPullY = pNum !== null && calibratedSlope !== null ? 54 : 95;
+
+      if (
+        matchedPivot &&
+        ((position === 'above' && matchedPivot.kind === 'high') ||
+          (position === 'below' && matchedPivot.kind === 'low')) &&
+        Math.abs(matchedPivot.y - y) <= maxSwingPullY + 16
+      ) {
+        x = clamp(matchedPivot.x, leftX + 10, rightX - 12);
+        y = clamp(matchedPivot.y, topY + 12, bottomY - 12);
+      } else {
+        const snapped = pixelGeo.snapToCandleWick(
+          x,
+          y,
+          position === 'above' ? 'high' : 'low',
+          56,
+          maxSwingPullY
+        );
+        if (snapped) {
+          x = clamp(snapped.x, leftX + 10, rightX - 12);
+          y = clamp(snapped.y, topY + 12, bottomY - 12);
+        }
       }
     }
 
@@ -1390,6 +1238,7 @@ export function computeResolvedChartMarkup(
       tag: String(sw.tag || 'Pivot').slice(0, 8),
       x,
       y,
+      pivotId: sw.pivotId,
       position,
       tone:
         sw.tone === 'bullish' || sw.tone === 'bearish' ? sw.tone : 'neutral',
@@ -1696,6 +1545,7 @@ export function renderMarkedChartToCanvas(
   const unit = Math.max(1.05, Math.min(W, H) / 960);
 
   const isPrimaryOnly = layerFilter === 'primary';
+  const isLevelsOnly = layerFilter === 'setup';
   const showSetup =
     layerFilter === 'primary' || layerFilter === 'all' || layerFilter === 'setup';
   const showAnyStructure =
@@ -2258,9 +2108,9 @@ export function renderMarkedChartToCanvas(
       );
       ctx.stroke();
 
-      // R:R Badge centered in open reward space so it never collides with Entry/TP pills
+      // R:R Badge centered in open reward space (hidden in pure Entry · SL · TP mode)
       const legGapPx = Math.abs(sy(pb.tp1Y) - sy(pb.entryY));
-      if (legGapPx >= 36 * unit) {
+      if (!isLevelsOnly && legGapPx >= 36 * unit) {
         ctx.font = `700 ${Math.round(10 * unit)}px ui-monospace, SFMono-Regular, monospace`;
         const rrW = ctx.measureText(pb.rrBadgeText).width;
         const rrBoxW = rrW + 9 * unit;
@@ -2288,9 +2138,10 @@ export function renderMarkedChartToCanvas(
     // Horizontal Execution & Target Lines (exact calibrated Y) + Right-Edge Pointer Pills
     for (const lvl of markup.levelLines) {
       ctx.save();
-      const lineStartX = sx(
+      const anchorStartX = sx(
         markup.positionBox ? markup.positionBox.startX : markup.anchorPoint.x
       );
+      const fullLeftX = sx(markup.plotBox.leftX + 8);
       const lineEndX = sx(markup.plotBox.rightX);
       const ly = sy(lvl.y);
       const tagY = sy(lvl.labelY);
@@ -2310,13 +2161,28 @@ export function renderMarkedChartToCanvas(
             : '#38BDF8'
           : '#64748B';
 
+      // In pure "Entry · SL · TP" mode, extend a clean horizontal trace across historical candles
+      // so traders can check SL & TP levels against swing wicks with zero clutter
+      if (isLevelsOnly && anchorStartX > fullLeftX + 16 * unit) {
+        ctx.save();
+        ctx.strokeStyle = strokeColor;
+        ctx.globalAlpha = light ? 0.45 : 0.42;
+        ctx.lineWidth = (lvl.tone === 'entry' ? 1.45 : 1.2) * unit;
+        ctx.setLineDash([4.5 * unit, 4 * unit]);
+        ctx.beginPath();
+        ctx.moveTo(fullLeftX, ly);
+        ctx.lineTo(anchorStartX, ly);
+        ctx.stroke();
+        ctx.restore();
+      }
+
       ctx.strokeStyle = strokeColor;
       ctx.lineWidth = (lvl.tone === 'entry' ? 2.1 : 1.55) * unit;
       if (lvl.dashed) {
         ctx.setLineDash([5 * unit, 3.5 * unit]);
       }
       ctx.beginPath();
-      ctx.moveTo(lineStartX, ly);
+      ctx.moveTo(anchorStartX, ly);
       ctx.lineTo(lineEndX, ly);
       ctx.stroke();
 
@@ -2361,87 +2227,91 @@ export function renderMarkedChartToCanvas(
       ctx.restore();
     }
 
-    // Multi-Leg Projected Price-Action Path + Arrowhead
-    const pathColor =
-      markup.tone === 'bullish'
-        ? light
-          ? '#059669'
-          : '#34D399'
-        : markup.tone === 'bearish'
-        ? light
-          ? '#E11D48'
-          : '#FB7185'
-        : '#D97706';
+    if (!isLevelsOnly) {
+      // Multi-Leg Projected Price-Action Path + Arrowhead
+      const pathColor =
+        markup.tone === 'bullish'
+          ? light
+            ? '#059669'
+            : '#34D399'
+          : markup.tone === 'bearish'
+          ? light
+            ? '#E11D48'
+            : '#FB7185'
+          : '#D97706';
 
-    for (const seg of markup.pathSegments) {
-      if (seg.points.length < 2) continue;
-      ctx.save();
-      ctx.strokeStyle = seg.dashed ? '#0284C7' : pathColor;
-      ctx.lineWidth = 2.2 * unit;
-      ctx.lineJoin = 'round';
-      ctx.lineCap = 'round';
-      if (seg.dashed) {
-        ctx.setLineDash([6 * unit, 4 * unit]);
-      }
-      ctx.beginPath();
-      ctx.moveTo(sx(seg.points[0].x), sy(seg.points[0].y));
-      for (let i = 1; i < seg.points.length; i++) {
-        ctx.lineTo(sx(seg.points[i].x), sy(seg.points[i].y));
-      }
-      ctx.stroke();
-
-      if (seg.hasArrowhead) {
-        ctx.setLineDash([]);
-        const pLast = seg.points[seg.points.length - 1];
-        const pPrev = seg.points[seg.points.length - 2];
-        const angle = Math.atan2(
-          sy(pLast.y) - sy(pPrev.y),
-          sx(pLast.x) - sx(pPrev.x)
-        );
-        const headLen = 9.5 * unit;
-        const tipX = sx(pLast.x);
-        const tipY = sy(pLast.y);
+      for (const seg of markup.pathSegments) {
+        if (seg.points.length < 2) continue;
+        ctx.save();
+        ctx.strokeStyle = seg.dashed ? '#0284C7' : pathColor;
+        ctx.lineWidth = 2.2 * unit;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        if (seg.dashed) {
+          ctx.setLineDash([6 * unit, 4 * unit]);
+        }
         ctx.beginPath();
-        ctx.moveTo(tipX, tipY);
-        ctx.lineTo(
-          tipX - headLen * Math.cos(angle - Math.PI / 6),
-          tipY - headLen * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          tipX - headLen * Math.cos(angle + Math.PI / 6),
-          tipY - headLen * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fillStyle = seg.dashed ? '#0284C7' : pathColor;
-        ctx.fill();
+        ctx.moveTo(sx(seg.points[0].x), sy(seg.points[0].y));
+        for (let i = 1; i < seg.points.length; i++) {
+          ctx.lineTo(sx(seg.points[i].x), sy(seg.points[i].y));
+        }
+        ctx.stroke();
+
+        if (seg.hasArrowhead) {
+          ctx.setLineDash([]);
+          const pLast = seg.points[seg.points.length - 1];
+          const pPrev = seg.points[seg.points.length - 2];
+          const angle = Math.atan2(
+            sy(pLast.y) - sy(pPrev.y),
+            sx(pLast.x) - sx(pPrev.x)
+          );
+          const headLen = 9.5 * unit;
+          const tipX = sx(pLast.x);
+          const tipY = sy(pLast.y);
+          ctx.beginPath();
+          ctx.moveTo(tipX, tipY);
+          ctx.lineTo(
+            tipX - headLen * Math.cos(angle - Math.PI / 6),
+            tipY - headLen * Math.sin(angle - Math.PI / 6)
+          );
+          ctx.lineTo(
+            tipX - headLen * Math.cos(angle + Math.PI / 6),
+            tipY - headLen * Math.sin(angle + Math.PI / 6)
+          );
+          ctx.closePath();
+          ctx.fillStyle = seg.dashed ? '#0284C7' : pathColor;
+          ctx.fill();
+        }
+        ctx.restore();
       }
+
+      // Dual-Contrast Anchor Ring on Exact Latest Candle Close
+      ctx.save();
+      const ax = sx(markup.anchorPoint.x);
+      const ay = sy(markup.anchorPoint.y);
+      ctx.beginPath();
+      ctx.arc(ax, ay, 4.5 * unit, 0, Math.PI * 2);
+      ctx.fillStyle = '#090D16';
+      ctx.fill();
+      ctx.lineWidth = 2 * unit;
+      ctx.strokeStyle = '#FFFFFF';
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(ax, ay, 5.5 * unit, 0, Math.PI * 2);
+      ctx.lineWidth = 1 * unit;
+      ctx.strokeStyle = 'rgba(15, 23, 42, 0.65)';
+      ctx.stroke();
       ctx.restore();
     }
-
-    // Dual-Contrast Anchor Ring on Exact Latest Candle Close
-    ctx.save();
-    const ax = sx(markup.anchorPoint.x);
-    const ay = sy(markup.anchorPoint.y);
-    ctx.beginPath();
-    ctx.arc(ax, ay, 4.5 * unit, 0, Math.PI * 2);
-    ctx.fillStyle = '#090D16';
-    ctx.fill();
-    ctx.lineWidth = 2 * unit;
-    ctx.strokeStyle = '#FFFFFF';
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.arc(ax, ay, 5.5 * unit, 0, Math.PI * 2);
-    ctx.lineWidth = 1 * unit;
-    ctx.strokeStyle = 'rgba(15, 23, 42, 0.65)';
-    ctx.stroke();
-    ctx.restore();
   }
 
   // Exported PNG signature stamp placed cleanly inside plotBox (never overlapping OS status bar)
   if (includeStamp) {
     ctx.save();
     const modeLabel =
-      layerFilter === 'all'
+      layerFilter === 'setup'
+        ? 'Entry · SL · TP'
+        : layerFilter === 'all'
         ? 'Full SMC Structure'
         : layerFilter === 'structure'
         ? 'Structure Map'
@@ -2502,7 +2372,9 @@ export async function exportMarkedChartPng(
   const cleanPair = signal.detectedPair.replace(/[^a-zA-Z0-9]/g, '');
   const cleanType = signal.signalType.replace(/\s+/g, '-');
   const modeSuffix =
-    layerFilter === 'all'
+    layerFilter === 'setup'
+      ? '-LevelsOnly'
+      : layerFilter === 'all'
       ? '-FullStructure'
       : layerFilter === 'structure'
       ? '-StructureOnly'

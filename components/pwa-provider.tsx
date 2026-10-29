@@ -1,5 +1,6 @@
 'use client';
 
+import type {} from '@serwist/next/typings';
 import React, {
   createContext,
   useContext,
@@ -59,28 +60,6 @@ const PwaContext = createContext<PwaContextValue>({
 });
 
 const BANNER_DISMISSED_KEY = 'tracefx_pwa_banner_dismissed_v1';
-
-function collectLoadedStaticAssetUrls(): string[] {
-  if (typeof document === 'undefined') return [];
-  const urls = new Set<string>();
-  const scripts = Array.from(document.querySelectorAll('script[src]'));
-  for (const s of scripts) {
-    const src = (s as HTMLScriptElement).src;
-    if (src && src.includes('/_next/static/')) {
-      urls.add(src);
-    }
-  }
-  const links = Array.from(
-    document.querySelectorAll('link[rel="stylesheet"][href]')
-  );
-  for (const l of links) {
-    const href = (l as HTMLLinkElement).href;
-    if (href && (href.includes('/_next/static/') || href.includes('fonts.g'))) {
-      urls.add(href);
-    }
-  }
-  return Array.from(urls);
-}
 
 export function PwaProvider({ children }: { children: React.ReactNode }) {
   const [deferredPrompt, setDeferredPrompt] =
@@ -171,7 +150,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
       mediaQuery.addEventListener('change', handleDisplayModeChange);
     }
 
-    // Immediately purge any legacy pre-v7 caches from active browser sessions
+    // Purge any legacy pre-Serwist custom caches
     if ('caches' in window) {
       void window.caches
         .keys()
@@ -180,9 +159,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
             keys
               .filter(
                 (k) =>
-                  k.startsWith('tracefx-') &&
-                  k !== 'tracefx-shell-v7' &&
-                  k !== 'tracefx-static-v7'
+                  k.startsWith('tracefx-') && !k.startsWith('tracefx-serwist')
               )
               .map((k) => window.caches.delete(k))
           )
@@ -190,45 +167,35 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
         .catch(() => {});
     }
 
-    // Register Legacy-Compatible ES5 Service Worker and warm offline Signal History shell
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker
-        .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+    // Register real @serwist/next service worker via window.serwist
+    const serwistInstance =
+      typeof window !== 'undefined' ? window.serwist : undefined;
+    const markReady = () => setSwReady(true);
+
+    if ('serviceWorker' in navigator && serwistInstance !== undefined) {
+      serwistInstance.addEventListener('installed', markReady);
+      serwistInstance.addEventListener('activated', markReady);
+      serwistInstance.addEventListener('controlling', markReady);
+
+      void serwistInstance.active.then(markReady).catch(() => {});
+      void serwistInstance
+        .register()
         .then((reg) => {
-          try {
-            window.localStorage.setItem('__tfx_sw_v7_migrated', '1');
-          } catch {
-            // ignore
-          }
-          void reg.update().catch(() => {});
-          setSwReady(true);
-          const warm = () => {
-            const worker = reg.active || reg.waiting || reg.installing;
-            if (!worker) return;
-            worker.postMessage({
-              type: 'WARM_CACHE',
-              routes: ['/', '/history', '/tv-engine', '/offline'],
-              assets: collectLoadedStaticAssetUrls(),
-            });
-          };
-          if (reg.active) {
-            warm();
-          } else {
-            navigator.serviceWorker.ready
-              .then((readyReg) => {
-                setSwReady(true);
-                readyReg.active?.postMessage({
-                  type: 'WARM_CACHE',
-                  routes: ['/', '/history', '/tv-engine', '/offline'],
-                  assets: collectLoadedStaticAssetUrls(),
-                });
-              })
-              .catch(() => {});
+          if (reg) {
+            setSwReady(true);
           }
         })
         .catch(() => {
           setSwReady(false);
         });
+    } else if ('serviceWorker' in navigator) {
+      // Fallback check if serviceWorker is already registered under scope
+      navigator.serviceWorker
+        .getRegistration('/')
+        .then((reg) => {
+          if (reg) setSwReady(true);
+        })
+        .catch(() => {});
     }
 
     return () => {
@@ -239,6 +206,11 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener('offline', handleOffline);
       if (typeof mediaQuery.removeEventListener === 'function') {
         mediaQuery.removeEventListener('change', handleDisplayModeChange);
+      }
+      if (serwistInstance !== undefined) {
+        serwistInstance.removeEventListener('installed', markReady);
+        serwistInstance.removeEventListener('activated', markReady);
+        serwistInstance.removeEventListener('controlling', markReady);
       }
     };
   }, []);
@@ -314,7 +286,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2.5 min-w-0">
             <WifiOff className="h-4 w-4 text-amber-400 shrink-0" />
             <span className="truncate text-xs font-medium text-amber-200">
-              Offline Mode · Cached shell active
+              Offline Mode · Serwist cache active
             </span>
           </div>
           <Link
@@ -423,7 +395,7 @@ export function PwaProvider({ children }: { children: React.ReactNode }) {
                 </p>
                 <div className="divide-y divide-slate-800/70 border-y border-slate-800/70 text-xs">
                   <div className="flex items-center justify-between py-2">
-                    <span className="text-slate-400">Legacy ES5 Service Worker</span>
+                    <span className="text-slate-400">Serwist Service Worker</span>
                     <span
                       className={`font-[family-name:var(--font-mono)] tabular-nums ${
                         swReady ? 'text-emerald-400' : 'text-amber-400'
