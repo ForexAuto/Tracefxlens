@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Eye, EyeOff, Loader2 } from 'lucide-react';
 import type { TvConnectPayload } from '@/lib/tv-engine-types';
+import { getTvCredentials, saveTvCredentials } from '@/lib/tv-storage';
 
 interface TvSessionModalProps {
   open: boolean;
@@ -19,11 +20,21 @@ export function TvSessionModal({
   onClose,
   onConnect,
 }: TvSessionModalProps) {
-  const [mode, setMode] = useState<'cookies' | 'json' | 'guest'>('cookies');
-  const [sessionId, setSessionId] = useState('');
-  const [sessionIdSign, setSessionIdSign] = useState('');
-  const [cookieJson, setCookieJson] = useState('');
-  const [chartUrl, setChartUrl] = useState('');
+  const [mode, setMode] = useState<'cookies' | 'json' | 'guest'>(
+    () => getTvCredentials()?.mode || 'cookies'
+  );
+  const [sessionId, setSessionId] = useState(
+    () => getTvCredentials()?.sessionId || ''
+  );
+  const [sessionIdSign, setSessionIdSign] = useState(
+    () => getTvCredentials()?.sessionIdSign || ''
+  );
+  const [cookieJson, setCookieJson] = useState(
+    () => getTvCredentials()?.cookieJson || ''
+  );
+  const [chartUrl, setChartUrl] = useState(
+    () => getTvCredentials()?.chartUrl || ''
+  );
   const [showSecrets, setShowSecrets] = useState(false);
 
   useEffect(() => {
@@ -42,6 +53,15 @@ export function TvSessionModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isConnecting) return;
+
+    saveTvCredentials({
+      mode,
+      sessionId,
+      sessionIdSign,
+      cookieJson,
+      chartUrl,
+    });
+
     await onConnect({
       mode,
       sessionId,

@@ -18,6 +18,7 @@ import { motion } from 'motion/react';
 import {
   AnalysisMode,
   AnalysisStageItem,
+  resolveTopDownTimeframePair,
   SignalType,
   TradingSignalResponse,
 } from '@/lib/trading-data';
@@ -194,6 +195,10 @@ export function SignalResult({
   // 3. Empty / Ready State (Desktop companion column only; hidden on mobile)
   if (!signal) {
     const isCrtReadyMode = analysisMode === 'top_down_crt';
+    const readyPair = resolveTopDownTimeframePair(selectedTimeframe);
+    const readyMacroTf = readyPair.macroTf;
+    const readyExecTf = readyPair.executionTf;
+
     return (
       <div className="hidden lg:flex h-full flex-col justify-between rounded-2xl border border-slate-800/90 bg-[#111726]">
         <div className="p-6 sm:p-8">
@@ -207,7 +212,7 @@ export function SignalResult({
           </h2>
           <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-400">
             {isCrtReadyMode
-              ? 'Upload both the H1 Macro chart and the M5 Execution chart. H1 dictates directional bias, CRT range validity, and macro liquidity targets; M5 refines entry timing and compresses stop-loss risk. If H1 CRT is invalid, M5 signals are vetoed to HOLD.'
+              ? `Upload both the ${readyMacroTf} Macro chart and the ${readyExecTf} Execution chart. ${readyMacroTf} dictates directional bias, CRT range validity, and macro liquidity targets; ${readyExecTf} refines entry timing and compresses stop-loss risk. If ${readyMacroTf} CRT is invalid, ${readyExecTf} signals are vetoed to HOLD.`
               : 'Upload a chart screenshot to start. The AI gatekeeper verifies your chart first, streams each structural checkpoint live, and delivers a BUY, SELL, or HOLD signal with visual chart markup.'}
           </p>
 
@@ -218,7 +223,7 @@ export function SignalResult({
               className="mt-5 inline-flex min-h-[44px] items-center justify-center rounded-xl border border-slate-700/90 bg-[#0D1320] px-4 py-2 text-xs font-medium text-slate-200 transition-colors hover:border-slate-600 hover:text-white whitespace-nowrap"
             >
               {isCrtReadyMode
-                ? 'Upload H1 & M5 Charts'
+                ? `Upload ${readyMacroTf} & ${readyExecTf} Charts`
                 : 'Upload Chart Screenshot'}
             </button>
           )}
@@ -234,7 +239,7 @@ export function SignalResult({
             <div>
               <span className="font-semibold text-slate-200">
                 {isCrtReadyMode
-                  ? 'H1 Macro Dominates'
+                  ? `${readyMacroTf} Macro Dominates`
                   : 'Directional Execution'}
               </span>
               <p className="mt-0.5 text-slate-500">
@@ -246,7 +251,7 @@ export function SignalResult({
             <div>
               <span className="font-semibold text-slate-200">
                 {isCrtReadyMode
-                  ? 'M5 Execution Microscope'
+                  ? `${readyExecTf} Execution Microscope`
                   : 'Stand Aside Discipline'}
               </span>
               <p className="mt-0.5 text-slate-500">
@@ -290,31 +295,33 @@ export function SignalResult({
   const slNum = parseNumericPrice(signal.stopLoss);
   const crt = signal.analysisMode === 'top_down_crt' ? signal.crtContext : undefined;
   const isTopDownCrt = Boolean(crt);
+  const macroTfLabel = crt?.macroTimeframe || 'H1';
+  const execTfLabel = crt?.executionTimeframe || 'M5';
 
   const executionSubtitle =
     isTopDownCrt && signal.signalType === 'HOLD'
       ? !crt?.h1CrtValid || crt.h1Bias === 'NEUTRAL'
-        ? 'Stand Aside · H1 CRT Setup Invalid (Veto Active)'
-        : 'Stand Aside · Await M5 Trigger Aligned with H1'
+        ? `Stand Aside · ${macroTfLabel} CRT Setup Invalid (Veto Active)`
+        : `Stand Aside · Await ${execTfLabel} Trigger Aligned with ${macroTfLabel}`
       : isTopDownCrt
-      ? `${meta.executionHint} · H1 Bias + M5 Tight Risk`
+      ? `${meta.executionHint} · ${macroTfLabel} Bias + ${execTfLabel} Tight Risk`
       : meta.executionHint;
 
   const fullTicketLines = [
     `TRACEFX LENS SIGNAL — ${signal.detectedPair} (${signal.detectedTimeframe})`,
     ...(crt
       ? [
-          `Mode: Top-Down CRT (${crt.macroTimeframe} Dominates -> ${crt.executionTimeframe} Execution)`,
-          `H1 CRT Bias: ${crt.h1Bias} (${crt.h1CrtValid ? 'Valid CRT' : 'Invalid — Hard Veto'})`,
+          `Mode: Top-Down CRT (${macroTfLabel} Dominates -> ${execTfLabel} Execution)`,
+          `${macroTfLabel} CRT Bias: ${crt.h1Bias} (${crt.h1CrtValid ? 'Valid CRT' : 'Invalid — Hard Veto'})`,
           ...(crt.crtRangeLow || crt.crtEquilibrium || crt.crtRangeHigh
             ? [
-                `H1 CRT Range: Low ${crt.crtRangeLow || '—'} · 50% EQ ${
+                `${macroTfLabel} CRT Range: Low ${crt.crtRangeLow || '—'} · 50% EQ ${
                   crt.crtEquilibrium || '—'
                 } · High ${crt.crtRangeHigh || '—'}`,
               ]
             : []),
-          `H1 Sweep: ${crt.crtSweepStatus}`,
-          `M5 Trigger: ${crt.m5ExecutionTrigger}`,
+          `${macroTfLabel} Sweep: ${crt.crtSweepStatus}`,
+          `${execTfLabel} Trigger: ${crt.m5ExecutionTrigger}`,
           `Dominance Verdict: ${crt.alignmentVerdict}`,
         ]
       : []),
@@ -537,15 +544,17 @@ export function SignalResult({
               }
             >
               {crt.h1CrtValid
-                ? 'Valid H1 CRT Setup'
-                : 'Invalid H1 CRT · M5 Vetoed'}
+                ? `Valid ${macroTfLabel} CRT Setup`
+                : `Invalid ${macroTfLabel} CRT · ${execTfLabel} Vetoed`}
             </span>
           </div>
 
           {(crt.crtRangeLow || crt.crtEquilibrium || crt.crtRangeHigh) && (
             <div className="mt-3.5 grid grid-cols-3 divide-x divide-slate-800/80 border-y border-slate-800/70 py-2.5">
               <div className="pr-3">
-                <div className="text-[11px] text-slate-500">H1 CRT Low</div>
+                <div className="text-[11px] text-slate-500">
+                  {macroTfLabel} CRT Low
+                </div>
                 <div className="mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold text-slate-200 tabular-nums">
                   {crt.crtRangeLow || '—'}
                 </div>
@@ -557,7 +566,9 @@ export function SignalResult({
                 </div>
               </div>
               <div className="pl-3">
-                <div className="text-[11px] text-slate-500">H1 CRT High</div>
+                <div className="text-[11px] text-slate-500">
+                  {macroTfLabel} CRT High
+                </div>
                 <div className="mt-0.5 font-[family-name:var(--font-mono)] text-xs sm:text-sm font-semibold text-slate-200 tabular-nums">
                   {crt.crtRangeHigh || '—'}
                 </div>
@@ -735,7 +746,7 @@ export function SignalResult({
               {signal.signalType === 'HOLD'
                 ? 'Watch Trigger'
                 : isTopDownCrt
-                ? 'M5 Entry Price'
+                ? `${execTfLabel} Entry Price`
                 : 'Entry Price'}
             </div>
             <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-white tabular-nums">
@@ -760,7 +771,7 @@ export function SignalResult({
         <div className="flex items-center justify-between p-4 sm:p-5">
           <div>
             <div className="flex items-center gap-2 text-xs font-medium text-rose-400">
-              <span>{isTopDownCrt ? 'M5 Tight Stop' : 'Stop Loss'}</span>
+              <span>{isTopDownCrt ? `${execTfLabel} Tight Stop` : 'Stop Loss'}</span>
               {formatPctDelta(entryNum, slNum) && (
                 <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">
                   {formatPctDelta(entryNum, slNum)}
@@ -791,7 +802,7 @@ export function SignalResult({
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-xs font-semibold text-slate-300">
             {isTopDownCrt
-              ? 'H1 Macro Draw on Liquidity Targets'
+              ? `${macroTfLabel} Macro Draw on Liquidity Targets`
               : 'Take-Profit Exit Targets'}
           </h3>
           <span className="text-xs text-slate-500">Tap level to copy</span>
@@ -803,7 +814,7 @@ export function SignalResult({
               key: 'tp1',
               code: 'TP 1',
               role: isTopDownCrt
-                ? 'H1 CRT 50% Equilibrium / Internal Target'
+                ? `${macroTfLabel} CRT 50% Equilibrium / Internal Target`
                 : 'Conservative Partial Exit',
               price: signal.takeProfit1,
             },
@@ -811,7 +822,7 @@ export function SignalResult({
               key: 'tp2',
               code: 'TP 2',
               role: isTopDownCrt
-                ? 'Opposing H1 CRT Range Extreme'
+                ? `Opposing ${macroTfLabel} CRT Range Extreme`
                 : 'Primary Structural Target',
               price: signal.takeProfit2,
             },
@@ -819,7 +830,7 @@ export function SignalResult({
               key: 'tp3',
               code: 'TP 3',
               role: isTopDownCrt
-                ? 'External H1 Draw on Liquidity'
+                ? `External ${macroTfLabel} Draw on Liquidity`
                 : 'Extended Runner Objective',
               price: signal.takeProfit3,
             },

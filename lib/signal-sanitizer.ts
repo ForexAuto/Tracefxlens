@@ -47,7 +47,11 @@ export function normalizeCrtBias(raw: unknown): CrtMacroBias {
   return 'NEUTRAL';
 }
 
-export function sanitizeCrtContext(raw: unknown): CrtTopDownContext | undefined {
+export function sanitizeCrtContext(
+  raw: unknown,
+  fallbackMacroTf = 'H1',
+  fallbackExecTf = 'M5'
+): CrtTopDownContext | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
   const h1Bias = normalizeCrtBias(r.h1Bias);
@@ -57,10 +61,16 @@ export function sanitizeCrtContext(raw: unknown): CrtTopDownContext | undefined 
       : String(r.h1CrtValid || '').toLowerCase() === 'true';
 
   const h1CrtValid = rawValid && h1Bias !== 'NEUTRAL';
+  const macroTimeframe =
+    String(r.macroTimeframe || fallbackMacroTf).trim().toUpperCase() ||
+    fallbackMacroTf;
+  const executionTimeframe =
+    String(r.executionTimeframe || fallbackExecTf).trim().toUpperCase() ||
+    fallbackExecTf;
 
   return {
-    macroTimeframe: String(r.macroTimeframe || 'H1').trim() || 'H1',
-    executionTimeframe: String(r.executionTimeframe || 'M5').trim() || 'M5',
+    macroTimeframe,
+    executionTimeframe,
     h1CrtValid,
     h1Bias,
     crtRangeHigh: r.crtRangeHigh ? String(r.crtRangeHigh).trim() : undefined,
@@ -69,23 +79,23 @@ export function sanitizeCrtContext(raw: unknown): CrtTopDownContext | undefined 
     crtSweepStatus:
       String(r.crtSweepStatus || '').trim() ||
       (h1CrtValid
-        ? `Valid H1 ${h1Bias.toLowerCase()} CRT range reaction confirmed.`
-        : 'No valid H1 CRT range sweep or POI reaction present.'),
+        ? `Valid ${macroTimeframe} ${h1Bias.toLowerCase()} CRT range reaction confirmed.`
+        : `No valid ${macroTimeframe} CRT range sweep or POI reaction present.`),
     m5ExecutionTrigger:
       String(r.m5ExecutionTrigger || '').trim() ||
-      'Evaluated M5 micro displacement and invalidation swing.',
+      `Evaluated ${executionTimeframe} micro displacement and invalidation swing.`,
     alignmentVerdict:
       String(r.alignmentVerdict || '').trim() ||
       (h1CrtValid
-        ? `H1 ${h1Bias} CRT sets target draw · M5 refines entry & risk`
-        : 'Vetoed to HOLD — H1 CRT setup is invalid; M5 noise ignored'),
+        ? `${macroTimeframe} ${h1Bias} CRT sets target draw · ${executionTimeframe} refines entry & risk`
+        : `Vetoed to HOLD — ${macroTimeframe} CRT setup is invalid; ${executionTimeframe} noise ignored`),
   };
 }
 
 /**
  * Hard deterministic guardrail enforcing the institutional Top-Down CRT law:
- * 1. H1 always dominates. If H1 CRT is invalid or NEUTRAL, M5 by itself is meaningless -> HOLD.
- * 2. M5 never overrides H1 macro bias: Bullish H1 cannot emit SELL; Bearish H1 cannot emit BUY.
+ * 1. Macro HTF always dominates. If HTF CRT is invalid or NEUTRAL, LTF by itself is meaningless -> HOLD.
+ * 2. Execution LTF never overrides HTF macro bias: Bullish HTF cannot emit SELL; Bearish HTF cannot emit BUY.
  */
 export function enforceTopDownCrtDominance(
   rawSignal: SignalType,
@@ -99,10 +109,12 @@ export function enforceTopDownCrtDominance(
     return { signalType: rawSignal };
   }
 
+  const macroTf = crtContext.macroTimeframe || 'H1';
+  const execTf = crtContext.executionTimeframe || 'M5';
+
   if (!crtContext.h1CrtValid || crtContext.h1Bias === 'NEUTRAL') {
     if (rawSignal !== 'HOLD') {
-      const vetoReason =
-        'H1 CRT setup is not valid — standalone M5 signal vetoed to HOLD.';
+      const vetoReason = `${macroTf} CRT setup is not valid — standalone ${execTf} signal vetoed to HOLD.`;
       return {
         signalType: 'HOLD',
         vetoReason,
@@ -117,8 +129,7 @@ export function enforceTopDownCrtDominance(
   }
 
   if (crtContext.h1Bias === 'BULLISH' && rawSignal === 'SELL') {
-    const vetoReason =
-      'H1 CRT bias is BULLISH — counter-trend M5 bearish move cannot override H1 (forced HOLD).';
+    const vetoReason = `${macroTf} CRT bias is BULLISH — counter-trend ${execTf} bearish move cannot override ${macroTf} (forced HOLD).`;
     return {
       signalType: 'HOLD',
       vetoReason,
@@ -130,8 +141,7 @@ export function enforceTopDownCrtDominance(
   }
 
   if (crtContext.h1Bias === 'BEARISH' && rawSignal === 'BUY') {
-    const vetoReason =
-      'H1 CRT bias is BEARISH — counter-trend M5 bullish move cannot override H1 (forced HOLD).';
+    const vetoReason = `${macroTf} CRT bias is BEARISH — counter-trend ${execTf} bullish move cannot override ${macroTf} (forced HOLD).`;
     return {
       signalType: 'HOLD',
       vetoReason,

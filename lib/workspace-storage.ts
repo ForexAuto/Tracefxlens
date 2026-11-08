@@ -1,4 +1,10 @@
-import { AnalysisMode, SignalType, TradingSignalResponse } from './trading-data';
+import {
+  AnalysisMode,
+  DEFAULT_TOP_DOWN_PAIR_ID,
+  resolveTopDownTimeframePair,
+  SignalType,
+  TradingSignalResponse,
+} from './trading-data';
 
 const DB_NAME = 'tracefx_lens_persistence';
 const DB_VERSION = 2;
@@ -11,6 +17,7 @@ export interface PersistedWorkspaceState {
   selectedPair: string;
   selectedTimeframe: string;
   analysisMode?: AnalysisMode;
+  topDownPairId?: string;
   imageDataUrl: string | null;
   macroImageDataUrl?: string | null;
   signal: TradingSignalResponse | null;
@@ -23,6 +30,7 @@ interface LightweightPrefs {
   selectedPair: string;
   selectedTimeframe: string;
   analysisMode?: AnalysisMode;
+  topDownPairId?: string;
 }
 
 export function openAppDatabase(): Promise<IDBDatabase> {
@@ -74,6 +82,7 @@ export function loadLightweightPrefs(): LightweightPrefs | null {
         selectedTimeframe: String(parsed.selectedTimeframe),
         analysisMode:
           parsed.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single',
+        topDownPairId: resolveTopDownTimeframePair(parsed.topDownPairId).id,
       };
     }
     return null;
@@ -85,10 +94,15 @@ export function loadLightweightPrefs(): LightweightPrefs | null {
 export async function saveWorkspaceState(
   state: Omit<PersistedWorkspaceState, 'updatedAt'>
 ): Promise<void> {
+  const normalizedPairId = resolveTopDownTimeframePair(
+    state.topDownPairId || DEFAULT_TOP_DOWN_PAIR_ID
+  ).id;
+
   saveLightweightPrefs({
     selectedPair: state.selectedPair,
     selectedTimeframe: state.selectedTimeframe,
     analysisMode: state.analysisMode || 'single',
+    topDownPairId: normalizedPairId,
   });
 
   try {
@@ -169,6 +183,9 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
           record.analysisMode === 'top_down_crt'
             ? 'top_down_crt'
             : fallbackPrefs?.analysisMode || 'single',
+        topDownPairId: resolveTopDownTimeframePair(
+          record.topDownPairId || fallbackPrefs?.topDownPairId || DEFAULT_TOP_DOWN_PAIR_ID
+        ).id,
         imageDataUrl: record.imageDataUrl ?? null,
         macroImageDataUrl: record.macroImageDataUrl ?? null,
         signal: sanitizePersistedSignal(record.signal),
@@ -188,6 +205,9 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
             ...parsed,
             analysisMode:
               parsed.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single',
+            topDownPairId: resolveTopDownTimeframePair(
+              parsed.topDownPairId || fallbackPrefs?.topDownPairId || DEFAULT_TOP_DOWN_PAIR_ID
+            ).id,
             macroImageDataUrl: parsed.macroImageDataUrl ?? null,
             signal: sanitizePersistedSignal(parsed.signal),
           };
@@ -203,6 +223,9 @@ export async function loadWorkspaceState(): Promise<PersistedWorkspaceState | nu
       selectedPair: fallbackPrefs.selectedPair,
       selectedTimeframe: fallbackPrefs.selectedTimeframe,
       analysisMode: fallbackPrefs.analysisMode || 'single',
+      topDownPairId: resolveTopDownTimeframePair(
+        fallbackPrefs.topDownPairId || DEFAULT_TOP_DOWN_PAIR_ID
+      ).id,
       imageDataUrl: null,
       macroImageDataUrl: null,
       signal: null,

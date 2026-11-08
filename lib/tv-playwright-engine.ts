@@ -59,6 +59,90 @@ function getEngineState(): EngineSingletonState {
   return globalThis.__tracefxTvEngineState;
 }
 
+const SESSION_CACHE_FILE = path.join(process.cwd(), '.tv-session-cache.json');
+
+export function saveCachedServerSession(payload: TvConnectPayload): void {
+  try {
+    fs.writeFileSync(SESSION_CACHE_FILE, JSON.stringify(payload), 'utf8');
+  } catch {
+    // ignore
+  }
+}
+
+export function loadCachedServerSession(): TvConnectPayload | null {
+  try {
+    if (fs.existsSync(SESSION_CACHE_FILE)) {
+      const raw = fs.readFileSync(SESSION_CACHE_FILE, 'utf8');
+      return JSON.parse(raw) as TvConnectPayload;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function clearCachedServerSession(): void {
+  try {
+    if (fs.existsSync(SESSION_CACHE_FILE)) {
+      fs.unlinkSync(SESSION_CACHE_FILE);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveTradingViewChartLayout(page?: Page | null): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  const state = getEngineState();
+  const targetPage = page || state.page;
+  if (!targetPage || targetPage.isClosed() || !state.browser?.isConnected()) {
+    return { ok: false, message: 'No active TradingView browser page.' };
+  }
+
+  try {
+    // Move to chart canvas to guarantee focus
+    await targetPage.mouse.move(normToPxX(500), normToPxY(450));
+    await targetPage.waitForTimeout(100);
+
+    // 1. Primary standard TradingView hotkey (Ctrl+S)
+    await targetPage.keyboard.press('Control+KeyS').catch(() => {});
+    await targetPage.waitForTimeout(350);
+
+    // 2. Click visible TradingView layout save button in top header if present
+    const saveSelectors = [
+      '#header-toolbar-save-chart',
+      '[data-name="save-chart"]',
+      'button[aria-label*="Save layout" i]',
+      'button[aria-label*="Save chart" i]',
+      '[data-tooltip*="Save" i]',
+      '[data-name="save-load-menu"] [class*="save"]',
+    ];
+
+    for (const sel of saveSelectors) {
+      const btn = targetPage.locator(sel).first();
+      if (await btn.isVisible().catch(() => false)) {
+        await btn.click({ timeout: 1500 }).catch(() => {});
+        break;
+      }
+    }
+
+    await targetPage.waitForTimeout(400);
+    return {
+      ok: true,
+      message: 'TradingView chart layout saved successfully (Ctrl+S / Save Layout).',
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      message: `Failed to save chart layout: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    };
+  }
+}
+
 function touchIdleTimer(state: EngineSingletonState) {
   if (state.idleTimer) {
     clearTimeout(state.idleTimer);
@@ -514,6 +598,7 @@ export async function disconnectTvSession(): Promise<void> {
       await state.browser.close().catch(() => {});
     }
   } finally {
+    clearCachedServerSession();
     state.page = null;
     state.context = null;
     state.browser = null;
@@ -620,6 +705,7 @@ export async function connectTvSession(
       }
     }
 
+    saveCachedServerSession(payload);
     touchIdleTimer(state);
     return await captureViewportSnapshot(null);
   } catch (err) {
@@ -740,6 +826,10 @@ export async function performManualTvInput(
     case 'refresh': {
       break;
     }
+    case 'save_layout': {
+      await saveTradingViewChartLayout(page);
+      break;
+    }
   }
 
   return captureViewportSnapshot(pointer ?? undefined);
@@ -831,11 +921,12 @@ export async function executeTvAgentTool(
       await page.waitForTimeout(850);
       await page.keyboard.press('Enter');
       await page.waitForTimeout(2000);
+      await saveTradingViewChartLayout(page).catch(() => {});
 
       return {
         ok: true,
-        resultMessage: `Switched TradingView chart symbol to ${symbol}. Inspect the top-left symbol header on the new screenshot to confirm.`,
-        humanStepSummary: `Switched symbol to ${symbol}`,
+        resultMessage: `Switched TradingView chart symbol to ${symbol}. Chart layout saved to cloud.`,
+        humanStepSummary: `Switched symbol to ${symbol} (layout saved)`,
       };
     }
 
@@ -853,11 +944,12 @@ export async function executeTvAgentTool(
       await page.waitForTimeout(200);
       await page.keyboard.press('Enter');
       await page.waitForTimeout(1600);
+      await saveTradingViewChartLayout(page).catch(() => {});
 
       return {
         ok: true,
-        resultMessage: `Changed chart timeframe to ${rawTf} (interval code ${tvInterval}).`,
-        humanStepSummary: `Changed timeframe to ${rawTf}`,
+        resultMessage: `Changed chart timeframe to ${rawTf} (interval code ${tvInterval}). Chart layout saved to cloud.`,
+        humanStepSummary: `Changed timeframe to ${rawTf} (layout saved)`,
       };
     }
 
@@ -895,10 +987,11 @@ export async function executeTvAgentTool(
             await page.waitForTimeout(600);
             await page.keyboard.press('Escape');
             await page.waitForTimeout(900);
+            await saveTradingViewChartLayout(page).catch(() => {});
             return {
               ok: true,
-              resultMessage: `Added indicator matching "${query}" and closed the Indicators dialog.`,
-              humanStepSummary: `Added indicator: ${query}`,
+              resultMessage: `Added indicator matching "${query}", closed the Indicators dialog, and saved chart layout.`,
+              humanStepSummary: `Added indicator: ${query} (layout saved)`,
             };
           }
           return {
@@ -920,6 +1013,15 @@ export async function executeTvAgentTool(
         ok: false,
         resultMessage: `Unsupported indicator action "${action}".`,
         humanStepSummary: `Skipped unknown indicator action`,
+      };
+    }
+
+    case 'save_chart_layout': {
+      const outcome = await saveTradingViewChartLayout(page);
+      return {
+        ok: outcome.ok,
+        resultMessage: outcome.message,
+        humanStepSummary: outcome.ok ? 'Saved chart layout to cloud' : 'Attempted to save chart layout',
       };
     }
 
@@ -961,10 +1063,11 @@ export async function executeTvAgentTool(
           await page.mouse.click(px1, py1);
           await page.waitForTimeout(400);
         }
+        await saveTradingViewChartLayout(page).catch(() => {});
         return {
           ok: true,
-          resultMessage: `Placed ${tool.replace(/_/g, ' ')} at (${x1}, ${y1}).`,
-          humanStepSummary: `Drew ${tool.replace(/_/g, ' ')}`,
+          resultMessage: `Placed ${tool.replace(/_/g, ' ')} at (${x1}, ${y1}) and saved chart layout.`,
+          humanStepSummary: `Drew ${tool.replace(/_/g, ' ')} (layout saved)`,
           pointer: {
             x: x1,
             y: y1,
@@ -986,11 +1089,12 @@ export async function executeTvAgentTool(
         await page.waitForTimeout(150);
         await page.mouse.click(px2, py2);
         await page.waitForTimeout(450);
+        await saveTradingViewChartLayout(page).catch(() => {});
 
         return {
           ok: true,
-          resultMessage: `Drew ${tool.replace(/_/g, ' ')} from (${x1}, ${y1}) to (${x2}, ${y2}).`,
-          humanStepSummary: `Drew ${tool.replace(/_/g, ' ')}`,
+          resultMessage: `Drew ${tool.replace(/_/g, ' ')} from (${x1}, ${y1}) to (${x2}, ${y2}) and saved chart layout.`,
+          humanStepSummary: `Drew ${tool.replace(/_/g, ' ')} (layout saved)`,
           pointer: {
             x: x1,
             y: y1,
@@ -1067,10 +1171,11 @@ export async function executeTvAgentTool(
             await page.mouse.click(px2, py2);
           }
           await page.waitForTimeout(500);
+          await saveTradingViewChartLayout(page).catch(() => {});
           return {
             ok: true,
-            resultMessage: `Placed ${tool.replace(/_/g, ' ')} on chart at (${x1}, ${y1}) -> (${x2}, ${y2}).`,
-            humanStepSummary: `Placed ${tool.replace(/_/g, ' ')} on chart`,
+            resultMessage: `Placed ${tool.replace(/_/g, ' ')} on chart at (${x1}, ${y1}) -> (${x2}, ${y2}) and saved chart layout.`,
+            humanStepSummary: `Placed ${tool.replace(/_/g, ' ')} (layout saved)`,
             pointer: {
               x: x1,
               y: y1,

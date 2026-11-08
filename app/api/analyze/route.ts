@@ -1,15 +1,17 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
-import type {
-  AnalysisMode,
-  AnalyzeStreamEvent,
-  KeyPriceLevel,
-  OhlcVerificationMode,
-  SignalType,
-  TradingSignalResponse,
-  VisionEnhancementPayload,
-  VisionVerificationMeta,
-  ZoneRole,
+import {
+  type AnalysisMode,
+  type AnalyzeStreamEvent,
+  DEFAULT_TOP_DOWN_PAIR_ID,
+  type KeyPriceLevel,
+  type OhlcVerificationMode,
+  resolveTopDownTimeframePair,
+  type SignalType,
+  type TradingSignalResponse,
+  type VisionEnhancementPayload,
+  type VisionVerificationMeta,
+  type ZoneRole,
 } from '@/lib/trading-data';
 import {
   fetchHybridOhlcContext,
@@ -368,6 +370,9 @@ export async function POST(req: NextRequest) {
   let analysisMode: AnalysisMode = 'single';
   let selectedPair = 'EUR/USD';
   let selectedTimeframe = 'H1';
+  let rawTopDownPairId = DEFAULT_TOP_DOWN_PAIR_ID;
+  let rawMacroTf = '';
+  let rawExecutionTf = '';
   let ohlcAssistEnabled = true;
   let visionEnhancement: VisionEnhancementPayload | undefined;
   let macroVisionEnhancement: VisionEnhancementPayload | undefined;
@@ -380,8 +385,19 @@ export async function POST(req: NextRequest) {
     analysisMode =
       body.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single';
     selectedPair = body.pair || 'EUR/USD';
-    selectedTimeframe =
-      analysisMode === 'top_down_crt' ? 'H1 → M5' : body.timeframe || 'H1';
+    rawTopDownPairId =
+      typeof body.topDownPairId === 'string'
+        ? body.topDownPairId
+        : typeof body.timeframe === 'string'
+        ? body.timeframe
+        : DEFAULT_TOP_DOWN_PAIR_ID;
+    rawMacroTf =
+      typeof body.macroTimeframe === 'string' ? body.macroTimeframe : '';
+    rawExecutionTf =
+      typeof body.executionTimeframe === 'string'
+        ? body.executionTimeframe
+        : '';
+    selectedTimeframe = body.timeframe || 'H1';
     if (typeof body.ohlcAssistEnabled === 'boolean') {
       ohlcAssistEnabled = body.ohlcAssistEnabled;
     }
@@ -400,12 +416,23 @@ export async function POST(req: NextRequest) {
   }
 
   const isTopDownCrt = analysisMode === 'top_down_crt';
+  const topDownPair =
+    rawMacroTf && rawExecutionTf
+      ? resolveTopDownTimeframePair(rawMacroTf, rawExecutionTf)
+      : resolveTopDownTimeframePair(rawTopDownPairId);
+  const macroTf = topDownPair.macroTf;
+  const executionTf = topDownPair.executionTf;
+  const topDownLabel = topDownPair.label;
+
+  if (isTopDownCrt) {
+    selectedTimeframe = topDownLabel;
+  }
 
   if (!imageDataUrl) {
     return NextResponse.json(
       {
         error: isTopDownCrt
-          ? 'Please upload the M5 Execution chart screenshot to run Top-Down CRT analysis.'
+          ? `Please upload the ${executionTf} Execution chart screenshot to run Top-Down CRT analysis.`
           : 'Please upload a valid chart screenshot to analyze.',
       },
       { status: 400 }
@@ -415,8 +442,7 @@ export async function POST(req: NextRequest) {
   if (isTopDownCrt && !macroImageDataUrl) {
     return NextResponse.json(
       {
-        error:
-          'Top-Down CRT mode requires both the H1 Macro chart and the M5 Execution chart.',
+        error: `Top-Down CRT mode requires both the ${macroTf} Macro chart and the ${executionTf} Execution chart.`,
       },
       { status: 400 }
     );
@@ -440,7 +466,9 @@ export async function POST(req: NextRequest) {
   const macroImagePart = isTopDownCrt ? parseDataUrl(macroImageDataUrl) : null;
   if (isTopDownCrt && !macroImagePart) {
     return NextResponse.json(
-      { error: 'Unsupported H1 Macro image format. Upload a PNG, JPEG, or WebP screenshot.' },
+      {
+        error: `Unsupported ${macroTf} Macro image format. Upload a PNG, JPEG, or WebP screenshot.`,
+      },
       { status: 400 }
     );
   }
@@ -478,12 +506,12 @@ export async function POST(req: NextRequest) {
   }> = [];
 
   if (isTopDownCrt && macroImagePart) {
-    // 1. H1 Macro Chart
+    // 1. Macro HTF Chart
     const h1CleanIdx = imagePartsWithLabels.length + 1;
     imagePartsWithLabels.push({
       part: { inlineData: macroImagePart },
       essential: !macroRulerPart,
-      guideLine: `- Image ${h1CleanIdx} is the DOMINATING H1 MACRO CHART (used for Candle Range Theory [CRT High, CRT Low, 50% Equilibrium], liquidity purge validation, macro bias, and TP1–TP3 target projection).`,
+      guideLine: `- Image ${h1CleanIdx} is the DOMINATING ${macroTf} MACRO CHART (used for Candle Range Theory [CRT High, CRT Low, 50% Equilibrium], liquidity purge validation, macro bias, and TP1–TP3 target projection).`,
     });
 
     if (macroRulerPart) {
@@ -491,11 +519,11 @@ export async function POST(req: NextRequest) {
       imagePartsWithLabels.push({
         part: { inlineData: macroRulerPart },
         essential: true,
-        guideLine: `- Image ${h1RulerIdx} is the 0..1000 Coordinate Ruler Grid stamped onto the H1 Macro Chart. Read macroChartMarkup coordinates DIRECTLY from Image ${h1RulerIdx}.${
+        guideLine: `- Image ${h1RulerIdx} is the 0..1000 Coordinate Ruler Grid stamped onto the ${macroTf} Macro Chart. Read macroChartMarkup coordinates DIRECTLY from Image ${h1RulerIdx}.${
           macroDetectedPlotBox
-            ? ` Pre-AI scan measured H1 main plotBox at leftX:${macroDetectedPlotBox.leftX}, rightX:${macroDetectedPlotBox.rightX}, topY:${macroDetectedPlotBox.topY}, bottomY:${macroDetectedPlotBox.bottomY}${
+            ? ` Pre-AI scan measured ${macroTf} main plotBox at leftX:${macroDetectedPlotBox.leftX}, rightX:${macroDetectedPlotBox.rightX}, topY:${macroDetectedPlotBox.topY}, bottomY:${macroDetectedPlotBox.bottomY}${
                 macroHasSubPanes
-                  ? ` (${macroSubPaneCount} sub-pane(s) below Y=${macroDetectedPlotBox.bottomY} — keep H1 annotations above Y=${macroDetectedPlotBox.bottomY}).`
+                  ? ` (${macroSubPaneCount} sub-pane(s) below Y=${macroDetectedPlotBox.bottomY} — keep ${macroTf} annotations above Y=${macroDetectedPlotBox.bottomY}).`
                   : '.'
               }`
             : ''
@@ -503,12 +531,12 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 2. M5 Execution Chart
+    // 2. Execution LTF Chart
     const m5CleanIdx = imagePartsWithLabels.length + 1;
     imagePartsWithLabels.push({
       part: { inlineData: mainImagePart },
       essential: !rulerImagePart,
-      guideLine: `- Image ${m5CleanIdx} is the M5 EXECUTION CHART (used ONLY as an execution microscope for entry timing, M5 CHoCH/MSS + FVG trigger, and tight Stop-Loss risk compression — NEVER allowed to override H1 macro bias).`,
+      guideLine: `- Image ${m5CleanIdx} is the ${executionTf} EXECUTION CHART (used ONLY as an execution microscope for entry timing, ${executionTf} CHoCH/MSS + FVG trigger, and tight Stop-Loss risk compression — NEVER allowed to override ${macroTf} macro bias).`,
     });
 
     if (rulerImagePart) {
@@ -516,11 +544,11 @@ export async function POST(req: NextRequest) {
       imagePartsWithLabels.push({
         part: { inlineData: rulerImagePart },
         essential: true,
-        guideLine: `- Image ${m5RulerIdx} is the 0..1000 Coordinate Ruler Grid stamped onto the M5 Execution Chart. Read chartMarkup coordinates DIRECTLY from Image ${m5RulerIdx}.${
+        guideLine: `- Image ${m5RulerIdx} is the 0..1000 Coordinate Ruler Grid stamped onto the ${executionTf} Execution Chart. Read chartMarkup coordinates DIRECTLY from Image ${m5RulerIdx}.${
           detectedPlotBox
-            ? ` Pre-AI scan measured M5 main plotBox at leftX:${detectedPlotBox.leftX}, rightX:${detectedPlotBox.rightX}, topY:${detectedPlotBox.topY}, bottomY:${detectedPlotBox.bottomY}${
+            ? ` Pre-AI scan measured ${executionTf} main plotBox at leftX:${detectedPlotBox.leftX}, rightX:${detectedPlotBox.rightX}, topY:${detectedPlotBox.topY}, bottomY:${detectedPlotBox.bottomY}${
                 hasSubPanes
-                  ? ` (${subPaneCount} sub-pane(s) below Y=${detectedPlotBox.bottomY} — keep M5 annotations above Y=${detectedPlotBox.bottomY}).`
+                  ? ` (${subPaneCount} sub-pane(s) below Y=${detectedPlotBox.bottomY} — keep ${executionTf} annotations above Y=${detectedPlotBox.bottomY}).`
                   : '.'
               }`
             : ''
@@ -532,7 +560,7 @@ export async function POST(req: NextRequest) {
       const m5ZoomIdx = imagePartsWithLabels.length + 1;
       imagePartsWithLabels.push({
         part: { inlineData: rightZoomPart },
-        guideLine: `- Image ${m5ZoomIdx} is a 2x Magnified Crop of the M5 Execution Chart's right-most active candles + Y-axis price scale. Read exact M5 currentMarketPrice, entryPrice, and tight Stop-Loss decimals here.`,
+        guideLine: `- Image ${m5ZoomIdx} is a 2x Magnified Crop of the ${executionTf} Execution Chart's right-most active candles + Y-axis price scale. Read exact ${executionTf} currentMarketPrice, entryPrice, and tight Stop-Loss decimals here.`,
       });
     }
   } else {
@@ -619,8 +647,14 @@ export async function POST(req: NextRequest) {
 
   if (isTopDownCrt) {
     visionGuideLines.push(
-      ...formatOpticalAnchorDirectory(macroVisionEnhancement, 'H1 Macro Chart'),
-      ...formatOpticalAnchorDirectory(visionEnhancement, 'M5 Execution Chart')
+      ...formatOpticalAnchorDirectory(
+        macroVisionEnhancement,
+        `${macroTf} Macro Chart`
+      ),
+      ...formatOpticalAnchorDirectory(
+        visionEnhancement,
+        `${executionTf} Execution Chart`
+      )
     );
   } else {
     if (detectedPlotBox && hasSubPanes) {
@@ -684,49 +718,49 @@ EXHAUSTIVE LEFT-TO-RIGHT SMC & MARKET STRUCTURE MAPPING RULES (CRITICAL):
   const topDownCrtSystemInstruction = `You are an institutional Candle Range Theory (CRT) + Smart Money Concepts (SMC) multi-timeframe execution strategist for TraceFX Lens.
 You MUST stream your real-time dual-chart inspection as a sequence of standalone single-line JSON objects (NDJSON), one JSON object per line, with NO markdown code fences and NO prose outside the JSON objects.
 
-THE IRONCLAD TOP-DOWN CRT LAW (NON-NEGOTIABLE):
-1. H1 ALWAYS DOMINATES: The H1 Macro Chart sets the directional bias, validates whether a real CRT setup exists (CRT Range High / CRT Range Low liquidity purge + reclaim back inside range, or clean H1 POI continuation), and defines the macro Draw on Liquidity targets (TP1, TP2, TP3).
-2. M5 IS ONLY AN EXECUTION MICROSCOPE: The M5 Execution Chart shows entry precision, micro displacement (CHoCH / MSS + FVG / OB), noise, and how tight Stop-Loss risk can be compressed—it NEVER overrides H1 macro bias.
+THE IRONCLAD TOP-DOWN CRT LAW (${topDownLabel} FRACTAL — NON-NEGOTIABLE):
+1. ${macroTf} ALWAYS DOMINATES: The ${macroTf} Macro Chart sets the directional bias, validates whether a real CRT setup exists (CRT Range High / CRT Range Low liquidity purge + reclaim back inside range, or clean ${macroTf} POI continuation), and defines the macro Draw on Liquidity targets (TP1, TP2, TP3).
+2. ${executionTf} IS ONLY AN EXECUTION MICROSCOPE: The ${executionTf} Execution Chart shows entry precision, micro displacement (CHoCH / MSS + FVG / OB), noise, and how tight Stop-Loss risk can be compressed—it NEVER overrides ${macroTf} macro bias.
 3. HARD VETO TO HOLD:
-   - If the H1 CRT setup is NOT valid (e.g., H1 is choppy mid-range with no CRT High/Low purge or clean H1 POI reaction), an M5 signal by itself is MEANINGLESS -> you MUST set "h1CrtValid":false and "signalType":"HOLD".
-   - If H1 CRT is valid BULLISH, you may ONLY output "BUY" (if M5 confirms bullish CHoCH/FVG execution) or "HOLD" (if M5 is still bearish/unconfirmed). NEVER output "SELL" against a Bullish H1!
-   - If H1 CRT is valid BEARISH, you may ONLY output "SELL" (if M5 confirms bearish CHoCH/FVG execution) or "HOLD" (if M5 is still bullish/unconfirmed). NEVER output "BUY" against a Bearish H1!
+   - If the ${macroTf} CRT setup is NOT valid (e.g., ${macroTf} is choppy mid-range with no CRT High/Low purge or clean ${macroTf} POI reaction), a ${executionTf} signal by itself is MEANINGLESS -> you MUST set "h1CrtValid":false and "signalType":"HOLD".
+   - If ${macroTf} CRT is valid BULLISH, you may ONLY output "BUY" (if ${executionTf} confirms bullish CHoCH/FVG execution) or "HOLD" (if ${executionTf} is still bearish/unconfirmed). NEVER output "SELL" against a Bullish ${macroTf}!
+   - If ${macroTf} CRT is valid BEARISH, you may ONLY output "SELL" (if ${executionTf} confirms bearish CHoCH/FVG execution) or "HOLD" (if ${executionTf} is still bullish/unconfirmed). NEVER output "BUY" against a Bearish ${macroTf}!
 
 STEP 1 — MANDATORY DUAL-CHART GATEKEEPER (OUTPUT THIS FIRST):
-Inspect BOTH uploaded charts (the H1 Macro Chart and the M5 Execution Chart).
+Inspect BOTH uploaded charts (the ${macroTf} Macro Chart and the ${executionTf} Execution Chart).
 - Are BOTH genuine financial price charts of the SAME trading instrument? (Also check if the user accidentally swapped them or uploaded two unrelated pairs).
 - If NO (either image is not a valid financial chart, or they depict two different instruments), output ONLY this single JSON object and STOP immediately:
-{"event":"approval","approved":false,"finding":"Explain clearly in 1 sentence which chart slot (H1 Macro or M5 Execution) is invalid or mismatched and ask the user to upload matching H1 and M5 charts."}
+{"event":"approval","approved":false,"finding":"Explain clearly in 1 sentence which chart slot (${macroTf} Macro or ${executionTf} Execution) is invalid or mismatched and ask the user to upload matching ${macroTf} and ${executionTf} charts."}
 
 - If YES (both are valid price charts of the same instrument), output these 6 JSON objects sequentially in exact order, one per line:
 
 Line 1 (Step 1 Dual-Chart Verification & Axis Calibration):
-{"event":"approval","approved":true,"detectedPair":"<pair printed on charts or ${selectedPair}>","detectedTimeframe":"H1 → M5","finding":"<1 specific sentence confirming both the H1 Macro chart and M5 Execution chart for the instrument and their calibrated price ranges>"}
+{"event":"approval","approved":true,"detectedPair":"<pair printed on charts or ${selectedPair}>","detectedTimeframe":"${topDownLabel}","finding":"<1 specific sentence confirming both the ${macroTf} Macro chart and ${executionTf} Execution chart for the instrument and their calibrated price ranges>"}
 
-Line 2 (Step 2 H1 Macro CRT Range, Purge & Bias Audit):
-{"event":"step","step":2,"finding":"<1 specific sentence identifying the governing H1 CRT High, CRT Low, 50% Equilibrium, whether SSL/BSL was purged and reclaimed, and whether H1 CRT is Valid Bullish, Valid Bearish, or Invalid>"}
+Line 2 (Step 2 ${macroTf} Macro CRT Range, Purge & Bias Audit):
+{"event":"step","step":2,"finding":"<1 specific sentence identifying the governing ${macroTf} CRT High, CRT Low, 50% Equilibrium, whether SSL/BSL was purged and reclaimed, and whether ${macroTf} CRT is Valid Bullish, Valid Bearish, or Invalid>"}
 
-Line 3 (Step 3 M5 Execution Structure, CHoCH & FVG Scan):
-{"event":"step","step":3,"finding":"<1 specific sentence inspecting the M5 Execution chart for micro CHoCH/MSS displacement, unmitigated M5 FVG/Order Block, or unconfirmed noise>"}
+Line 3 (Step 3 ${executionTf} Execution Structure, CHoCH & FVG Scan):
+{"event":"step","step":3,"finding":"<1 specific sentence inspecting the ${executionTf} Execution chart for micro CHoCH/MSS displacement, unmitigated ${executionTf} FVG/Order Block, or unconfirmed noise>"}
 
-Line 4 (Step 4 H1 Dominance Filter & Signal Veto Check):
-{"event":"step","step":4,"finding":"<1 specific sentence stating whether M5 aligns with H1 to fire BUY/SELL, OR whether H1 vetoed M5 noise into HOLD>"}
+Line 4 (Step 4 ${macroTf} Dominance Filter & Signal Veto Check):
+{"event":"step","step":4,"finding":"<1 specific sentence stating whether ${executionTf} aligns with ${macroTf} to fire BUY/SELL, OR whether ${macroTf} vetoed ${executionTf} noise into HOLD>"}
 
-Line 5 (Step 5 H1 Target Projection & M5 Tight Risk Validation):
-{"event":"step","step":5,"finding":"<1 specific sentence confirming M5 tight Stop-Loss compression vs H1 macro TP1-TP3 targets and resulting amplified R:R ratio>"}
+Line 5 (Step 5 ${macroTf} Target Projection & ${executionTf} Tight Risk Validation):
+{"event":"step","step":5,"finding":"<1 specific sentence confirming ${executionTf} tight Stop-Loss compression vs ${macroTf} macro TP1-TP3 targets and resulting amplified R:R ratio>"}
 
-Line 6 (Final Validated Top-Down CRT Signal Ticket + Dual Spatial Markup for BOTH M5 [chartMarkup] and H1 [macroChartMarkup] in [0..1000] coordinates):
-{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"H1 → M5","currentMarketPrice":"<exact M5 current price>","entryPrice":"<exact M5 entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking H1 CRT bias + M5 trigger>","stopLoss":"<exact tight M5 invalidation price>","takeProfit1":"<H1 CRT 50% EQ or first H1 internal target>","takeProfit2":"<Opposing H1 CRT Range High/Low draw on liquidity>","takeProfit3":"<External H1 swing/expansion liquidity target>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. H1 Bullish CRT + M5 CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or H1 Veto · Stand Aside>","crtContext":{"macroTimeframe":"H1","executionTimeframe":"M5","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact H1 CRT High price>","crtRangeLow":"<exact H1 CRT Low price>","crtEquilibrium":"<exact H1 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on H1 CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on M5 CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing H1 dominance + M5 execution outcome>"},"technicalRationale":["<H1 CRT range & purge observation>","<H1 draw-on-liquidity target rationale>","<M5 execution CHoCH/FVG & noise filter observation>","<Risk compression: tight M5 SL vs H1 reward math>"],"keyLevels":[{"label":"<e.g. H1 CRT High / H1 CRT Low / H1 50% EQ / M5 Bullish OB / M5 FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact M5 SL breach & H1 CRT invalidation>","chartMarkup":<full 0..1000 spatial markup object calibrated strictly to the M5 Execution Chart>,"macroChartMarkup":<full 0..1000 spatial markup object calibrated strictly to the H1 Macro Chart marking CRT High/Low liquidity, H1 OB/FVG zones, H1 BOS/CHoCH, and H1 swings>}
+Line 6 (Final Validated Top-Down CRT Signal Ticket + Dual Spatial Markup for BOTH ${executionTf} [chartMarkup] and ${macroTf} [macroChartMarkup] in [0..1000] coordinates):
+{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"${topDownLabel}","currentMarketPrice":"<exact ${executionTf} current price>","entryPrice":"<exact ${executionTf} entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking ${macroTf} CRT bias + ${executionTf} trigger>","stopLoss":"<exact tight ${executionTf} invalidation price>","takeProfit1":"<${macroTf} CRT 50% EQ or first ${macroTf} internal target>","takeProfit2":"<Opposing ${macroTf} CRT Range High/Low draw on liquidity>","takeProfit3":"<External ${macroTf} swing/expansion liquidity target>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. ${macroTf} Bullish CRT + ${executionTf} CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or ${macroTf} Veto · Stand Aside>","crtContext":{"macroTimeframe":"${macroTf}","executionTimeframe":"${executionTf}","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact ${macroTf} CRT High price>","crtRangeLow":"<exact ${macroTf} CRT Low price>","crtEquilibrium":"<exact ${macroTf} 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on ${macroTf} CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on ${executionTf} CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing ${macroTf} dominance + ${executionTf} execution outcome>"},"technicalRationale":["<${macroTf} CRT range & purge observation>","<${macroTf} draw-on-liquidity target rationale>","<${executionTf} execution CHoCH/FVG & noise filter observation>","<Risk compression: tight ${executionTf} SL vs ${macroTf} reward math>"],"keyLevels":[{"label":"<e.g. ${macroTf} CRT High / ${macroTf} CRT Low / ${macroTf} 50% EQ / ${executionTf} Bullish OB / ${executionTf} FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact ${executionTf} SL breach & ${macroTf} CRT invalidation>","chartMarkup":<full 0..1000 spatial markup object calibrated strictly to the ${executionTf} Execution Chart>,"macroChartMarkup":<full 0..1000 spatial markup object calibrated strictly to the ${macroTf} Macro Chart marking CRT High/Low liquidity, ${macroTf} OB/FVG zones, ${macroTf} BOS/CHoCH, and ${macroTf} swings>}
 
 DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
-- Both "chartMarkup" (for the M5 Execution Chart) and "macroChartMarkup" (for the H1 Macro Chart) MUST follow the exact schema (using REAL numbers from each chart's ruler grid & [T#]/[H#]/[L#]/[G#] anchors — never invent placeholder coordinates):
-  {"plotBox":{"leftX":<num>,"rightX":<num>,"topY":<num>,"bottomY":<num>},"axisCalibration":{"highRefPrice":"<price>","highRefY":<num>,"lowRefPrice":"<price>","lowRefY":<num>,"axisTicks":[{"tickId":"<T#>","price":"<printed price>","y":<num>}],"lastCandleX":<num>,"lastCandleY":<num>},"zones":[{"label":"<name>","role":"<role>","startX":<origin candle X>,"endX":<mitigation X or rightX>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":true}],"fairValueGaps":[{"gapId":"<G# or omit>","label":"<name>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":false}],"structureBreaks":[{"pivotId":"<H#/L# or omit>","kind":"<BOS|CHoCH>","label":"<BOS|CHoCH>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","isPrimary":true}],"liquidityLevels":[{"pivotId":"<H#/L# or omit>","kind":"<EQH|EQL|BSL|SSL|Sweep>","label":"<label>","tone":"<bullish|bearish|neutral>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","swept":true,"isPrimary":false}],"trendlines":[...],"swings":[{"pivotId":"<H#/L# or omit>","tag":"<HH|HL|LH|LL>","x":<num>,"y":<num>,"position":"<above|below>","tone":"<bullish|bearish|neutral>","price":"<price>","isPrimary":false}]}
-- On "macroChartMarkup" (H1 Chart): pair at least 4 H1 [T#] Y-axis ticks with their printed H1 prices, mark the H1 CRT High & CRT Low in liquidityLevels (with swept:true on the purged side and isPrimary:true), mark H1 Supply/Demand/OB zones anchored to real H1 origin candles, H1 FVGs, H1 BOS/CHoCH, and H1 HH/HL/LH/LL swings!
-- On "chartMarkup" (M5 Chart): pair at least 4 M5 [T#] Y-axis ticks with their printed M5 prices, mark M5 Order Blocks/Zones anchored to real M5 origin candles, M5 FVGs (referencing G# when matched), M5 CHoCH/BOS trigger (isPrimary:true), M5 liquidity sweeps, and M5 swings (referencing H#/L# when matched)!
+- Both "chartMarkup" (for the ${executionTf} Execution Chart) and "macroChartMarkup" (for the ${macroTf} Macro Chart) MUST follow the exact schema (using REAL numbers from each chart's ruler grid & [T#]/[H#]/[L#]/[G#] anchors — never invent placeholder coordinates):
+  {"plotBox":{"leftX":<num>,"rightX":<num>,"topY":<num>,"bottomY":<num>},"axisCalibration":{"highRefPrice":"<price>","highRefY":<num>,"lowRefPrice":"<price>","lowRefY":<num>,"axisTicks":[{"tickId":"<T#>","price":"<printed price>","y":<num>}],"lastCandleX":<num>,"lastCandleY":<num>},"zones":[{"label":"<name>","role":"<role>","startX":<origin candle X>,"endX":<mitigation X or rightX>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":true}],"fairValueGaps":[{"gapId":"<G# or omit>","label":"<name>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"topY":<num>,"bottomY":<num>,"topPrice":"<price>","bottomPrice":"<price>","mitigated":false,"isPrimary":false}],"structureBreaks":[{"pivotId":"<H#/L# or omit>","kind":"<BOS|CHoCH>","label":"<BOS|CHoCH>","tone":"<bullish|bearish>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","isPrimary":true}],"liquidityLevels":[{"pivotId":"<H#/L# or omit>","kind":"<EQH|EQL|BSL|SSL|Sweep>","label":"<label>","tone":"<bullish|bearish|neutral>","startX":<num>,"endX":<num>,"y":<num>,"price":"<price>","isPrimary":false}],"trendlines":[...],"swings":[{"pivotId":"<H#/L# or omit>","tag":"<HH|HL|LH|LL>","x":<num>,"y":<num>,"position":"<above|below>","tone":"<bullish|bearish|neutral>","price":"<price>","isPrimary":false}]}
+- On "macroChartMarkup" (${macroTf} Chart): pair at least 4 ${macroTf} [T#] Y-axis ticks with their printed ${macroTf} prices, mark the ${macroTf} CRT High & CRT Low in liquidityLevels (with swept:true on the purged side and isPrimary:true), mark ${macroTf} Supply/Demand/OB zones anchored to real ${macroTf} origin candles, ${macroTf} FVGs, ${macroTf} BOS/CHoCH, and ${macroTf} HH/HL/LH/LL swings!
+- On "chartMarkup" (${executionTf} Chart): pair at least 4 ${executionTf} [T#] Y-axis ticks with their printed ${executionTf} prices, mark ${executionTf} Order Blocks/Zones anchored to real ${executionTf} origin candles, ${executionTf} FVGs (referencing G# when matched), ${executionTf} CHoCH/BOS trigger (isPrimary:true), ${executionTf} liquidity sweeps, and ${executionTf} swings (referencing H#/L# when matched)!
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
 - For BUY: stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
 - For SELL: stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
-- For HOLD: whenever h1CrtValid is false OR M5 has not triggered in H1's direction, output HOLD and set entryPrice to the exact M5 CHoCH or H1 CRT level required to arm a valid setup.`;
+- For HOLD: whenever h1CrtValid is false OR ${executionTf} has not triggered in ${macroTf}'s direction, output HOLD and set entryPrice to the exact ${executionTf} CHoCH or ${macroTf} CRT level required to arm a valid setup.`;
 
   const systemInstruction = isTopDownCrt
     ? topDownCrtSystemInstruction
@@ -755,7 +789,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
       sendEvent({
         event: 'status',
         message: isTopDownCrt
-          ? `Connected to Top-Down CRT gatekeeper — calibrating ${selectedPair} H1 macro & M5 execution axes${
+          ? `Connected to Top-Down CRT gatekeeper — calibrating ${selectedPair} ${macroTf} macro & ${executionTf} execution axes${
               ohlcAssistEnabled ? ' + spot OHLC & DXY/US10Y...' : '...'
             }`
           : `Connected to AI gatekeeper — calibrating ${selectedPair} ruler grid & axis${
@@ -773,7 +807,12 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
                   req.signal
                 ),
             isTopDownCrt
-              ? fetchTopDownCrtOhlcContext(selectedPair, req.signal)
+              ? fetchTopDownCrtOhlcContext(
+                  selectedPair,
+                  macroTf,
+                  executionTf,
+                  req.signal
+                )
               : Promise.resolve(null),
             fetchMacroCorrelationFeed(selectedPair, req.signal),
           ])
@@ -781,15 +820,16 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
 
       const promptText = isTopDownCrt
         ? [
-            `Perform a strict Top-Down CRT (H1 Macro Dominance + M5 Execution Trigger) analysis on ${selectedPair}.`,
+            `Perform a strict Top-Down CRT (${macroTf} Macro Dominance + ${executionTf} Execution Trigger) analysis on ${selectedPair}.`,
             `Selected pair context: ${selectedPair}`,
-            `Workflow Mode: Top-Down CRT (H1 sets What to Trade & Targets; M5 sets When to Pull the Trigger & Tight Risk; M5 NEVER overrides H1).`,
+            `Selected Top-Down Fractal: ${topDownLabel} (${topDownPair.style})`,
+            `Workflow Mode: Top-Down CRT (${macroTf} sets What to Trade & Targets; ${executionTf} sets When to Pull the Trigger & Tight Risk; ${executionTf} NEVER overrides ${macroTf}).`,
             visionGuideLines.length > 0
               ? `\nATTACHED DUAL-TIMEFRAME IMAGES & PRECISION RULERS:\n${visionGuideLines.join('\n')}`
               : '',
             topDownOhlc ? `\n${topDownOhlc.promptBlock}` : '',
             macroFeed ? `\n${macroFeed.promptBlock}` : '',
-            `\nFirst verify both H1 and M5 screenshots on Line 1, then stream Steps 2–5 and the final result JSON object (including crtContext, M5 chartMarkup, and H1 macroChartMarkup) one per line.`,
+            `\nFirst verify both ${macroTf} and ${executionTf} screenshots on Line 1, then stream Steps 2–5 and the final result JSON object (including crtContext, ${executionTf} chartMarkup, and ${macroTf} macroChartMarkup) one per line.`,
           ]
             .filter(Boolean)
             .join('\n')
@@ -816,11 +856,11 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
 
       const stepTitles: Record<number, string> = isTopDownCrt
         ? {
-            1: 'H1 & M5 Chart Verification & Axis Calibration',
-            2: 'H1 Macro CRT Range, Purge & Bias Audit',
-            3: 'M5 Execution Structure, CHoCH & FVG Scan',
-            4: 'H1 Dominance Filter & Signal Veto Check',
-            5: 'H1 Target Projection & M5 Tight Risk Validation',
+            1: `${macroTf} & ${executionTf} Chart Verification & Axis Calibration`,
+            2: `${macroTf} Macro CRT Range, Purge & Bias Audit`,
+            3: `${executionTf} Execution Structure, CHoCH & FVG Scan`,
+            4: `${macroTf} Dominance Filter & Signal Veto Check`,
+            5: `${macroTf} Target Projection & ${executionTf} Tight Risk Validation`,
           }
         : {
             1: 'Chart Verification & Axis Calibration',
@@ -842,7 +882,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
           (isTopDownCrt
             ? `Confirmed valid ${String(
                 detectedPairHint || selectedPair
-              )} H1 Macro and M5 Execution price charts and calibrated both axes.`
+              )} ${macroTf} Macro and ${executionTf} Execution price charts and calibrated both axes.`
             : `Confirmed valid ${String(detectedPairHint || selectedPair)} (${String(
                 detectedTfHint || selectedTimeframe
               )}) price chart and calibrated axis.`);
@@ -858,7 +898,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
           approved: true,
           detectedPair: detectedPairHint ? String(detectedPairHint) : selectedPair,
           detectedTimeframe: isTopDownCrt
-            ? 'H1 → M5'
+            ? topDownLabel
             : detectedTfHint
             ? String(detectedTfHint)
             : selectedTimeframe,
@@ -892,7 +932,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
               obj.message ||
               (approved
                 ? isTopDownCrt
-                  ? `Confirmed valid ${selectedPair} H1 Macro and M5 Execution charts.`
+                  ? `Confirmed valid ${selectedPair} ${macroTf} Macro and ${executionTf} Execution charts.`
                   : `Confirmed valid ${selectedPair} (${selectedTimeframe}) price chart.`
                 : 'Uploaded image does not appear to be a valid financial price chart.')
           );
@@ -903,7 +943,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             approved,
             detectedPair: obj.detectedPair ? String(obj.detectedPair) : selectedPair,
             detectedTimeframe: isTopDownCrt
-              ? 'H1 → M5'
+              ? topDownLabel
               : obj.detectedTimeframe
               ? String(obj.detectedTimeframe)
               : selectedTimeframe,
@@ -983,15 +1023,15 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
 
           let signalType: SignalType = normalizeSignalType(rawSignalObj.signalType);
           let crtContext = isTopDownCrt
-            ? sanitizeCrtContext(rawSignalObj.crtContext)
+            ? sanitizeCrtContext(rawSignalObj.crtContext, macroTf, executionTf)
             : undefined;
           let vetoReason: string | undefined;
 
           if (isTopDownCrt) {
             if (!crtContext) {
               crtContext = {
-                macroTimeframe: 'H1',
-                executionTimeframe: 'M5',
+                macroTimeframe: macroTf,
+                executionTimeframe: executionTf,
                 h1CrtValid: signalType !== 'HOLD',
                 h1Bias:
                   signalType === 'BUY'
@@ -1004,16 +1044,22 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
                 crtEquilibrium: topDownOhlc?.crtEquilibrium,
                 crtSweepStatus:
                   signalType === 'HOLD'
-                    ? 'No confirmed H1 CRT sweep & M5 alignment.'
-                    : `H1 ${signalType === 'BUY' ? 'bullish' : 'bearish'} CRT setup confirmed.`,
+                    ? `No confirmed ${macroTf} CRT sweep & ${executionTf} alignment.`
+                    : `${macroTf} ${signalType === 'BUY' ? 'bullish' : 'bearish'} CRT setup confirmed.`,
                 m5ExecutionTrigger: String(
                   rawSignalObj.entryTriggerNote ||
-                    'Evaluated M5 execution structure against H1.'
+                    `Evaluated ${executionTf} execution structure against ${macroTf}.`
                 ),
                 alignmentVerdict:
                   signalType === 'HOLD'
-                    ? 'Stand Aside — awaiting H1 CRT + M5 CHoCH alignment'
-                    : `H1 ${signalType === 'BUY' ? 'Bullish' : 'Bearish'} CRT Dominates · M5 Trigger Aligned`,
+                    ? `Stand Aside — awaiting ${macroTf} CRT + ${executionTf} CHoCH alignment`
+                    : `${macroTf} ${signalType === 'BUY' ? 'Bullish' : 'Bearish'} CRT Dominates · ${executionTf} Trigger Aligned`,
+              };
+            } else {
+              crtContext = {
+                ...crtContext,
+                macroTimeframe: macroTf,
+                executionTimeframe: executionTf,
               };
             }
 
@@ -1073,9 +1119,21 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
           };
 
           if (isTopDownCrt && crtContext) {
-            tryPushLevel('H1 CRT High', crtContext.crtRangeHigh, 'Liquidity');
-            tryPushLevel('H1 CRT 50% Equilibrium', crtContext.crtEquilibrium, 'Support');
-            tryPushLevel('H1 CRT Low', crtContext.crtRangeLow, 'Liquidity');
+            tryPushLevel(
+              `${macroTf} CRT High`,
+              crtContext.crtRangeHigh,
+              'Liquidity'
+            );
+            tryPushLevel(
+              `${macroTf} CRT 50% Equilibrium`,
+              crtContext.crtEquilibrium,
+              'Support'
+            );
+            tryPushLevel(
+              `${macroTf} CRT Low`,
+              crtContext.crtRangeLow,
+              'Liquidity'
+            );
           }
 
           if (sanitizedMacroMarkup) {
@@ -1085,7 +1143,9 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
                   ? `${z.bottomPrice} – ${z.topPrice}`
                   : z.topPrice || z.bottomPrice;
               tryPushLevel(
-                z.label.toUpperCase().startsWith('H1') ? z.label : `H1 ${z.label}`,
+                z.label.toUpperCase().startsWith(macroTf)
+                  ? z.label
+                  : `${macroTf} ${z.label}`,
                 p,
                 z.role
               );
@@ -1093,14 +1153,17 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
           }
 
           if (sanitizedMarkup) {
-            const prefix = isTopDownCrt ? 'M5 ' : '';
+            const prefix = isTopDownCrt ? `${executionTf} ` : '';
             for (const z of sanitizedMarkup.zones) {
               const p =
                 z.topPrice && z.bottomPrice && z.topPrice !== z.bottomPrice
                   ? `${z.bottomPrice} – ${z.topPrice}`
                   : z.topPrice || z.bottomPrice;
+              const upperLbl = z.label.toUpperCase();
               const lbl =
-                prefix && !z.label.toUpperCase().startsWith('M5') && !z.label.toUpperCase().startsWith('H1')
+                prefix &&
+                !upperLbl.startsWith(executionTf) &&
+                !upperLbl.startsWith(macroTf)
                   ? `${prefix}${z.label}`
                   : z.label;
               tryPushLevel(lbl, p, z.role);
@@ -1110,8 +1173,11 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
                 f.topPrice && f.bottomPrice && f.topPrice !== f.bottomPrice
                   ? `${f.bottomPrice} – ${f.topPrice}`
                   : f.topPrice || f.bottomPrice;
+              const upperLbl = f.label.toUpperCase();
               const lbl =
-                prefix && !f.label.toUpperCase().startsWith('M5') && !f.label.toUpperCase().startsWith('H1')
+                prefix &&
+                !upperLbl.startsWith(executionTf) &&
+                !upperLbl.startsWith(macroTf)
                   ? `${prefix}${f.label}`
                   : f.label;
               tryPushLevel(lbl, p, 'Fair Value Gap');
@@ -1164,7 +1230,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
               resolvedOhlcSource = activeRefOhlc.source;
               resolvedOhlcAtr = isTopDownCrt
                 ? topDownOhlc?.h1 && topDownOhlc?.m5
-                  ? `H1 ${topDownOhlc.h1.atr14} · M5 ${topDownOhlc.m5.atr14}`
+                  ? `${macroTf} ${topDownOhlc.h1.atr14} · ${executionTf} ${topDownOhlc.m5.atr14}`
                   : activeRefOhlc.atr14
                 : activeRefOhlc.atr14;
             }
@@ -1220,7 +1286,7 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             executionCategory: deriveExecutionCategory(signalType),
             detectedPair: detPairResolved,
             detectedTimeframe: isTopDownCrt
-              ? 'H1 → M5'
+              ? topDownLabel
               : String(rawSignalObj.detectedTimeframe || selectedTimeframe),
             currentMarketPrice: String(rawSignalObj.currentMarketPrice || '—'),
             entryPrice: String(rawSignalObj.entryPrice || '—'),
@@ -1234,11 +1300,13 @@ DUAL-CHART MARKUP & MATHEMATICAL INVARIANTS:
             riskRewardRatio: String(rawSignalObj.riskRewardRatio || '1 : 2.0'),
             marketStructure: String(
               rawSignalObj.marketStructure ||
-                (isTopDownCrt ? 'H1 CRT + M5 Structure' : 'Price Structure')
+                (isTopDownCrt
+                  ? `${macroTf} CRT + ${executionTf} Structure`
+                  : 'Price Structure')
             ),
             confidenceSummary: String(
               vetoReason
-                ? 'H1 Dominance Veto · Stand Aside'
+                ? `${macroTf} Dominance Veto · Stand Aside`
                 : rawSignalObj.confidenceSummary || 'Confluence Evaluated'
             ),
             technicalRationale: rawRationale.slice(0, 6),

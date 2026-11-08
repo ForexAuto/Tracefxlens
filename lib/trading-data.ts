@@ -13,6 +13,15 @@ export interface TimeframeOption {
   style: string;
 }
 
+export interface TopDownTimeframePair {
+  id: string;
+  macroTf: string;
+  executionTf: string;
+  label: string;
+  detail: string;
+  style: string;
+}
+
 export type SignalType = 'BUY' | 'SELL' | 'HOLD';
 
 export type AnalysisMode = 'single' | 'top_down_crt';
@@ -394,42 +403,48 @@ export type AnalyzeStreamEvent =
 export function createInitialAnalysisStages(
   pair: string,
   timeframe: string,
-  analysisMode: AnalysisMode = 'single'
+  analysisMode: AnalysisMode = 'single',
+  topDownTfs?: { macroTf: string; executionTf: string }
 ): AnalysisStageItem[] {
   if (analysisMode === 'top_down_crt') {
+    const resolvedPair = topDownTfs
+      ? resolveTopDownTimeframePair(topDownTfs.macroTf, topDownTfs.executionTf)
+      : resolveTopDownTimeframePair(timeframe);
+    const { macroTf, executionTf } = resolvedPair;
+
     return [
       {
         step: 1,
-        title: 'H1 & M5 Chart Verification & Axis Calibration',
-        waitingText: `Verifying both H1 macro and M5 execution ${pair} charts & calibrating axes...`,
+        title: `${macroTf} & ${executionTf} Chart Verification & Axis Calibration`,
+        waitingText: `Verifying both ${macroTf} macro and ${executionTf} execution ${pair} charts & calibrating axes...`,
         finding: null,
         status: 'active',
       },
       {
         step: 2,
-        title: 'H1 Macro CRT Range, Purge & Bias Audit',
-        waitingText: 'Locked until both H1 and M5 charts are approved',
+        title: `${macroTf} Macro CRT Range, Purge & Bias Audit`,
+        waitingText: `Locked until both ${macroTf} and ${executionTf} charts are approved`,
         finding: null,
         status: 'locked',
       },
       {
         step: 3,
-        title: 'M5 Execution Structure, CHoCH & FVG Scan',
-        waitingText: 'Locked until H1 CRT macro range & bias are mapped',
+        title: `${executionTf} Execution Structure, CHoCH & FVG Scan`,
+        waitingText: `Locked until ${macroTf} CRT macro range & bias are mapped`,
         finding: null,
         status: 'locked',
       },
       {
         step: 4,
-        title: 'H1 Dominance Filter & Signal Veto Check',
-        waitingText: 'Locked until M5 trigger alignment is checked against H1',
+        title: `${macroTf} Dominance Filter & Signal Veto Check`,
+        waitingText: `Locked until ${executionTf} trigger alignment is checked against ${macroTf}`,
         finding: null,
         status: 'locked',
       },
       {
         step: 5,
-        title: 'H1 Target Projection & M5 Tight Risk Validation',
-        waitingText: 'Locked until H1 dominance & M5 risk compression pass',
+        title: `${macroTf} Target Projection & ${executionTf} Tight Risk Validation`,
+        waitingText: `Locked until ${macroTf} dominance & ${executionTf} risk compression pass`,
         finding: null,
         status: 'locked',
       },
@@ -524,3 +539,130 @@ export const TIMEFRAMES: TimeframeOption[] = [
   { value: 'D1', label: 'Daily', style: 'Position' },
   { value: 'W1', label: 'Weekly', style: 'Macro' },
 ];
+
+export const TIMEFRAME_RANK: Record<string, number> = {
+  M1: 1,
+  M5: 2,
+  M15: 3,
+  M30: 4,
+  H1: 5,
+  H4: 6,
+  D1: 7,
+  W1: 8,
+};
+
+export const DEFAULT_TOP_DOWN_PAIR_ID = 'H1->M5';
+
+export const TOP_DOWN_TIMEFRAME_PAIRS: TopDownTimeframePair[] = [
+  {
+    id: 'W1->H4',
+    macroTf: 'W1',
+    executionTf: 'H4',
+    label: 'W1 → H4',
+    detail: 'Weekly → 4 Hours',
+    style: 'Macro Position',
+  },
+  {
+    id: 'D1->H1',
+    macroTf: 'D1',
+    executionTf: 'H1',
+    label: 'D1 → H1',
+    detail: 'Daily → 1 Hour',
+    style: 'Swing',
+  },
+  {
+    id: 'D1->M15',
+    macroTf: 'D1',
+    executionTf: 'M15',
+    label: 'D1 → M15',
+    detail: 'Daily → 15 Minutes',
+    style: 'Swing / Intraday',
+  },
+  {
+    id: 'H4->M15',
+    macroTf: 'H4',
+    executionTf: 'M15',
+    label: 'H4 → M15',
+    detail: '4 Hours → 15 Minutes',
+    style: 'Intraday',
+  },
+  {
+    id: 'H1->M5',
+    macroTf: 'H1',
+    executionTf: 'M5',
+    label: 'H1 → M5',
+    detail: '1 Hour → 5 Minutes',
+    style: 'Day Trade',
+  },
+  {
+    id: 'M30->M5',
+    macroTf: 'M30',
+    executionTf: 'M5',
+    label: 'M30 → M5',
+    detail: '30 Minutes → 5 Minutes',
+    style: 'Session Intraday',
+  },
+  {
+    id: 'M15->M1',
+    macroTf: 'M15',
+    executionTf: 'M1',
+    label: 'M15 → M1',
+    detail: '15 Minutes → 1 Minute',
+    style: 'Session Open Scalp',
+  },
+];
+
+export function resolveTopDownTimeframePair(
+  rawPairOrMacro?: string | null,
+  rawExecTf?: string | null
+): TopDownTimeframePair {
+  const defaultPair =
+    TOP_DOWN_TIMEFRAME_PAIRS.find((p) => p.id === DEFAULT_TOP_DOWN_PAIR_ID) ||
+    TOP_DOWN_TIMEFRAME_PAIRS[4];
+
+  let candidateMacro = '';
+  let candidateExec = '';
+
+  if (rawPairOrMacro && rawExecTf) {
+    candidateMacro = rawPairOrMacro.trim().toUpperCase();
+    candidateExec = rawExecTf.trim().toUpperCase();
+  } else if (rawPairOrMacro) {
+    const cleaned = rawPairOrMacro.trim().toUpperCase();
+    const directMatch = TOP_DOWN_TIMEFRAME_PAIRS.find(
+      (p) => p.id.toUpperCase() === cleaned || p.label.toUpperCase() === cleaned
+    );
+    if (directMatch) return directMatch;
+
+    const parts = cleaned
+      .split(/(?:->|→|\/|-|\s)+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (parts.length >= 2) {
+      candidateMacro = parts[0];
+      candidateExec = parts[1];
+    }
+  }
+
+  const macroRank = TIMEFRAME_RANK[candidateMacro];
+  const execRank = TIMEFRAME_RANK[candidateExec];
+
+  if (macroRank && execRank && macroRank > execRank) {
+    const preset = TOP_DOWN_TIMEFRAME_PAIRS.find(
+      (p) => p.macroTf === candidateMacro && p.executionTf === candidateExec
+    );
+    if (preset) return preset;
+
+    const macroOpt = TIMEFRAMES.find((t) => t.value === candidateMacro);
+    const execOpt = TIMEFRAMES.find((t) => t.value === candidateExec);
+    return {
+      id: `${candidateMacro}->${candidateExec}`,
+      macroTf: candidateMacro,
+      executionTf: candidateExec,
+      label: `${candidateMacro} → ${candidateExec}`,
+      detail: `${macroOpt?.label || candidateMacro} → ${execOpt?.label || candidateExec}`,
+      style: 'Custom Fractal',
+    };
+  }
+
+  return defaultPair;
+}

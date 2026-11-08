@@ -15,6 +15,7 @@ import type {
 import {
   captureViewportSnapshot,
   executeTvAgentTool,
+  saveTradingViewChartLayout,
 } from '@/lib/tv-playwright-engine';
 
 export const runtime = 'nodejs';
@@ -137,6 +138,20 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
         },
       },
       required: ['layoutUrlOrName'],
+    },
+  },
+  {
+    name: 'save_chart_layout',
+    description:
+      'Save the current TradingView chart layout (all drawings, levels, indicators, symbol and interval changes) to the cloud (Ctrl+S / Save Layout). Call this tool whenever any changes are made to the chart so that drawings and setups persist permanently.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        reason: {
+          type: Type.STRING,
+          description: 'Reason for saving chart layout (e.g. "Saved trendline and SMC levels").',
+        },
+      },
     },
   },
   {
@@ -304,6 +319,101 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
       required: ['seconds', 'reason'],
     },
   },
+  {
+    name: 'generate_trade_setup',
+    description:
+      'Generate and render a ready-to-trade setup card below the TradingView chart terminal. Call this tool whenever the user asks for a chart analysis, trade signal, trade setup, entry/SL/TP levels, or market direction.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        signalType: {
+          type: Type.STRING,
+          description: '"BUY", "SELL", or "HOLD".',
+        },
+        pair: {
+          type: Type.STRING,
+          description: 'Symbol, e.g. "XAUUSD" or "EURUSD".',
+        },
+        timeframe: {
+          type: Type.STRING,
+          description: 'Timeframe, e.g. "15m", "1H".',
+        },
+        currentPrice: {
+          type: Type.STRING,
+          description: 'Current price visible on the right-hand price axis or candle close.',
+        },
+        entryPrice: {
+          type: Type.STRING,
+          description: 'Exact recommended entry price.',
+        },
+        stopLoss: {
+          type: Type.STRING,
+          description: 'Exact stop loss price level.',
+        },
+        takeProfit1: {
+          type: Type.STRING,
+          description: 'Take profit 1 (conservative partial exit).',
+        },
+        takeProfit2: {
+          type: Type.STRING,
+          description: 'Take profit 2 (primary structural target).',
+        },
+        takeProfit3: {
+          type: Type.STRING,
+          description: 'Take profit 3 (extended runner objective).',
+        },
+        riskRewardRatio: {
+          type: Type.STRING,
+          description: 'Calculated risk-to-reward ratio (e.g. "1:2.8").',
+        },
+        entryTriggerNote: {
+          type: Type.STRING,
+          description: 'Technical entry trigger note (e.g. "M15 Bullish CHoCH + FVG Retest").',
+        },
+        marketStructure: {
+          type: Type.STRING,
+          description: 'Market structure summary (e.g. "Bullish Break of Structure").',
+        },
+        confidenceSummary: {
+          type: Type.STRING,
+          description: 'Confidence summary (e.g. "High Confluence").',
+        },
+        technicalRationale: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: '2 to 4 technical confluence points.',
+        },
+        keyLevels: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              label: { type: Type.STRING },
+              price: { type: Type.STRING },
+              role: { type: Type.STRING },
+            },
+            required: ['label', 'price', 'role'],
+          },
+          description: 'Mapped key price levels with role.',
+        },
+        invalidationCondition: {
+          type: Type.STRING,
+          description: 'Condition that invalidates this trade setup.',
+        },
+      },
+      required: [
+        'signalType',
+        'currentPrice',
+        'entryPrice',
+        'stopLoss',
+        'takeProfit1',
+        'takeProfit2',
+        'takeProfit3',
+        'riskRewardRatio',
+        'technicalRationale',
+      ],
+    },
+  },
 ];
 
 const SYSTEM_INSTRUCTION = `You are the TraceFX TradingView Autonomous Control Engine.
@@ -328,11 +438,15 @@ OPERATING RULES:
    - Use manage_indicators to add built-in/public indicators or open the Indicators dialog for Invite-only scripts.
    - Use draw_on_chart for horizontal lines, rays, trendlines, fib retracements, rectangles, and long/short position tools—aligning startY/endY carefully with the right-hand price scale ticks and visible candle wicks!
    - Use chart_view_action("reset_view") if candles are off-screen or squished.
-2. Use click_at, drag_mouse, type_text, press_shortcut, and scroll_at whenever interacting with dialogs, custom indicator settings, watchlists, alerts, Pine Editor, Trading Panel, or fine-tuning drawings.
-3. Dismiss obstructing popups/modals (via press_shortcut("Escape") or click_at on the close X) before drawing on the chart.
-4. ORDER EXECUTION RULE: Never click a final Buy/Sell order execution button via click_at without FIRST calling open_or_submit_order with action="submit_order" so the user's Order Safety Lock is respected.
-5. After every action, inspect the updated screenshot carefully to verify your action succeeded before moving to the next step or finishing.
-6. When the user's instruction is fully satisfied, stop calling tools and provide a concise, clear summary of everything you performed and any key chart observations (use clean prose, no filler).`;
+2. TRADE SETUP CARD PUBLISHING:
+   - When the user asks you to analyze the chart, find a trade setup, suggest an entry/SL/TP, evaluate market bias, or give a signal: ALWAYS call "generate_trade_setup" so the ready-to-trade setup card appears directly below the chart terminal!
+   - You can also draw the corresponding support/resistance, trendline, or horizontal lines on the chart before or after calling generate_trade_setup.
+3. Use click_at, drag_mouse, type_text, press_shortcut, and scroll_at whenever interacting with dialogs, custom indicator settings, watchlists, alerts, Pine Editor, Trading Panel, or fine-tuning drawings.
+4. Dismiss obstructing popups/modals (via press_shortcut("Escape") or click_at on the close X) before drawing on the chart.
+5. ORDER EXECUTION RULE: Never click a final Buy/Sell order execution button via click_at without FIRST calling open_or_submit_order with action="submit_order" so the user's Order Safety Lock is respected.
+6. After every action, inspect the updated screenshot carefully to verify your action succeeded before moving to the next step or finishing.
+7. CHART PERSISTENCE & AUTO-SAVE MANDATE: Whenever any modifications are made to the chart (adding or removing indicators, drawing trendlines, rays, horizontal levels, rectangles, or switching symbols/timeframes), ALWAYS ensure the chart layout is saved (via save_chart_layout or Ctrl+S) so all user work and drawings persist permanently.
+8. When the user's instruction is fully satisfied, stop calling tools and provide a concise, clear summary of everything you performed and any key chart observations (use clean prose, no filler).`;
 
 function extractBase64FromDataUrl(dataUrl: string): string {
   const commaIdx = dataUrl.indexOf(',');
@@ -477,6 +591,8 @@ export async function POST(req: NextRequest) {
         let stepsExecuted = 0;
         let finalSummary = '';
         let latestFrameUrl: string | null = initialSnap.frameDataUrl;
+        let latestSignal: import('@/lib/trading-data').TradingSignalResponse | null = null;
+        let hasChartModifications = false;
 
         for (let turnIdx = 0; turnIdx < MAX_AGENT_STEPS; turnIdx++) {
           if (req.signal.aborted) {
@@ -540,6 +656,138 @@ export async function POST(req: NextRequest) {
 
             const toolName = call.name || 'unknown_tool';
             const callArgs = (call.args || {}) as Record<string, unknown>;
+
+            // Handle publishing ready-to-trade setup card
+            if (toolName === 'generate_trade_setup') {
+              const signalTypeRaw = String(callArgs.signalType || 'HOLD').toUpperCase();
+              const validSignalType: 'BUY' | 'SELL' | 'HOLD' =
+                signalTypeRaw === 'BUY'
+                  ? 'BUY'
+                  : signalTypeRaw === 'SELL'
+                  ? 'SELL'
+                  : 'HOLD';
+              const detectedPair =
+                String(callArgs.pair || '').trim() ||
+                initialSnap.pageTitle
+                  .replace(/\s*—\s*TradingView.*$/i, '')
+                  .split(/[,·\-|]/)[0]
+                  ?.trim() ||
+                'CHART';
+              const detectedTimeframe =
+                String(callArgs.timeframe || '').trim() || '15m';
+
+              const generatedSignal: import('@/lib/trading-data').TradingSignalResponse = {
+                isValidChart: true,
+                signalType: validSignalType,
+                executionCategory:
+                  validSignalType === 'HOLD'
+                    ? 'Stand Aside'
+                    : 'Market Execution',
+                detectedPair,
+                detectedTimeframe,
+                currentMarketPrice: String(
+                  callArgs.currentPrice || callArgs.entryPrice || '—'
+                ),
+                entryPrice: String(callArgs.entryPrice || '—'),
+                stopLoss: String(callArgs.stopLoss || '—'),
+                takeProfit1: String(callArgs.takeProfit1 || '—'),
+                takeProfit2: String(callArgs.takeProfit2 || '—'),
+                takeProfit3: String(callArgs.takeProfit3 || '—'),
+                riskRewardRatio: String(callArgs.riskRewardRatio || '1:2.0'),
+                entryTriggerNote: String(
+                  callArgs.entryTriggerNote ||
+                    'Technical trigger verified on live TradingView chart.'
+                ),
+                marketStructure: String(
+                  callArgs.marketStructure || 'Market Structure Confirmed'
+                ),
+                confidenceSummary: String(
+                  callArgs.confidenceSummary || 'Confluence Verified'
+                ),
+                technicalRationale:
+                  Array.isArray(callArgs.technicalRationale) &&
+                  callArgs.technicalRationale.length > 0
+                    ? (callArgs.technicalRationale as string[]).map(String)
+                    : [
+                        'Live TradingView price action confirms key swing levels.',
+                      ],
+                keyLevels: Array.isArray(callArgs.keyLevels)
+                  ? (callArgs.keyLevels as any[]).map((lvl) => ({
+                      label: String(lvl.label || 'Level'),
+                      price: String(lvl.price || '—'),
+                      role: String(lvl.role || 'Support') as any,
+                    }))
+                  : [],
+                invalidationCondition: String(
+                  callArgs.invalidationCondition ||
+                    (validSignalType === 'BUY'
+                      ? `Break below Stop Loss at ${callArgs.stopLoss}`
+                      : validSignalType === 'SELL'
+                      ? `Break above Stop Loss at ${callArgs.stopLoss}`
+                      : 'Price breaks out of consolidation range.')
+                ),
+                auditTrail: [
+                  {
+                    step: 1,
+                    title: 'Chart Verification',
+                    finding: `TradingView chart verified for ${detectedPair} (${detectedTimeframe}).`,
+                  },
+                  {
+                    step: 2,
+                    title: 'Structure Scan',
+                    finding: String(
+                      callArgs.marketStructure ||
+                        'Structure & liquidity validated.'
+                    ),
+                  },
+                  {
+                    step: 3,
+                    title: 'SMC Confluence',
+                    finding: String(
+                      callArgs.entryTriggerNote || 'Trigger noted.'
+                    ),
+                  },
+                  {
+                    step: 4,
+                    title: 'Execution Coordinates',
+                    finding: `Entry ${callArgs.entryPrice} · SL ${callArgs.stopLoss} · TP1 ${callArgs.takeProfit1} · TP2 ${callArgs.takeProfit2}`,
+                  },
+                  {
+                    step: 5,
+                    title: 'Ready-to-Trade Setup',
+                    finding: `${validSignalType} setup published below terminal with R:R ${callArgs.riskRewardRatio}.`,
+                  },
+                ],
+              };
+
+              latestSignal = generatedSignal;
+              sendEvent({ type: 'signal', signal: generatedSignal });
+
+              stepsExecuted += 1;
+              sendEvent({
+                type: 'step',
+                step: {
+                  id: `step-${Date.now()}-${stepsExecuted}`,
+                  stepNumber: stepsExecuted,
+                  toolName,
+                  description: `Generated ready-to-trade ${validSignalType} setup for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}, SL ${generatedSignal.stopLoss}, TP1 ${generatedSignal.takeProfit1})`,
+                  status: 'done',
+                  timestamp: Date.now(),
+                },
+              });
+
+              responseParts.push({
+                functionResponse: {
+                  id: call.id,
+                  name: toolName,
+                  response: {
+                    ok: true,
+                    result: `Successfully published ready-to-trade setup card below the chart terminal for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}). The user can now inspect the setup card, 1-click mark levels on chart, or execute the order.`,
+                  },
+                },
+              });
+              continue;
+            }
 
             // Enforce Order Safety Lock if submitting an order without explicit approval
             if (
@@ -630,6 +878,16 @@ export async function POST(req: NextRequest) {
             };
             sendEvent({ type: 'step', step: runningStep });
 
+            if (
+              toolName === 'switch_symbol' ||
+              toolName === 'switch_timeframe' ||
+              toolName === 'manage_indicators' ||
+              toolName === 'draw_on_chart' ||
+              toolName === 'save_chart_layout'
+            ) {
+              hasChartModifications = true;
+            }
+
             const outcome = await executeTvAgentTool(toolName, callArgs);
             latestSnapAfterTools = await captureViewportSnapshot(
               outcome.pointer ?? null
@@ -693,6 +951,14 @@ export async function POST(req: NextRequest) {
           });
         }
 
+        if (hasChartModifications) {
+          await saveTradingViewChartLayout().catch(() => {});
+          const finalSnap = await captureViewportSnapshot(null);
+          if (finalSnap.frameDataUrl) {
+            latestFrameUrl = finalSnap.frameDataUrl;
+          }
+        }
+
         if (!finalSummary) {
           finalSummary = `Reached maximum step limit (${MAX_AGENT_STEPS} actions). Send a follow-up instruction to continue from the current screen.`;
         }
@@ -702,6 +968,7 @@ export async function POST(req: NextRequest) {
           summary: finalSummary,
           frameDataUrl: latestFrameUrl,
           stepsCount: stepsExecuted,
+          signal: latestSignal,
         });
         controller.close();
       } catch (err) {

@@ -132,6 +132,8 @@ export async function POST(req: NextRequest) {
   });
 
   const isTopDownCrt = draftSignal.analysisMode === 'top_down_crt';
+  const macroTf = draftSignal.crtContext?.macroTimeframe || 'H1';
+  const execTf = draftSignal.crtContext?.executionTimeframe || 'M5';
   const hasSubPanes = subPaneCount > 0;
   const opticalAnchorHint = [
     visionEnhancement?.detectedAxisTicks && visionEnhancement.detectedAxisTicks.length > 0
@@ -159,7 +161,7 @@ export async function POST(req: NextRequest) {
 
   const verifySystemInstruction = `You are a precision quantitative chart-markup visual auditor for TraceFX Lens (Pass 2 Visual Self-Check).
 You are given:
-- Image 1: The original ${isTopDownCrt ? 'M5 Execution ' : ''}chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900) plus [H#]/[L#] swing wick anchors and [G#] 3-candle FVG tags.
+- Image 1: The original ${isTopDownCrt ? `${execTf} Execution ` : ''}chart stamped with a 0..1000 Coordinate Ruler Grid (X100..X900, Y100..Y900) plus [H#]/[L#] swing wick anchors and [G#] 3-candle FVG tags.
 - Image 2: The rendered Draft 1 technical markup drawn directly onto the chart (zones, FVGs, BOS/CHoCH, swings, Entry, SL, TP1-TP3).
 ${zoomPart ? '- Image 3: A 2x magnified crop of the right-most active candles and Y-axis price scale stamped with [T1]..[Tk] and [LIVE] tick pointers.' : ''}
 ${opticalAnchorHint ? `\nOPTICAL ANCHOR DIRECTORY:\n${opticalAnchorHint}` : ''}
@@ -174,11 +176,11 @@ Inspect Image 2 against Image 1${zoomPart ? ' and Image 3' : ''} for ANY visual 
   }
 4. Stop-Loss Liquidity Trap Check: Verify Stop Loss is placed safely BEYOND the invalidation swing wick / Order Block / EQH-EQL liquidity sweep (never sitting inside an obvious unswept liquidity pool), and preserve strict ordering (BUY: SL < Entry < TP1 < TP2 < TP3; SELL: SL > Entry > TP1 > TP2 > TP3).${
     isTopDownCrt && draftSignal.crtContext
-      ? `\n5. TOP-DOWN CRT INVARIANT: H1 dominates (${
+      ? `\n5. TOP-DOWN CRT INVARIANT: ${macroTf} dominates (${
           draftSignal.crtContext.h1CrtValid
-            ? `Valid H1 ${draftSignal.crtContext.h1Bias} CRT`
-            : 'Invalid H1 CRT -> MUST remain HOLD'
-        }). NEVER flip signalType against H1 bias; keep TP1–TP3 anchored to H1 macro targets (${draftSignal.takeProfit1}, ${draftSignal.takeProfit2}, ${draftSignal.takeProfit3}) while tightening M5 Entry/SL precision.`
+            ? `Valid ${macroTf} ${draftSignal.crtContext.h1Bias} CRT`
+            : `Invalid ${macroTf} CRT -> MUST remain HOLD`
+        }). NEVER flip signalType against ${macroTf} bias; keep TP1–TP3 anchored to ${macroTf} macro targets (${draftSignal.takeProfit1}, ${draftSignal.takeProfit2}, ${draftSignal.takeProfit3}) while tightening ${execTf} Entry/SL precision.`
       : ''
   }${
     draftSignal.macroContext

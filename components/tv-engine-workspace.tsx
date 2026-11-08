@@ -15,9 +15,19 @@ import {
   Power,
   Loader2,
   Keyboard,
+  ScanLine,
+  Save,
+  Check,
 } from 'lucide-react';
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
 import { TvSessionModal } from '@/components/tv-session-modal';
+import { TvTradeSetupCard } from '@/components/tv-trade-setup-card';
+import type { TradingSignalResponse } from '@/lib/trading-data';
+import {
+  loadTvWorkspaceState,
+  saveTvWorkspaceState,
+  getTvCredentials,
+} from '@/lib/tv-storage';
 import type {
   TvAgentStep,
   TvAgentStreamEvent,
@@ -41,6 +51,7 @@ interface CommandTurn {
 }
 
 const STARTER_COMMANDS = [
+  'Analyze current chart for an institutional trade setup',
   'Switch symbol to OANDA:XAUUSD on 15m and reset chart view',
   'Open Indicators and add Moving Average Exponential and RSI',
   'Mark the main visible resistance and support swing levels with horizontal lines',
@@ -64,16 +75,33 @@ export function TvEngineWorkspace() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
 
-  const [manualMode, setManualMode] = useState(false);
+  const [manualMode, setManualMode] = useState<boolean>(
+    () => loadTvWorkspaceState()?.manualMode ?? false
+  );
   const [manualTypeText, setManualTypeText] = useState('');
   const [isManualSending, setIsManualSending] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [isRefreshingFrame, setIsRefreshingFrame] = useState(false);
 
-  const [orderLock, setOrderLock] = useState(true);
-  const [promptInput, setPromptInput] = useState('');
-  const [turns, setTurns] = useState<CommandTurn[]>([]);
+  const [orderLock, setOrderLock] = useState<boolean>(
+    () => loadTvWorkspaceState()?.orderLock ?? true
+  );
+  const [promptInput, setPromptInput] = useState<string>(
+    () => loadTvWorkspaceState()?.promptInput ?? ''
+  );
+  const [turns, setTurns] = useState<CommandTurn[]>(
+    () => loadTvWorkspaceState()?.turns ?? []
+  );
   const [isAgentRunning, setIsAgentRunning] = useState(false);
+
+  const [activeSignal, setActiveSignal] = useState<TradingSignalResponse | null>(
+    () => loadTvWorkspaceState()?.activeSignal ?? null
+  );
+  const [isAnalyzingChart, setIsAnalyzingChart] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null);
+
+  const [isSavingLayout, setIsSavingLayout] = useState(false);
+  const [layoutSaveSuccess, setLayoutSaveSuccess] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const feedEndRef = useRef<HTMLDivElement | null>(null);
@@ -82,24 +110,61 @@ export function TvEngineWorkspace() {
   const isConnected =
     session.status === 'connected_auth' || session.status === 'connected_guest';
 
-  const fetchSessionStatus = useCallback(async (refresh = false) => {
-    try {
-      const res = await fetch(
-        `/api/tv-engine/session${refresh ? '?refresh=1' : ''}`,
-        { cache: 'no-store' }
-      );
-      if (!res.ok) return;
-      const data = (await res.json()) as TvSessionInfo;
-      setSession(data);
-    } catch {
-      // ignore transient network check
-    } finally {
-      setInitialChecking(false);
-    }
-  }, []);
+  // Save workspace state whenever active state changes
+  useEffect(() => {
+    saveTvWorkspaceState({
+      activeSignal,
+      turns,
+      orderLock,
+      promptInput,
+      manualMode,
+    });
+  }, [activeSignal, turns, orderLock, promptInput, manualMode]);
+
+  // Ensure state is flushed when switching tabs or navigating away
+  useEffect(() => {
+    const handleFlush = () => {
+      saveTvWorkspaceState({
+        activeSignal,
+        turns,
+        orderLock,
+        promptInput,
+        manualMode,
+      });
+    };
+    window.addEventListener('pagehide', handleFlush);
+    window.addEventListener('beforeunload', handleFlush);
+    return () => {
+      window.removeEventListener('pagehide', handleFlush);
+      window.removeEventListener('beforeunload', handleFlush);
+    };
+  }, [activeSignal, turns, orderLock, promptInput, manualMode]);
+
+  const fetchSessionStatus = useCallback(
+    async (refresh = false, auto = false) => {
+      try {
+        const params = new URLSearchParams();
+        if (refresh) params.set('refresh', '1');
+        if (auto) params.set('auto', '1');
+        const qs = params.toString() ? `?${params.toString()}` : '';
+        const res = await fetch(`/api/tv-engine/session${qs}`, {
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as TvSessionInfo;
+        setSession(data);
+      } catch {
+        // ignore transient network check
+      } finally {
+        setInitialChecking(false);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    void fetchSessionStatus(false);
+    const hasCreds = Boolean(getTvCredentials());
+    void fetchSessionStatus(false, hasCreds);
   }, [fetchSessionStatus]);
 
   // Gentle live frame refresh when connected and idle so live candles stay current
@@ -107,7 +172,7 @@ export function TvEngineWorkspace() {
     if (!isConnected || isAgentRunning) return;
     const interval = setInterval(() => {
       if (document.visibilityState === 'visible') {
-        void fetchSessionStatus(true);
+        void fetchSessionStatus(true, false);
       }
     }, 6000);
     return () => clearInterval(interval);
@@ -236,6 +301,19 @@ export function TvEngineWorkspace() {
       setIsManualSending(false);
     }
   }, []);
+
+  const handleManualSaveLayout = async () => {
+    if (!isConnected || isSavingLayout) return;
+    setIsSavingLayout(true);
+    setLayoutSaveSuccess(false);
+    try {
+      await sendManualInput({ type: 'save_layout' });
+      setLayoutSaveSuccess(true);
+      setTimeout(() => setLayoutSaveSuccess(false), 2600);
+    } finally {
+      setIsSavingLayout(false);
+    }
+  };
 
   const computeNormCoords = (
     e: React.PointerEvent<HTMLDivElement> | React.WheelEvent<HTMLDivElement>
@@ -417,6 +495,8 @@ export function TvEngineWorkspace() {
                 return { ...t, steps: nextSteps };
               })
             );
+          } else if (event.type === 'signal') {
+            setActiveSignal(event.signal);
           } else if (event.type === 'order_approval_needed') {
             setTurns((prev) =>
               prev.map((t) =>
@@ -432,6 +512,9 @@ export function TvEngineWorkspace() {
               )
             );
           } else if (event.type === 'complete') {
+            if (event.signal) {
+              setActiveSignal(event.signal);
+            }
             if (event.frameDataUrl) {
               setSession((prev) => ({
                 ...prev,
@@ -495,6 +578,72 @@ export function TvEngineWorkspace() {
 
   const handleStopAgent = () => {
     abortControllerRef.current?.abort();
+  };
+
+  const handleAnalyzeLiveChart = async (customPrompt?: string) => {
+    if (isAnalyzingChart) return;
+    setIsAnalyzingChart(true);
+    setAnalyzeError(null);
+    try {
+      const res = await fetch('/api/tv-engine/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frameDataUrl: session.frameDataUrl,
+          customPrompt,
+        }),
+      });
+      const data = (await res.json()) as {
+        signal?: TradingSignalResponse;
+        error?: string;
+      };
+      if (!res.ok || !data.signal) {
+        throw new Error(data.error || 'Failed to analyze live TradingView chart.');
+      }
+      setActiveSignal(data.signal);
+
+      const sig = data.signal;
+      const turnId = `turn-${Date.now()}`;
+      setTurns((prev) => [
+        ...prev,
+        {
+          id: turnId,
+          prompt: customPrompt || 'Analyze Live Chart',
+          steps: [
+            {
+              id: `step-${Date.now()}-1`,
+              stepNumber: 1,
+              toolName: 'generate_trade_setup',
+              description: `Generated ready-to-trade ${sig.signalType} setup for ${sig.detectedPair} (Entry ${sig.entryPrice}, SL ${sig.stopLoss}, TP1 ${sig.takeProfit1})`,
+              status: 'done',
+              timestamp: Date.now(),
+            },
+          ],
+          summary: `Published ready-to-trade ${sig.signalType} setup card below chart terminal for ${sig.detectedPair}. Entry: ${sig.entryPrice} | Stop Loss: ${sig.stopLoss} | TP1: ${sig.takeProfit1} (R:R ${sig.riskRewardRatio}).`,
+          error: null,
+          pendingOrder: null,
+          statusMessage: null,
+          isRunning: false,
+          createdAt: Date.now(),
+        },
+      ]);
+    } catch (err) {
+      setAnalyzeError(
+        err instanceof Error ? err.message : 'Analysis could not be completed.'
+      );
+    } finally {
+      setIsAnalyzingChart(false);
+    }
+  };
+
+  const handleMarkSetupOnChart = (targetSignal: TradingSignalResponse) => {
+    const prompt = `Mark this ${targetSignal.signalType} setup on the chart: draw horizontal line at entry ${targetSignal.entryPrice}, horizontal line at stop loss ${targetSignal.stopLoss}, and horizontal line at take profit ${targetSignal.takeProfit1}.`;
+    void runAgentCommand(prompt);
+  };
+
+  const handleOpenOrderTicket = (targetSignal: TradingSignalResponse) => {
+    const prompt = `Open the TradingView Order Ticket for a ${targetSignal.signalType} order at entry ${targetSignal.entryPrice} with Stop Loss ${targetSignal.stopLoss} and Take Profit ${targetSignal.takeProfit1}.`;
+    void runAgentCommand(prompt);
   };
 
   const renderPointerOverlay = (pointer: TvPointerMarker | null) => {
@@ -594,14 +743,15 @@ export function TvEngineWorkspace() {
         </div>
 
         {/* Balanced 12-Column Stretched Workspace */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 items-stretch gap-5">
-          {/* Left 8 Columns: Live TradingView Browser Stage */}
-          <section
-            aria-label="Live TradingView Browser Viewport"
-            className="lg:col-span-8 flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] overflow-hidden"
-          >
-            {/* Stage Toolbar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 px-4 py-2.5">
+        <div className="grid grid-cols-1 lg:grid-cols-12 items-start gap-5">
+          {/* Left 8 Columns: Live TradingView Browser Stage + Setup Card Below */}
+          <div className="lg:col-span-8 flex flex-col gap-4">
+            <section
+              aria-label="Live TradingView Browser Viewport"
+              className="flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] overflow-hidden"
+            >
+              {/* Stage Toolbar */}
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 px-4 py-2.5">
               {/* Unboxed Metadata with Typographic Separators */}
               <div className="flex items-center gap-2 text-xs min-w-0">
                 <span
@@ -650,6 +800,46 @@ export function TvEngineWorkspace() {
               {/* Interactive Viewport Controls */}
               {isConnected && (
                 <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    disabled={isAgentRunning || isAnalyzingChart}
+                    onClick={() => void handleAnalyzeLiveChart()}
+                    title="Run AI vision analysis on live TradingView screen"
+                    className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/12 px-2.5 py-1 text-xs font-semibold text-sky-200 hover:bg-sky-500/22 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+                  >
+                    <ScanLine className="h-3.5 w-3.5 text-sky-400" />
+                    <span>Analyze Chart</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isAgentRunning || isSavingLayout}
+                    onClick={() => void handleManualSaveLayout()}
+                    title="Save current TradingView chart layout (Ctrl+S / Cloud Save)"
+                    className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                      layoutSaveSuccess
+                        ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                        : 'border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white'
+                    }`}
+                  >
+                    {layoutSaveSuccess ? (
+                      <>
+                        <Check className="h-3.5 w-3.5 text-emerald-400" />
+                        <span className="text-emerald-300">Layout Saved</span>
+                      </>
+                    ) : isSavingLayout ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
+                        <span>Saving...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Save className="h-3.5 w-3.5 text-slate-400" />
+                        <span>Save Layout</span>
+                      </>
+                    )}
+                  </button>
+
                   <button
                     type="button"
                     disabled={isAgentRunning}
@@ -838,11 +1028,25 @@ export function TvEngineWorkspace() {
             </div>
           </section>
 
-          {/* Right 4 Columns: AI Command & Step Feed */}
-          <section
-            aria-label="AI TradingView Operator"
-            className="lg:col-span-4 flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] min-h-[500px] lg:max-h-[calc(100vh-170px)]"
-          >
+          {/* Ready-to-Trade Setup Card Below the Chart Terminal */}
+          <TvTradeSetupCard
+            signal={activeSignal}
+            isLoading={isAnalyzingChart}
+            error={analyzeError}
+            isConnected={isConnected}
+            chartFrameUrl={session.frameDataUrl}
+            onAnalyze={handleAnalyzeLiveChart}
+            onMarkOnChart={handleMarkSetupOnChart}
+            onOpenOrderTicket={handleOpenOrderTicket}
+            onDismiss={() => setActiveSignal(null)}
+          />
+        </div>
+
+        {/* Right 4 Columns: AI Command & Step Feed */}
+        <section
+          aria-label="AI TradingView Operator"
+          className="lg:col-span-4 flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] min-h-[500px] lg:max-h-[calc(100vh-170px)]"
+        >
             {/* Panel Header */}
             <div className="flex items-center justify-between gap-2 border-b border-slate-800/80 px-4 py-2.5">
               <div className="flex items-center gap-2">

@@ -887,15 +887,20 @@ export interface TopDownCrtOhlcSummary {
 }
 
 /**
- * Fetches real-time Spot BBO + BOTH H1 and M5 OHLC in parallel within a 3.4s window.
- * Only computes numerical H1 CRT Range levels when the H1 feed is verified Spot-aligned (never from 10m-delayed GC=F futures).
+ * Fetches real-time Spot BBO + BOTH Macro HTF and Execution LTF OHLC in parallel within a 3.4s window.
+ * Only computes numerical Macro CRT Range levels when the Macro HTF feed is verified Spot-aligned (never from 10m-delayed GC=F futures).
  */
 export async function fetchTopDownCrtOhlcContext(
   pair: string,
+  macroTf = 'H1',
+  executionTf = 'M5',
   parentSignal?: AbortSignal
 ): Promise<TopDownCrtOhlcSummary | null> {
   const cleanPair = (pair || '').trim().toUpperCase();
   if (!cleanPair) return null;
+
+  const cleanMacroTf = (macroTf || 'H1').trim().toUpperCase() || 'H1';
+  const cleanExecTf = (executionTf || 'M5').trim().toUpperCase() || 'M5';
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 3400);
@@ -907,15 +912,15 @@ export async function fetchTopDownCrtOhlcContext(
 
     const [liveSpot, h1Feed, m5Feed] = await Promise.all([
       fetchSwissquoteLiveSpot(cleanPair, controller.signal),
-      fetchBestCandleFeed(cleanPair, 'H1', controller.signal),
-      fetchBestCandleFeed(cleanPair, 'M5', controller.signal),
+      fetchBestCandleFeed(cleanPair, cleanMacroTf, controller.signal),
+      fetchBestCandleFeed(cleanPair, cleanExecTf, controller.signal),
     ]);
 
     const h1Summary = h1Feed
-      ? computeHybridMathSummary(cleanPair, 'H1', h1Feed, liveSpot)
+      ? computeHybridMathSummary(cleanPair, cleanMacroTf, h1Feed, liveSpot)
       : null;
     const m5Summary = m5Feed
-      ? computeHybridMathSummary(cleanPair, 'M5', m5Feed, liveSpot)
+      ? computeHybridMathSummary(cleanPair, cleanExecTf, m5Feed, liveSpot)
       : null;
 
     if (!h1Summary && !m5Summary) return null;
@@ -931,7 +936,7 @@ export async function fetchTopDownCrtOhlcContext(
     let crtEquilibrium: string | undefined;
     let crtSweepMathNote: string | undefined;
 
-    // ONLY compute mathematical CRT candle levels when H1 feed is genuine Spot (not delayed futures!)
+    // ONLY compute mathematical CRT candle levels when Macro HTF feed is genuine Spot (not delayed futures!)
     if (
       h1Feed &&
       !h1Summary?.basisFiltered &&
@@ -970,25 +975,25 @@ export async function fetchTopDownCrtOhlcContext(
 
       const livePriceNum = liveSpot ? liveSpot.mid : developing.close;
       if (sweptLow && !sweptHigh && livePriceNum > refBar.low) {
-        crtSweepMathNote = `Bullish H1 CRT Purge detected: price swept below H1 CRT Low (${crtReferenceLow}) and reclaimed inside range (current ${fmt(
+        crtSweepMathNote = `Bullish ${cleanMacroTf} CRT Purge detected: price swept below ${cleanMacroTf} CRT Low (${crtReferenceLow}) and reclaimed inside range (current ${fmt(
           livePriceNum,
           decimals
         )}; 50% EQ at ${crtEquilibrium}, opposing CRT High target at ${crtReferenceHigh}).`;
       } else if (sweptHigh && !sweptLow && livePriceNum < refBar.high) {
-        crtSweepMathNote = `Bearish H1 CRT Purge detected: price swept above H1 CRT High (${crtReferenceHigh}) and rejected back inside range (current ${fmt(
+        crtSweepMathNote = `Bearish ${cleanMacroTf} CRT Purge detected: price swept above ${cleanMacroTf} CRT High (${crtReferenceHigh}) and rejected back inside range (current ${fmt(
           livePriceNum,
           decimals
         )}; 50% EQ at ${crtEquilibrium}, opposing CRT Low target at ${crtReferenceLow}).`;
       } else if (!sweptLow && !sweptHigh) {
-        crtSweepMathNote = `Inside H1 CRT Range (${crtReferenceLow} – ${crtReferenceHigh}, 50% EQ ${crtEquilibrium}): neither CRT High nor CRT Low has been purged yet unless reacting from an internal H1 OB/FVG.`;
+        crtSweepMathNote = `Inside ${cleanMacroTf} CRT Range (${crtReferenceLow} – ${crtReferenceHigh}, 50% EQ ${crtEquilibrium}): neither CRT High nor CRT Low has been purged yet unless reacting from an internal ${cleanMacroTf} OB/FVG.`;
       } else {
-        crtSweepMathNote = `Active H1 Reference Range: Low ${crtReferenceLow} · 50% EQ ${crtEquilibrium} · High ${crtReferenceHigh}.`;
+        crtSweepMathNote = `Active ${cleanMacroTf} Reference Range: Low ${crtReferenceLow} · 50% EQ ${crtEquilibrium} · High ${crtReferenceHigh}.`;
       }
     }
 
     if (isAnyBasisFiltered) {
       const filteredLines: string[] = [
-        `TOP-DOWN VERIFIED SPOT & ATR VOLATILITY TELEMETRY (${cleanPair}):`,
+        `TOP-DOWN VERIFIED SPOT & ATR VOLATILITY TELEMETRY (${cleanPair} · ${cleanMacroTf} → ${cleanExecTf}):`,
         liveSpot
           ? `- Real-Time Institutional Spot Quote (${liveSpot.source}, ${liveSpot.ageSeconds}s old): Mid ${fmt(
               liveSpot.mid,
@@ -999,15 +1004,15 @@ export async function fetchTopDownCrtOhlcContext(
             )})`
           : `- Direct Spot BBO unavailable for ${cleanPair}; delayed futures absolute prices were filtered out.`,
         h1Summary
-          ? `- H1 Macro 14-Period ATR Width: ${h1Summary.atr14}`
+          ? `- ${cleanMacroTf} Macro 14-Period ATR Width: ${h1Summary.atr14}`
           : '',
         m5Summary
-          ? `- M5 Execution 14-Period ATR Width: ${m5Summary.atr14} (Tight M5 SL buffer >= 0.5x M5 ATR = ${fmt(
+          ? `- ${cleanExecTf} Execution 14-Period ATR Width: ${m5Summary.atr14} (Tight ${cleanExecTf} SL buffer >= 0.5x ${cleanExecTf} ATR = ${fmt(
               m5Summary.atr14Numeric * 0.5,
               decimals
             )})`
           : '',
-        `CRITICAL SPOT-AXIS RULE: Delayed futures candle prices were intentionally stripped to prevent futures-to-spot basis drift. Read ALL H1 CRT High, CRT Low, 50% Equilibrium, M5 CHoCH/FVG, Entry, Stop-Loss, and TP1–TP3 prices STRICTLY from the uploaded H1 and M5 screenshots' printed Y-axes! Use the H1 and M5 ATR widths solely to validate stop-loss risk compression.`,
+        `CRITICAL SPOT-AXIS RULE: Delayed futures candle prices were intentionally stripped to prevent futures-to-spot basis drift. Read ALL ${cleanMacroTf} CRT High, CRT Low, 50% Equilibrium, ${cleanExecTf} CHoCH/FVG, Entry, Stop-Loss, and TP1–TP3 prices STRICTLY from the uploaded ${cleanMacroTf} and ${cleanExecTf} screenshots' printed Y-axes! Use the ${cleanMacroTf} and ${cleanExecTf} ATR widths solely to validate stop-loss risk compression.`,
       ];
 
       return {
@@ -1019,7 +1024,7 @@ export async function fetchTopDownCrtOhlcContext(
     }
 
     const lines: string[] = [
-      `TOP-DOWN DUAL-TIMEFRAME VERIFIED LIVE SPOT OHLC FEED (${cleanPair}):`,
+      `TOP-DOWN DUAL-TIMEFRAME VERIFIED LIVE SPOT OHLC FEED (${cleanPair} · ${cleanMacroTf} → ${cleanExecTf}):`,
       liveSpot
         ? `- Real-Time Institutional Spot Quote (${liveSpot.source}, ${liveSpot.ageSeconds}s old): ${fmt(
             liveSpot.mid,
@@ -1033,51 +1038,51 @@ export async function fetchTopDownCrtOhlcContext(
 
     if (h1Summary) {
       lines.push(
-        `[1] DOMINATING H1 MACRO FEED (${h1Summary.source}):`,
-        `- H1 Latest Spot Close: ${h1Summary.latestClose} | H1 14-ATR: ${h1Summary.atr14}`,
+        `[1] DOMINATING ${cleanMacroTf} MACRO FEED (${h1Summary.source}):`,
+        `- ${cleanMacroTf} Latest Spot Close: ${h1Summary.latestClose} | ${cleanMacroTf} 14-ATR: ${h1Summary.atr14}`,
         crtReferenceHigh && crtReferenceLow
-          ? `- Dominant H1 CRT Candle Range: Low ${crtReferenceLow} | 50% Equilibrium ${crtEquilibrium} | High ${crtReferenceHigh}`
+          ? `- Dominant ${cleanMacroTf} CRT Candle Range: Low ${crtReferenceLow} | 50% Equilibrium ${crtEquilibrium} | High ${crtReferenceHigh}`
           : '',
-        crtSweepMathNote ? `- H1 CRT Sweep Telemetry: ${crtSweepMathNote}` : '',
+        crtSweepMathNote ? `- ${cleanMacroTf} CRT Sweep Telemetry: ${crtSweepMathNote}` : '',
         h1Summary.swingHighs.length > 0
-          ? `- H1 Swing Highs (Macro Liquidity Targets): ${h1Summary.swingHighs.join(', ')}`
+          ? `- ${cleanMacroTf} Swing Highs (Macro Liquidity Targets): ${h1Summary.swingHighs.join(', ')}`
           : '',
         h1Summary.swingLows.length > 0
-          ? `- H1 Swing Lows (Macro Liquidity Targets): ${h1Summary.swingLows.join(', ')}`
+          ? `- ${cleanMacroTf} Swing Lows (Macro Liquidity Targets): ${h1Summary.swingLows.join(', ')}`
           : '',
         h1Summary.unmitigatedBullishFvgs.length > 0
-          ? `- H1 Unmitigated Bullish FVGs: ${h1Summary.unmitigatedBullishFvgs.join(', ')}`
+          ? `- ${cleanMacroTf} Unmitigated Bullish FVGs: ${h1Summary.unmitigatedBullishFvgs.join(', ')}`
           : '',
         h1Summary.unmitigatedBearishFvgs.length > 0
-          ? `- H1 Unmitigated Bearish FVGs: ${h1Summary.unmitigatedBearishFvgs.join(', ')}`
+          ? `- ${cleanMacroTf} Unmitigated Bearish FVGs: ${h1Summary.unmitigatedBearishFvgs.join(', ')}`
           : ''
       );
     }
 
     if (m5Summary) {
       lines.push(
-        `[2] M5 EXECUTION MICROSCOPE FEED (${m5Summary.source}):`,
-        `- M5 Latest Spot Close: ${m5Summary.latestClose} | M5 14-ATR: ${m5Summary.atr14} (Tight M5 SL buffer >= 0.5x M5 ATR = ${fmt(
+        `[2] ${cleanExecTf} EXECUTION MICROSCOPE FEED (${m5Summary.source}):`,
+        `- ${cleanExecTf} Latest Spot Close: ${m5Summary.latestClose} | ${cleanExecTf} 14-ATR: ${m5Summary.atr14} (Tight ${cleanExecTf} SL buffer >= 0.5x ${cleanExecTf} ATR = ${fmt(
           m5Summary.atr14Numeric * 0.5,
           decimals
         )})`,
         m5Summary.swingHighs.length > 0
-          ? `- M5 Micro Swing Highs: ${m5Summary.swingHighs.join(', ')}`
+          ? `- ${cleanExecTf} Micro Swing Highs: ${m5Summary.swingHighs.join(', ')}`
           : '',
         m5Summary.swingLows.length > 0
-          ? `- M5 Micro Swing Lows: ${m5Summary.swingLows.join(', ')}`
+          ? `- ${cleanExecTf} Micro Swing Lows: ${m5Summary.swingLows.join(', ')}`
           : '',
         m5Summary.unmitigatedBullishFvgs.length > 0
-          ? `- M5 Unmitigated Bullish FVGs: ${m5Summary.unmitigatedBullishFvgs.join(', ')}`
+          ? `- ${cleanExecTf} Unmitigated Bullish FVGs: ${m5Summary.unmitigatedBullishFvgs.join(', ')}`
           : '',
         m5Summary.unmitigatedBearishFvgs.length > 0
-          ? `- M5 Unmitigated Bearish FVGs: ${m5Summary.unmitigatedBearishFvgs.join(', ')}`
+          ? `- ${cleanExecTf} Unmitigated Bearish FVGs: ${m5Summary.unmitigatedBearishFvgs.join(', ')}`
           : ''
       );
     }
 
     lines.push(
-      `CRITICAL LIVE vs HISTORICAL GUARD: Compare the uploaded H1 and M5 screenshots' printed Y-axis scales against this live Spot price (${
+      `CRITICAL LIVE vs HISTORICAL GUARD: Compare the uploaded ${cleanMacroTf} and ${cleanExecTf} screenshots' printed Y-axis scales against this live Spot price (${
         m5Summary?.latestClose || h1Summary?.latestClose || ''
       }). ONLY use these exact live OHLC numbers if the screenshots depict ${cleanPair} in this exact price regime (within ~1.5%); if the user uploaded historical backtest charts, ALWAYS trust the screenshots' printed Y-axis numbers!`
     );

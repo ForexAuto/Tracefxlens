@@ -4,6 +4,7 @@ import {
   connectTvSession,
   disconnectTvSession,
   getTvSessionInfo,
+  loadCachedServerSession,
 } from '@/lib/tv-playwright-engine';
 
 export const runtime = 'nodejs';
@@ -12,7 +13,19 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const refresh = req.nextUrl.searchParams.get('refresh') === '1';
-    const info = await getTvSessionInfo(refresh);
+    const auto = req.nextUrl.searchParams.get('auto') === '1';
+
+    let info = await getTvSessionInfo(refresh);
+    if (info.status === 'disconnected' && auto) {
+      const cached = loadCachedServerSession();
+      if (cached) {
+        try {
+          info = await connectTvSession(cached);
+        } catch {
+          // Fall back to disconnected if auto-reconnect fails
+        }
+      }
+    }
     return NextResponse.json(info);
   } catch (err) {
     const message =

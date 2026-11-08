@@ -10,7 +10,10 @@ import {
   ArrowLeftRight,
 } from 'lucide-react';
 import { PairSelector } from '@/components/pair-selector';
-import { TimeframeSelector } from '@/components/timeframe-selector';
+import {
+  TimeframeSelector,
+  TopDownTimeframeSelector,
+} from '@/components/timeframe-selector';
 import { ChartUploader } from '@/components/chart-uploader';
 import { SignalResult } from '@/components/signal-result';
 import { StopConfirmDialog } from '@/components/stop-confirm-dialog';
@@ -21,7 +24,9 @@ import {
   AnalysisStageItem,
   AnalyzeStreamEvent,
   createInitialAnalysisStages,
+  DEFAULT_TOP_DOWN_PAIR_ID,
   MARKET_PAIRS,
+  resolveTopDownTimeframePair,
   TradingSignalResponse,
 } from '@/lib/trading-data';
 import {
@@ -43,6 +48,9 @@ const OHLC_ASSIST_PREF_KEY = 'tracefx_ohlc_assist_v1';
 export function AnalyzeWorkspace() {
   const [selectedPair, setSelectedPair] = useState<string>('XAU/USD');
   const [selectedTimeframe, setSelectedTimeframe] = useState<string>('H1');
+  const [topDownPairId, setTopDownPairId] = useState<string>(
+    DEFAULT_TOP_DOWN_PAIR_ID
+  );
   const [analysisMode, setAnalysisMode] = useState<AnalysisMode>('single');
   const [macroImageDataUrl, setMacroImageDataUrl] = useState<string | null>(null);
   const [imageDataUrl, setImageDataUrl] = useState<string | null>(null);
@@ -62,6 +70,14 @@ export function AnalyzeWorkspace() {
   const [selfCheckEnabled, setSelfCheckEnabled] = useState<boolean>(true);
   const [ohlcAssistEnabled, setOhlcAssistEnabled] = useState<boolean>(true);
 
+  const activeTopDownPair = useMemo(
+    () => resolveTopDownTimeframePair(topDownPairId),
+    [topDownPairId]
+  );
+  const macroTf = activeTopDownPair.macroTf;
+  const executionTf = activeTopDownPair.executionTf;
+  const topDownLabel = activeTopDownPair.label;
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const selfCheckEnabledRef = useRef<boolean>(true);
@@ -69,6 +85,7 @@ export function AnalyzeWorkspace() {
   const latestStateRef = useRef({
     selectedPair: 'XAU/USD',
     selectedTimeframe: 'H1',
+    topDownPairId: DEFAULT_TOP_DOWN_PAIR_ID,
     analysisMode: 'single' as AnalysisMode,
     imageDataUrl: null as string | null,
     macroImageDataUrl: null as string | null,
@@ -81,6 +98,7 @@ export function AnalyzeWorkspace() {
     latestStateRef.current = {
       selectedPair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode,
       imageDataUrl,
       macroImageDataUrl,
@@ -91,6 +109,7 @@ export function AnalyzeWorkspace() {
   }, [
     selectedPair,
     selectedTimeframe,
+    topDownPairId,
     analysisMode,
     imageDataUrl,
     macroImageDataUrl,
@@ -128,6 +147,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair: current.selectedPair,
       selectedTimeframe: current.selectedTimeframe,
+      topDownPairId: current.topDownPairId,
       analysisMode: current.analysisMode,
       imageDataUrl: current.imageDataUrl,
       macroImageDataUrl: current.macroImageDataUrl,
@@ -143,7 +163,8 @@ export function AnalyzeWorkspace() {
       pair: string,
       timeframe: string,
       mode: AnalysisMode = 'single',
-      macroChartUrl: string | null = null
+      macroChartUrl: string | null = null,
+      crtPairId: string = DEFAULT_TOP_DOWN_PAIR_ID
     ) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -152,7 +173,10 @@ export function AnalyzeWorkspace() {
       abortControllerRef.current = controller;
 
       const isCrtMode = mode === 'top_down_crt';
-      const effectiveTimeframe = isCrtMode ? 'H1 → M5' : timeframe;
+      const crtPair = resolveTopDownTimeframePair(crtPairId);
+      const crtMacroTf = crtPair.macroTf;
+      const crtExecTf = crtPair.executionTf;
+      const effectiveTimeframe = isCrtMode ? crtPair.label : timeframe;
 
       setIsAnalyzing(true);
       setIsCompletingScan(false);
@@ -161,11 +185,17 @@ export function AnalyzeWorkspace() {
       setIsStopped(false);
       setError(null);
       setProgressPct(0);
-      setStages(createInitialAnalysisStages(pair, effectiveTimeframe, mode));
+      setStages(
+        createInitialAnalysisStages(pair, effectiveTimeframe, mode, {
+          macroTf: crtMacroTf,
+          executionTf: crtExecTf,
+        })
+      );
 
       await saveWorkspaceState({
         selectedPair: pair,
         selectedTimeframe: timeframe,
+        topDownPairId: crtPair.id,
         analysisMode: mode,
         imageDataUrl: chartUrl,
         macroImageDataUrl: macroChartUrl,
@@ -184,7 +214,7 @@ export function AnalyzeWorkspace() {
               ? {
                   ...item,
                   waitingText: isCrtMode
-                    ? 'Calibrating H1 Macro & M5 Execution 0..1000 ruler grids & 2× price-axis crops...'
+                    ? `Calibrating ${crtMacroTf} Macro & ${crtExecTf} Execution 0..1000 ruler grids & 2× price-axis crops...`
                     : 'Calibrating 0..1000 coordinate ruler grid, sub-panes & 2× price-axis crop...',
                 }
               : item
@@ -204,6 +234,9 @@ export function AnalyzeWorkspace() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             analysisMode: mode,
+            topDownPairId: isCrtMode ? crtPair.id : undefined,
+            macroTimeframe: isCrtMode ? crtMacroTf : undefined,
+            executionTimeframe: isCrtMode ? crtExecTf : undefined,
             imageDataUrl: chartUrl,
             macroImageDataUrl: isCrtMode ? macroChartUrl : undefined,
             pair,
@@ -276,7 +309,7 @@ export function AnalyzeWorkspace() {
                     ...item,
                     status: 'active',
                     waitingText: isCrtMode
-                      ? 'Auditing H1 CRT range, liquidity purge & macro directional bias...'
+                      ? `Auditing ${crtMacroTf} CRT range, liquidity purge & macro directional bias...`
                       : `Streaming ${
                           evt.detectedTimeframe || timeframe
                         } swing structure from model...`,
@@ -415,6 +448,7 @@ export function AnalyzeWorkspace() {
           await saveWorkspaceState({
             selectedPair: pair,
             selectedTimeframe: timeframe,
+            topDownPairId: crtPair.id,
             analysisMode: mode,
             imageDataUrl: chartUrl,
             macroImageDataUrl: macroChartUrl,
@@ -443,7 +477,7 @@ export function AnalyzeWorkspace() {
                         ...item,
                         status: 'active',
                         waitingText: isCrtMode
-                          ? 'Pass 2 Self-Check: auditing M5 tight risk & H1 dominance lock on canvas...'
+                          ? `Pass 2 Self-Check: auditing ${crtExecTf} tight risk & ${crtMacroTf} dominance lock on canvas...`
                           : 'Pass 2 Self-Check: inspecting drawn zones, wicks & stop-loss placement on canvas...',
                       }
                     : item
@@ -520,6 +554,7 @@ export function AnalyzeWorkspace() {
           await saveWorkspaceState({
             selectedPair: pair,
             selectedTimeframe: timeframe,
+            topDownPairId: crtPair.id,
             analysisMode: mode,
             imageDataUrl: chartUrl,
             macroImageDataUrl: macroChartUrl,
@@ -569,6 +604,7 @@ export function AnalyzeWorkspace() {
         await saveWorkspaceState({
           selectedPair: pair,
           selectedTimeframe: timeframe,
+          topDownPairId: crtPair.id,
           analysisMode: mode,
           imageDataUrl: chartUrl,
           macroImageDataUrl: macroChartUrl,
@@ -627,6 +663,14 @@ export function AnalyzeWorkspace() {
           const persistedMode: AnalysisMode =
             persisted.analysisMode === 'top_down_crt' ? 'top_down_crt' : 'single';
           const persistedMacro = persisted.macroImageDataUrl ?? null;
+          const persistedTopDownPair = persisted.topDownPairId
+            ? resolveTopDownTimeframePair(persisted.topDownPairId)
+            : persisted.signal?.crtContext
+            ? resolveTopDownTimeframePair(
+                persisted.signal.crtContext.macroTimeframe,
+                persisted.signal.crtContext.executionTimeframe
+              )
+            : resolveTopDownTimeframePair(DEFAULT_TOP_DOWN_PAIR_ID);
           const nextPair =
             queryPairOverride && !persisted.wasAnalyzing
               ? queryPairOverride
@@ -635,6 +679,7 @@ export function AnalyzeWorkspace() {
 
           setSelectedPair(nextPair);
           setSelectedTimeframe(persisted.selectedTimeframe);
+          setTopDownPairId(persistedTopDownPair.id);
           setAnalysisMode(persistedMode);
           setMacroImageDataUrl(pairSwitchedViaUrl ? null : persistedMacro);
           setImageDataUrl(pairSwitchedViaUrl ? null : persisted.imageDataUrl);
@@ -676,9 +721,13 @@ export function AnalyzeWorkspace() {
                 createInitialAnalysisStages(
                   persisted.selectedPair,
                   persistedMode === 'top_down_crt'
-                    ? 'H1 → M5'
+                    ? persistedTopDownPair.label
                     : persisted.selectedTimeframe,
-                  persistedMode
+                  persistedMode,
+                  {
+                    macroTf: persistedTopDownPair.macroTf,
+                    executionTf: persistedTopDownPair.executionTf,
+                  }
                 ).map((item) =>
                   item.step === 1
                     ? {
@@ -690,6 +739,18 @@ export function AnalyzeWorkspace() {
                 )
               );
             }
+          } else if (persistedMode === 'top_down_crt') {
+            setStages(
+              createInitialAnalysisStages(
+                nextPair,
+                persistedTopDownPair.label,
+                'top_down_crt',
+                {
+                  macroTf: persistedTopDownPair.macroTf,
+                  executionTf: persistedTopDownPair.executionTf,
+                }
+              )
+            );
           }
 
           if (persisted.wasAnalyzing && persisted.imageDataUrl && !persisted.signal) {
@@ -705,7 +766,8 @@ export function AnalyzeWorkspace() {
                 persisted.selectedPair,
                 persisted.selectedTimeframe,
                 persistedMode,
-                persistedMacro
+                persistedMacro,
+                persistedTopDownPair.id
               );
               return;
             }
@@ -713,6 +775,7 @@ export function AnalyzeWorkspace() {
             void saveWorkspaceState({
               selectedPair: persisted.selectedPair,
               selectedTimeframe: persisted.selectedTimeframe,
+              topDownPairId: persistedTopDownPair.id,
               analysisMode: persistedMode,
               imageDataUrl: persisted.imageDataUrl,
               macroImageDataUrl: persistedMacro,
@@ -766,17 +829,18 @@ export function AnalyzeWorkspace() {
   const isBusy = isAnalyzing || isCompletingScan;
   const isTopDownCrt = analysisMode === 'top_down_crt';
 
-  // Memoize H1 macro signal projection so ChartUploader's reference check preserves layer filter toggles
+  // Memoize Macro HTF signal projection so ChartUploader's reference check preserves layer filter toggles
   const h1MacroSignalView = useMemo<TradingSignalResponse | null>(() => {
     if (!signal || !signal.isValidChart || !signal.macroChartMarkup) {
       return null;
     }
+    const resolvedMacroLabel = signal.crtContext?.macroTimeframe || macroTf;
     return {
       ...signal,
-      detectedTimeframe: 'H1 Macro · CRT',
+      detectedTimeframe: `${resolvedMacroLabel} Macro · CRT`,
       chartMarkup: signal.macroChartMarkup,
     };
-  }, [signal]);
+  }, [signal, macroTf]);
 
   const displayedImageDataUrl = isTopDownCrt
     ? activeCrtSlot === 'h1'
@@ -792,8 +856,8 @@ export function AnalyzeWorkspace() {
 
   const displayedTimeframe = isTopDownCrt
     ? activeCrtSlot === 'h1'
-      ? 'H1'
-      : 'M5'
+      ? macroTf
+      : executionTf
     : selectedTimeframe;
 
   const hasAnyUploadedChart = isTopDownCrt
@@ -824,16 +888,31 @@ export function AnalyzeWorkspace() {
     let nextSingleOrM5 = imageDataUrl;
 
     if (nextMode === 'top_down_crt') {
-      // Smart carry-over: if user already uploaded an H1 chart in Single mode, place it in Slot 1 (H1 Macro)
-      if (!nextMacro && nextSingleOrM5 && selectedTimeframe === 'H1') {
+      // Smart carry-over: if user already uploaded a chart matching Macro HTF in Single mode, place it in Slot 1
+      if (!nextMacro && nextSingleOrM5 && selectedTimeframe === macroTf) {
         nextMacro = nextSingleOrM5;
         nextSingleOrM5 = null;
+        setActiveCrtSlot('m5');
+      } else if (
+        !nextMacro &&
+        nextSingleOrM5 &&
+        selectedTimeframe === executionTf
+      ) {
+        // Keep matching Execution LTF chart in Slot 2 and focus Slot 1 for Macro HTF upload
+        setActiveCrtSlot('h1');
+      } else {
+        setActiveCrtSlot(!nextMacro ? 'h1' : 'm5');
       }
-      setActiveCrtSlot(!nextMacro ? 'h1' : 'm5');
     }
 
     const compatibleSignal =
-      signal && (signal.analysisMode || 'single') === nextMode ? signal : null;
+      signal &&
+      (signal.analysisMode || 'single') === nextMode &&
+      (nextMode !== 'top_down_crt' ||
+        (signal.crtContext?.macroTimeframe === macroTf &&
+          signal.crtContext?.executionTimeframe === executionTf))
+        ? signal
+        : null;
 
     setAnalysisMode(nextMode);
     setMacroImageDataUrl(nextMacro);
@@ -846,17 +925,58 @@ export function AnalyzeWorkspace() {
     setStages(
       createInitialAnalysisStages(
         selectedPair,
-        nextMode === 'top_down_crt' ? 'H1 → M5' : selectedTimeframe,
-        nextMode
+        nextMode === 'top_down_crt' ? topDownLabel : selectedTimeframe,
+        nextMode,
+        { macroTf, executionTf }
       )
     );
 
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode: nextMode,
       imageDataUrl: nextSingleOrM5,
       macroImageDataUrl: nextMacro,
+      signal: compatibleSignal,
+      rejectedFinding: null,
+      wasAnalyzing: false,
+    });
+  };
+
+  const handleTopDownPairChange = (nextPairId: string) => {
+    if (isBusy) return;
+    const nextPair = resolveTopDownTimeframePair(nextPairId);
+    if (nextPair.id === topDownPairId) return;
+
+    const compatibleSignal =
+      signal &&
+      signal.analysisMode === 'top_down_crt' &&
+      signal.crtContext?.macroTimeframe === nextPair.macroTf &&
+      signal.crtContext?.executionTimeframe === nextPair.executionTf
+        ? signal
+        : null;
+
+    setTopDownPairId(nextPair.id);
+    setSignal(compatibleSignal);
+    setError(null);
+    setIsRejected(false);
+    setIsStopped(false);
+    setProgressPct(0);
+    setStages(
+      createInitialAnalysisStages(selectedPair, nextPair.label, 'top_down_crt', {
+        macroTf: nextPair.macroTf,
+        executionTf: nextPair.executionTf,
+      })
+    );
+
+    void saveWorkspaceState({
+      selectedPair,
+      selectedTimeframe,
+      topDownPairId: nextPair.id,
+      analysisMode,
+      imageDataUrl,
+      macroImageDataUrl,
       signal: compatibleSignal,
       rejectedFinding: null,
       wasAnalyzing: false,
@@ -869,6 +989,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair: pair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode,
       imageDataUrl,
       macroImageDataUrl,
@@ -884,6 +1005,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe: tf,
+      topDownPairId,
       analysisMode,
       imageDataUrl,
       macroImageDataUrl,
@@ -910,6 +1032,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode,
       imageDataUrl: null,
       macroImageDataUrl: null,
@@ -950,6 +1073,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode,
       imageDataUrl: nextSingleOrM5,
       macroImageDataUrl: nextMacro,
@@ -973,6 +1097,7 @@ export function AnalyzeWorkspace() {
     void saveWorkspaceState({
       selectedPair,
       selectedTimeframe,
+      topDownPairId,
       analysisMode,
       imageDataUrl: prevMacro,
       macroImageDataUrl: prevM5,
@@ -991,12 +1116,20 @@ export function AnalyzeWorkspace() {
         selectedPair,
         selectedTimeframe,
         'top_down_crt',
-        macroImageDataUrl
+        macroImageDataUrl,
+        topDownPairId
       );
       return;
     }
     if (!imageDataUrl) return;
-    void executeAnalysis(imageDataUrl, selectedPair, selectedTimeframe, 'single', null);
+    void executeAnalysis(
+      imageDataUrl,
+      selectedPair,
+      selectedTimeframe,
+      'single',
+      null,
+      topDownPairId
+    );
   };
 
   const handleTriggerUpload = () => {
@@ -1069,7 +1202,11 @@ export function AnalyzeWorkspace() {
               className="flex min-h-[40px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111726] px-3.5 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-slate-700 hover:text-white disabled:opacity-50 whitespace-nowrap shrink-0"
             >
               <Upload className="h-3.5 w-3.5 text-sky-400" />
-              <span>{isTopDownCrt ? 'Upload H1 Chart' : 'Upload Chart'}</span>
+              <span>
+                {isTopDownCrt
+                  ? `Upload ${!macroImageDataUrl ? macroTf : executionTf} Chart`
+                  : 'Upload Chart'}
+              </span>
             </button>
           )
         }
@@ -1128,7 +1265,7 @@ export function AnalyzeWorkspace() {
               </div>
               {isTopDownCrt && (
                 <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-                  H1 dominates bias &amp; targets · M5 refines trigger &amp; tight risk · Invalid H1 forces HOLD
+                  {macroTf} dominates bias &amp; targets · {executionTf} refines trigger &amp; tight risk · Invalid {macroTf} forces HOLD
                 </p>
               )}
             </div>
@@ -1141,19 +1278,11 @@ export function AnalyzeWorkspace() {
                 disabled={isBusy}
               />
               {isTopDownCrt ? (
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium text-slate-400">
-                    Timeframe Pair
-                  </label>
-                  <div className="flex min-h-[50px] w-full flex-col justify-center rounded-xl border border-slate-800 bg-[#0D1320] px-3 py-2">
-                    <div className="font-[family-name:var(--font-mono)] text-sm font-semibold tracking-tight text-slate-100 whitespace-nowrap tabular-nums">
-                      H1 → M5
-                    </div>
-                    <p className="truncate text-[11px] text-slate-400">
-                      Macro CRT · Tight Risk
-                    </p>
-                  </div>
-                </div>
+                <TopDownTimeframeSelector
+                  value={topDownPairId}
+                  onChange={handleTopDownPairChange}
+                  disabled={isBusy}
+                />
               ) : (
                 <TimeframeSelector
                   value={selectedTimeframe}
@@ -1177,7 +1306,9 @@ export function AnalyzeWorkspace() {
                       className="inline-flex min-h-[32px] items-center gap-1.5 text-xs font-medium text-slate-400 transition-colors hover:text-sky-400 whitespace-nowrap shrink-0"
                     >
                       <ArrowLeftRight className="h-3.5 w-3.5" />
-                      <span>Swap H1 / M5</span>
+                      <span>
+                        Swap {macroTf} / {executionTf}
+                      </span>
                     </button>
                   )}
                 </div>
@@ -1200,17 +1331,17 @@ export function AnalyzeWorkspace() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-semibold tracking-tight tabular-nums">
-                        1. H1 Macro · CRT
+                        1. {macroTf} Macro · CRT
                       </div>
                       <div className="mt-0.5 truncate text-[11px] text-slate-400">
                         {signal?.macroChartMarkup
-                          ? 'Inspect H1 CRT Markup'
+                          ? `Inspect ${macroTf} CRT Markup`
                           : 'Bias, Range & Targets'}
                       </div>
                     </div>
                     {macroImageDataUrl && (
                       <span
-                        aria-label="H1 chart uploaded"
+                        aria-label={`${macroTf} chart uploaded`}
                         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/12 text-emerald-400"
                       >
                         <Check className="h-3.5 w-3.5" />
@@ -1231,17 +1362,17 @@ export function AnalyzeWorkspace() {
                   >
                     <div className="min-w-0 flex-1">
                       <div className="truncate text-xs font-semibold tracking-tight tabular-nums">
-                        2. M5 Execution
+                        2. {executionTf} Execution
                       </div>
                       <div className="mt-0.5 truncate text-[11px] text-slate-400">
                         {signal?.chartMarkup
-                          ? 'Inspect M5 Entry Markup'
+                          ? `Inspect ${executionTf} Entry Markup`
                           : 'Trigger & Tight Stop'}
                       </div>
                     </div>
                     {imageDataUrl && (
                       <span
-                        aria-label="M5 chart uploaded"
+                        aria-label={`${executionTf} chart uploaded`}
                         className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/12 text-emerald-400"
                       >
                         <Check className="h-3.5 w-3.5" />
@@ -1265,29 +1396,29 @@ export function AnalyzeWorkspace() {
               customLabel={
                 isTopDownCrt
                   ? activeCrtSlot === 'h1'
-                    ? 'H1 Macro Chart · CRT Bias & Targets'
-                    : 'M5 Execution Chart · Entry & Tight Stop'
+                    ? `${macroTf} Macro Chart · CRT Bias & Targets`
+                    : `${executionTf} Execution Chart · Entry & Tight Stop`
                   : undefined
               }
               customMarkedPrefix={
                 isTopDownCrt
                   ? activeCrtSlot === 'h1'
-                    ? 'AI Marked H1 Macro'
-                    : 'AI Marked M5 Execution'
+                    ? `AI Marked ${macroTf} Macro`
+                    : `AI Marked ${executionTf} Execution`
                   : undefined
               }
               uploadTitle={
                 isTopDownCrt
                   ? activeCrtSlot === 'h1'
-                    ? 'Upload 1. H1 Macro (CRT) screenshot'
-                    : 'Upload 2. M5 Execution screenshot'
+                    ? `Upload 1. ${macroTf} Macro (CRT) screenshot`
+                    : `Upload 2. ${executionTf} Execution screenshot`
                   : undefined
               }
               uploadDescription={
                 isTopDownCrt
                   ? activeCrtSlot === 'h1'
-                    ? 'H1 sets the dominant bias, CRT candle range (High, Low & 50% EQ), and macro liquidity targets. Keep the right-hand price scale visible.'
-                    : 'M5 is your execution microscope for CHoCH/FVG entry precision and tight stop-loss placement. Keep the right-hand price scale visible.'
+                    ? `${macroTf} sets the dominant bias, CRT candle range (High, Low & 50% EQ), and macro liquidity targets. Keep the right-hand price scale visible.`
+                    : `${executionTf} is your execution microscope for CHoCH/FVG entry precision and tight stop-loss placement. Keep the right-hand price scale visible.`
                   : undefined
               }
             />
@@ -1301,7 +1432,7 @@ export function AnalyzeWorkspace() {
                   </div>
                   <p className="truncate text-[11px] text-slate-500">
                     {isTopDownCrt
-                      ? 'Dual H1/M5 rulers · Pass 2 wick audit · H1 veto lock'
+                      ? `Dual ${macroTf}/${executionTf} rulers · Pass 2 wick audit · ${macroTf} veto lock`
                       : 'Ruler grid · 2× axis zoom · Pass 2 wick & SL audit'}
                   </p>
                 </div>
@@ -1385,8 +1516,8 @@ export function AnalyzeWorkspace() {
                   <Upload className="h-4 w-4 text-sky-400" />
                   <span>
                     {!macroImageDataUrl
-                      ? 'Upload 1. H1 Macro Chart'
-                      : 'Upload 2. M5 Execution Chart'}
+                      ? `Upload 1. ${macroTf} Macro Chart`
+                      : `Upload 2. ${executionTf} Execution Chart`}
                   </span>
                 </button>
               ) : (
@@ -1410,7 +1541,7 @@ export function AnalyzeWorkspace() {
               )}
               <p className="mt-2 text-center text-[11px] text-slate-500">
                 {isTopDownCrt
-                  ? 'H1 CRT validates bias & TP1–TP3 · M5 refines entry & tight SL'
+                  ? `${macroTf} CRT validates bias & TP1–TP3 · ${executionTf} refines entry & tight SL`
                   : 'Generates BUY, SELL & HOLD signals with visual chart markup'}
               </p>
             </div>
@@ -1432,7 +1563,7 @@ export function AnalyzeWorkspace() {
               isCompleting={isCompletingScan}
               error={error}
               selectedPair={selectedPair}
-              selectedTimeframe={isTopDownCrt ? 'H1 → M5' : selectedTimeframe}
+              selectedTimeframe={isTopDownCrt ? topDownLabel : selectedTimeframe}
               hasChart={isReadyToAnalyze}
               onStopAnalysis={requestStopAnalysis}
               onTriggerUpload={handleTriggerUpload}
@@ -1446,7 +1577,7 @@ export function AnalyzeWorkspace() {
       <StopConfirmDialog
         open={stopConfirmOpen && isBusy}
         selectedPair={selectedPair}
-        selectedTimeframe={isTopDownCrt ? 'H1 → M5' : selectedTimeframe}
+        selectedTimeframe={isTopDownCrt ? topDownLabel : selectedTimeframe}
         progressPct={progressPct}
         onConfirmStop={confirmStopAnalysis}
         onCancel={cancelStopConfirmation}

@@ -75,6 +75,9 @@ export type TvManualInputPayload =
     }
   | {
       type: 'refresh';
+    }
+  | {
+      type: 'save_layout';
     };
 
 export interface TvAgentStep {
@@ -115,6 +118,10 @@ export type TvAgentStreamEvent =
       pointer?: TvPointerMarker | null;
     }
   | {
+      type: 'signal';
+      signal: import('@/lib/trading-data').TradingSignalResponse;
+    }
+  | {
       type: 'order_approval_needed';
       order: TvPendingOrderApproval;
       message: string;
@@ -124,6 +131,7 @@ export type TvAgentStreamEvent =
       summary: string;
       frameDataUrl: string | null;
       stepsCount: number;
+      signal?: import('@/lib/trading-data').TradingSignalResponse | null;
     }
   | {
       type: 'error';
