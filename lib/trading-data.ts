@@ -316,6 +316,7 @@ export interface TradingSignalResponse {
   crtContext?: CrtTopDownContext;
   macroContext?: MacroCorrelationContext;
   signalType: SignalType;
+  signalConfidence?: number;
   executionCategory: ExecutionCategory;
   detectedPair: string;
   detectedTimeframe: string;
@@ -344,6 +345,38 @@ export interface TradingSignalResponse {
 
 export type TradeOutcome = 'WON' | 'LOST';
 
+export function getSignalConfidencePercent(
+  raw?: number | string | null,
+  summary?: string | null
+): number {
+  const clamp = (value: number) => Math.min(99, Math.max(1, value));
+
+  const numericCandidates: Array<number | string | null | undefined> = [raw];
+  if (summary) numericCandidates.push(summary);
+
+  for (const candidate of numericCandidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+      return clamp(candidate);
+    }
+
+    if (typeof candidate === 'string') {
+      const match = candidate.match(/(\d{1,3})(?:\.\d+)?\s*%/i);
+      if (match) {
+        const value = Number.parseFloat(match[1]);
+        if (Number.isFinite(value)) return clamp(value);
+      }
+
+      const fallbackMatch = candidate.match(/\b(\d{1,3})(?:\.\d+)?\b/);
+      if (fallbackMatch) {
+        const value = Number.parseFloat(fallbackMatch[1]);
+        if (Number.isFinite(value) && value >= 0 && value <= 100) return clamp(value);
+      }
+    }
+  }
+
+  return 72;
+}
+
 export interface SignalHistoryRecord {
   id: string;
   fingerprint: string;
@@ -353,6 +386,7 @@ export interface SignalHistoryRecord {
   crtContext?: CrtTopDownContext;
   macroContext?: MacroCorrelationContext;
   signalType: SignalType;
+  signalConfidence?: number;
   executionCategory: ExecutionCategory;
   currentMarketPrice: string;
   entryPrice: string;
