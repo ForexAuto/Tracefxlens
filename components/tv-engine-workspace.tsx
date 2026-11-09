@@ -22,6 +22,7 @@ import {
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
 import { TvSessionModal } from '@/components/tv-session-modal';
 import { TvTradeSetupCard } from '@/components/tv-trade-setup-card';
+import { TvConfirmDialog } from '@/components/tv-confirm-dialog';
 import type { TradingSignalResponse } from '@/lib/trading-data';
 import {
   loadTvWorkspaceState,
@@ -74,29 +75,22 @@ export function TvEngineWorkspace() {
   const [connectModalOpen, setConnectModalOpen] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
+  const [showSwitchSessionConfirm, setShowSwitchSessionConfirm] = useState(false);
 
-  const [manualMode, setManualMode] = useState<boolean>(
-    () => loadTvWorkspaceState()?.manualMode ?? false
-  );
+  const [manualMode, setManualMode] = useState<boolean>(false);
   const [manualTypeText, setManualTypeText] = useState('');
   const [isManualSending, setIsManualSending] = useState(false);
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [isRefreshingFrame, setIsRefreshingFrame] = useState(false);
 
-  const [orderLock, setOrderLock] = useState<boolean>(
-    () => loadTvWorkspaceState()?.orderLock ?? true
-  );
-  const [promptInput, setPromptInput] = useState<string>(
-    () => loadTvWorkspaceState()?.promptInput ?? ''
-  );
-  const [turns, setTurns] = useState<CommandTurn[]>(
-    () => loadTvWorkspaceState()?.turns ?? []
-  );
+  const [orderLock, setOrderLock] = useState<boolean>(true);
+  const [promptInput, setPromptInput] = useState<string>('');
+  const [turns, setTurns] = useState<CommandTurn[]>([]);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
 
-  const [activeSignal, setActiveSignal] = useState<TradingSignalResponse | null>(
-    () => loadTvWorkspaceState()?.activeSignal ?? null
-  );
+  const [activeSignal, setActiveSignal] = useState<TradingSignalResponse | null>(null);
+  const [isHydrated, setIsHydrated] = useState<boolean>(false);
   const [isAnalyzingChart, setIsAnalyzingChart] = useState(false);
   const [analyzeError, setAnalyzeError] = useState<string | null>(null);
 
@@ -110,8 +104,30 @@ export function TvEngineWorkspace() {
   const isConnected =
     session.status === 'connected_auth' || session.status === 'connected_guest';
 
-  // Save workspace state whenever active state changes
+  // Hydrate workspace state safely on client mount to eliminate SSR hydration mismatch
   useEffect(() => {
+    const persisted = loadTvWorkspaceState();
+    if (persisted) {
+      if (persisted.activeSignal) setActiveSignal(persisted.activeSignal);
+      if (Array.isArray(persisted.turns) && persisted.turns.length > 0) {
+        setTurns(persisted.turns);
+      }
+      if (typeof persisted.orderLock === 'boolean') {
+        setOrderLock(persisted.orderLock);
+      }
+      if (persisted.promptInput) {
+        setPromptInput(persisted.promptInput);
+      }
+      if (typeof persisted.manualMode === 'boolean') {
+        setManualMode(persisted.manualMode);
+      }
+    }
+    setIsHydrated(true);
+  }, []);
+
+  // Save workspace state whenever active state changes, ONLY AFTER initial hydration
+  useEffect(() => {
+    if (!isHydrated) return;
     saveTvWorkspaceState({
       activeSignal,
       turns,
@@ -119,10 +135,11 @@ export function TvEngineWorkspace() {
       promptInput,
       manualMode,
     });
-  }, [activeSignal, turns, orderLock, promptInput, manualMode]);
+  }, [isHydrated, activeSignal, turns, orderLock, promptInput, manualMode]);
 
   // Ensure state is flushed when switching tabs or navigating away
   useEffect(() => {
+    if (!isHydrated) return;
     const handleFlush = () => {
       saveTvWorkspaceState({
         activeSignal,
@@ -138,7 +155,7 @@ export function TvEngineWorkspace() {
       window.removeEventListener('pagehide', handleFlush);
       window.removeEventListener('beforeunload', handleFlush);
     };
-  }, [activeSignal, turns, orderLock, promptInput, manualMode]);
+  }, [isHydrated, activeSignal, turns, orderLock, promptInput, manualMode]);
 
   const fetchSessionStatus = useCallback(
     async (refresh = false, auto = false) => {
@@ -177,10 +194,6 @@ export function TvEngineWorkspace() {
     }, 6000);
     return () => clearInterval(interval);
   }, [isConnected, isAgentRunning, fetchSessionStatus]);
-
-  useEffect(() => {
-    feedEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [turns.length, isAgentRunning]);
 
   const handleConnect = async (payload: TvConnectPayload) => {
     setIsConnecting(true);
@@ -689,7 +702,7 @@ export function TvEngineWorkspace() {
   const headerRightAction = isConnected ? (
     <button
       type="button"
-      onClick={handleDisconnect}
+      onClick={() => setShowDisconnectConfirm(true)}
       className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111726] px-3.5 py-1.5 text-xs font-medium text-slate-200 hover:border-rose-500/40 hover:text-rose-300 transition-colors whitespace-nowrap shrink-0"
     >
       <Power className="h-3.5 w-3.5 text-rose-400" />
@@ -731,10 +744,7 @@ export function TvEngineWorkspace() {
           {isConnected && (
             <button
               type="button"
-              onClick={() => {
-                setConnectError(null);
-                setConnectModalOpen(true);
-              }}
+              onClick={() => setShowSwitchSessionConfirm(true)}
               className="self-start sm:self-auto text-xs font-medium text-sky-400 hover:text-sky-300 underline underline-offset-4 whitespace-nowrap shrink-0"
             >
               Switch Session Cookies
@@ -751,201 +761,222 @@ export function TvEngineWorkspace() {
               className="flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] overflow-hidden"
             >
               {/* Stage Toolbar */}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/80 px-4 py-2.5">
-              {/* Unboxed Metadata with Typographic Separators */}
-              <div className="flex items-center gap-2 text-xs min-w-0">
-                <span
-                  className={
-                    session.status === 'connected_auth'
-                      ? 'font-medium text-emerald-400 whitespace-nowrap'
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 border-b border-slate-800/80 px-3 py-2 sm:px-4 sm:py-2.5">
+                {/* Unboxed Metadata with Typographic Separators */}
+                <div className="flex items-center gap-2 text-xs min-w-0 w-full sm:w-auto overflow-hidden">
+                  <span
+                    className={
+                      session.status === 'connected_auth'
+                        ? 'font-medium text-emerald-400 whitespace-nowrap shrink-0'
+                        : session.status === 'connected_guest'
+                        ? 'font-medium text-sky-400 whitespace-nowrap shrink-0'
+                        : session.status === 'launching'
+                        ? 'font-medium text-amber-400 whitespace-nowrap shrink-0'
+                        : 'text-slate-500 whitespace-nowrap shrink-0'
+                    }
+                  >
+                    {session.status === 'connected_auth'
+                      ? 'Connected'
                       : session.status === 'connected_guest'
-                      ? 'font-medium text-sky-400 whitespace-nowrap'
+                      ? 'Guest Session'
                       : session.status === 'launching'
-                      ? 'font-medium text-amber-400 whitespace-nowrap'
-                      : 'text-slate-500 whitespace-nowrap'
-                  }
-                >
-                  {session.status === 'connected_auth'
-                    ? 'Connected'
-                    : session.status === 'connected_guest'
-                    ? 'Guest Session'
-                    : session.status === 'launching'
-                    ? 'Launching...'
-                    : 'Offline'}
-                </span>
+                      ? 'Launching...'
+                      : 'Offline'}
+                  </span>
 
-                {session.accountLabel && (
-                  <>
-                    <span className="text-slate-600" aria-hidden="true">
-                      ·
-                    </span>
-                    <span className="text-slate-300 whitespace-nowrap">
-                      {session.accountLabel}
-                    </span>
-                  </>
-                )}
+                  {session.accountLabel && (
+                    <>
+                      <span className="text-slate-600 shrink-0" aria-hidden="true">
+                        ·
+                      </span>
+                      <span className="text-slate-300 whitespace-nowrap truncate max-w-[120px] sm:max-w-none">
+                        {session.accountLabel}
+                      </span>
+                    </>
+                  )}
 
-                {isConnected && session.pageTitle && (
-                  <>
-                    <span className="text-slate-600" aria-hidden="true">
-                      ·
-                    </span>
-                    <span className="truncate text-slate-400 max-w-[220px] sm:max-w-[300px]">
-                      {session.pageTitle}
-                    </span>
-                  </>
+                  {isConnected && session.pageTitle && (
+                    <>
+                      <span className="text-slate-600 shrink-0" aria-hidden="true">
+                        ·
+                      </span>
+                      <span className="truncate text-slate-400 max-w-[140px] xs:max-w-[180px] sm:max-w-[280px]">
+                        {session.pageTitle}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {/* Interactive Viewport Controls (Mobile Scrollable & Touch-Friendly) */}
+                {isConnected && (
+                  <div className="flex items-center gap-1.5 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden shrink-0">
+                    <button
+                      type="button"
+                      disabled={isAgentRunning || isAnalyzingChart}
+                      onClick={() => void handleAnalyzeLiveChart()}
+                      title="Run AI vision analysis on live TradingView screen"
+                      className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/12 px-2.5 py-1 text-xs font-semibold text-sky-200 hover:bg-sky-500/22 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+                    >
+                      <ScanLine className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                      <span>
+                        <span className="sm:hidden">Analyze</span>
+                        <span className="hidden sm:inline">Analyze Chart</span>
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isAgentRunning || isSavingLayout}
+                      onClick={() => void handleManualSaveLayout()}
+                      title="Save current TradingView chart layout (Ctrl+S / Cloud Save)"
+                      className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
+                        layoutSaveSuccess
+                          ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                          : 'border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white'
+                      }`}
+                    >
+                      {layoutSaveSuccess ? (
+                        <>
+                          <Check className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+                          <span className="text-emerald-300">
+                            <span className="sm:hidden">Saved</span>
+                            <span className="hidden sm:inline">Layout Saved</span>
+                          </span>
+                        </>
+                      ) : isSavingLayout ? (
+                        <>
+                          <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400 shrink-0" />
+                          <span>Saving...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Save className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <span>
+                            <span className="sm:hidden">Save</span>
+                            <span className="hidden sm:inline">Save Layout</span>
+                          </span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isAgentRunning}
+                      onClick={() => setManualMode((v) => !v)}
+                      title="Toggle direct clicks, drags, and keystrokes to TradingView"
+                      className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+                        manualMode
+                          ? 'border-sky-500/50 bg-sky-500/15 text-sky-300'
+                          : 'border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white'
+                      } disabled:opacity-40`}
+                    >
+                      <MousePointerClick className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        <span className="sm:hidden">Manual</span>
+                        <span className="hidden sm:inline">Manual Control</span>
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleRefreshFrame}
+                      disabled={isRefreshingFrame}
+                      aria-label="Refresh viewport frame"
+                      className="flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white disabled:opacity-40"
+                    >
+                      <RefreshCw
+                        className={`h-3.5 w-3.5 ${
+                          isRefreshingFrame || isManualSending ? 'animate-spin' : ''
+                        }`}
+                      />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadSnapshot}
+                      aria-label="Download TradingView screenshot"
+                      className="flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFullscreenOpen(true)}
+                      aria-label="Expand viewport fullscreen"
+                      className="flex min-h-[34px] min-w-[34px] shrink-0 items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 )}
               </div>
 
-              {/* Interactive Viewport Controls */}
-              {isConnected && (
-                <div className="flex items-center gap-1.5 shrink-0">
+              {/* Auth Cookie Notice Row (if expired or guest fallback) */}
+              {session.authNotice && (
+                <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/5 px-3 py-2 sm:px-4 text-xs text-amber-300">
+                  <span className="truncate">{session.authNotice}</span>
                   <button
                     type="button"
-                    disabled={isAgentRunning || isAnalyzingChart}
-                    onClick={() => void handleAnalyzeLiveChart()}
-                    title="Run AI vision analysis on live TradingView screen"
-                    className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/12 px-2.5 py-1 text-xs font-semibold text-sky-200 hover:bg-sky-500/22 transition-colors whitespace-nowrap shrink-0 disabled:opacity-40"
+                    onClick={() => {
+                      if (isConnected) {
+                        setShowSwitchSessionConfirm(true);
+                      } else {
+                        setConnectError(null);
+                        setConnectModalOpen(true);
+                      }
+                    }}
+                    className="font-medium underline underline-offset-2 whitespace-nowrap shrink-0"
                   >
-                    <ScanLine className="h-3.5 w-3.5 text-sky-400" />
-                    <span>Analyze Chart</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isAgentRunning || isSavingLayout}
-                    onClick={() => void handleManualSaveLayout()}
-                    title="Save current TradingView chart layout (Ctrl+S / Cloud Save)"
-                    className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 disabled:opacity-40 ${
-                      layoutSaveSuccess
-                        ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                        : 'border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white'
-                    }`}
-                  >
-                    {layoutSaveSuccess ? (
-                      <>
-                        <Check className="h-3.5 w-3.5 text-emerald-400" />
-                        <span className="text-emerald-300">Layout Saved</span>
-                      </>
-                    ) : isSavingLayout ? (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-400" />
-                        <span>Saving...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Save className="h-3.5 w-3.5 text-slate-400" />
-                        <span>Save Layout</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isAgentRunning}
-                    onClick={() => setManualMode((v) => !v)}
-                    className={`flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                      manualMode
-                        ? 'border-sky-500/50 bg-sky-500/15 text-sky-300'
-                        : 'border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white'
-                    } disabled:opacity-40`}
-                  >
-                    <MousePointerClick className="h-3.5 w-3.5" />
-                    <span>Manual Control</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleRefreshFrame}
-                    disabled={isRefreshingFrame}
-                    aria-label="Refresh viewport frame"
-                    className="flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white disabled:opacity-40"
-                  >
-                    <RefreshCw
-                      className={`h-3.5 w-3.5 ${
-                        isRefreshingFrame || isManualSending ? 'animate-spin' : ''
-                      }`}
-                    />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleDownloadSnapshot}
-                    aria-label="Download TradingView screenshot"
-                    className="flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setFullscreenOpen(true)}
-                    aria-label="Expand viewport fullscreen"
-                    className="flex min-h-[34px] min-w-[34px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-300 hover:border-slate-700 hover:text-white"
-                  >
-                    <Maximize2 className="h-3.5 w-3.5" />
+                    Update Cookies
                   </button>
                 </div>
               )}
-            </div>
 
-            {/* Auth Cookie Notice Row (if expired or guest fallback) */}
-            {session.authNotice && (
-              <div className="flex items-center justify-between gap-3 border-b border-amber-500/20 bg-amber-500/5 px-4 py-2 text-xs text-amber-300">
-                <span>{session.authNotice}</span>
-                <button
-                  type="button"
-                  onClick={() => setConnectModalOpen(true)}
-                  className="font-medium underline underline-offset-2 whitespace-nowrap shrink-0"
-                >
-                  Update Cookies
-                </button>
-              </div>
-            )}
-
-            {/* Mobile-Friendly Manual Keyboard Bar when Manual Control is toggled ON */}
-            {isConnected && manualMode && (
-              <div className="flex flex-wrap items-center gap-2 border-b border-slate-800/80 bg-[#0B101B] px-4 py-2">
-                <Keyboard className="h-3.5 w-3.5 text-sky-400 shrink-0" />
-                <span className="text-xs text-slate-400 whitespace-nowrap">
-                  Click or drag directly on the chart below, or send text:
-                </span>
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!manualTypeText.trim()) return;
-                    void sendManualInput({
-                      type: 'type',
-                      text: manualTypeText,
-                      pressEnter: true,
-                    });
-                    setManualTypeText('');
-                  }}
-                  className="flex flex-1 min-w-[180px] items-center gap-1.5"
-                >
-                  <input
-                    type="text"
-                    value={manualTypeText}
-                    onChange={(e) => setManualTypeText(e.target.value)}
-                    placeholder="Type symbol or text + Enter..."
-                    className="flex-1 min-h-[32px] rounded-md border border-slate-800 bg-[#090D16] px-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none"
-                  />
-                  <button
-                    type="submit"
-                    className="min-h-[32px] rounded-md bg-slate-800 px-2.5 text-xs font-medium text-slate-200 hover:bg-slate-700 whitespace-nowrap"
+              {/* Mobile-Friendly Manual Keyboard Bar when Manual Control is toggled ON */}
+              {isConnected && manualMode && (
+                <div className="flex flex-col sm:flex-row sm:items-center gap-2 border-b border-slate-800/80 bg-[#0B101B] px-3 py-2 sm:px-4">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 shrink-0">
+                    <Keyboard className="h-3.5 w-3.5 text-sky-400 shrink-0" />
+                    <span className="sm:hidden">Send keys to TV:</span>
+                    <span className="hidden sm:inline">Click/drag on chart, or send keys:</span>
+                  </div>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      if (!manualTypeText.trim()) return;
+                      void sendManualInput({
+                        type: 'type',
+                        text: manualTypeText,
+                        pressEnter: true,
+                      });
+                      setManualTypeText('');
+                    }}
+                    className="flex flex-1 w-full sm:w-auto items-center gap-1.5 min-w-0"
                   >
-                    Send
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void sendManualInput({ type: 'key', key: 'Escape' })}
-                    className="min-h-[32px] rounded-md border border-slate-800 px-2.5 text-xs text-slate-300 hover:text-white whitespace-nowrap"
-                  >
-                    Esc
-                  </button>
-                </form>
-              </div>
-            )}
+                    <input
+                      type="text"
+                      value={manualTypeText}
+                      onChange={(e) => setManualTypeText(e.target.value)}
+                      placeholder="Type symbol or text + Enter..."
+                      className="flex-1 min-w-0 min-h-[32px] rounded-md border border-slate-800 bg-[#090D16] px-2.5 text-xs text-slate-100 placeholder:text-slate-600 focus:border-sky-500 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      className="min-h-[32px] rounded-md bg-slate-800 px-3 text-xs font-medium text-slate-200 hover:bg-slate-700 whitespace-nowrap shrink-0"
+                    >
+                      Send
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void sendManualInput({ type: 'key', key: 'Escape' })}
+                      className="min-h-[32px] rounded-md border border-slate-800 px-2.5 text-xs text-slate-300 hover:text-white whitespace-nowrap shrink-0"
+                    >
+                      Esc
+                    </button>
+                  </form>
+                </div>
+              )}
 
             {/* 16:10 Viewport Canvas */}
             <div className="relative aspect-[16/10] w-full bg-[#090D16] flex items-center justify-center select-none">
@@ -969,14 +1000,14 @@ export function TvEngineWorkspace() {
                   {session.errorMessage && (
                     <p className="text-xs text-rose-400">{session.errorMessage}</p>
                   )}
-                  <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-2.5 sm:gap-3 pt-1">
                     <button
                       type="button"
                       onClick={() => {
                         setConnectError(null);
                         setConnectModalOpen(true);
                       }}
-                      className="min-h-[42px] rounded-lg bg-sky-500 px-5 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition-colors whitespace-nowrap"
+                      className="w-full sm:w-auto min-h-[42px] rounded-lg bg-sky-500 px-5 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition-colors whitespace-nowrap"
                     >
                       Connect TradingView Cookies
                     </button>
@@ -984,7 +1015,7 @@ export function TvEngineWorkspace() {
                       type="button"
                       disabled={isConnecting}
                       onClick={handleQuickGuestLaunch}
-                      className="min-h-[42px] rounded-lg border border-slate-800 bg-[#111726] px-4 py-2 text-xs font-medium text-slate-200 hover:border-slate-700 hover:text-white transition-colors whitespace-nowrap disabled:opacity-50"
+                      className="w-full sm:w-auto min-h-[42px] rounded-lg border border-slate-800 bg-[#111726] px-4 py-2 text-xs font-medium text-slate-200 hover:border-slate-700 hover:text-white transition-colors whitespace-nowrap disabled:opacity-50"
                     >
                       Launch Guest Chart
                     </button>
@@ -1303,6 +1334,39 @@ export function TvEngineWorkspace() {
         errorMessage={connectError}
         onClose={() => setConnectModalOpen(false)}
         onConnect={handleConnect}
+      />
+
+      {/* Confirmation Dialog: Disconnect Session */}
+      <TvConfirmDialog
+        open={showDisconnectConfirm}
+        title="Disconnect TradingView Session?"
+        description="This will terminate the active cloud browser session and stop any ongoing AI agent tasks. Any unsaved chart changes or temporary drawings in TradingView will be closed."
+        confirmLabel="Disconnect"
+        cancelLabel="Keep Connected"
+        variant="danger"
+        icon={<Power className="h-4 w-4 text-rose-400" />}
+        onConfirm={() => {
+          setShowDisconnectConfirm(false);
+          void handleDisconnect();
+        }}
+        onCancel={() => setShowDisconnectConfirm(false)}
+      />
+
+      {/* Confirmation Dialog: Switch Session Cookies */}
+      <TvConfirmDialog
+        open={showSwitchSessionConfirm}
+        title="Switch Session Cookies?"
+        description="You currently have an active TradingView browser session. Switching cookies will replace your current session credentials and reload the chart view. Do you want to proceed?"
+        confirmLabel="Continue to Switch"
+        cancelLabel="Cancel"
+        variant="primary"
+        icon={<Plug className="h-4 w-4 text-sky-400" />}
+        onConfirm={() => {
+          setShowSwitchSessionConfirm(false);
+          setConnectError(null);
+          setConnectModalOpen(true);
+        }}
+        onCancel={() => setShowSwitchSessionConfirm(false)}
       />
 
       {/* Fullscreen Viewport Inspector */}

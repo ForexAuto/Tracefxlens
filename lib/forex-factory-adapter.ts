@@ -1,4 +1,3 @@
-import { ForexFactory, toForexFactoryDate } from 'forexfactory';
 import {
   CURRENCY_COUNTRY_NAME,
   MacroCalendarEvent,
@@ -7,6 +6,15 @@ import {
   getAffectedPairsForCurrency,
   resolveIndicatorKnowledge,
 } from '@/lib/macro-news';
+
+function formatTimestamp(timestamp: number, timezone: string = 'America/New_York'): string {
+  if (!timestamp || timestamp === 0) return 'N/A';
+  try {
+    return new Date(timestamp).toLocaleString('en-US', { timeZone: timezone });
+  } catch {
+    return new Date(timestamp).toLocaleString('en-US');
+  }
+}
 
 export interface MacroCalendarEngineResult {
   events: MacroCalendarEvent[];
@@ -218,83 +226,12 @@ function parseScrapedDateAndTimeToUtcMs(
  * inside a strict 2.2s timeout so Cloudflare 403 blocks never stall server responses.
  */
 async function tryFetchViaForexFactoryNpm(
-  fromDate: Date,
-  toDate: Date
+  _fromDate: Date,
+  _toDate: Date
 ): Promise<MacroCalendarEvent[]> {
-  try {
-    const ff = new ForexFactory();
-    const fromFormatted = toForexFactoryDate(fromDate);
-    const toFormatted = toForexFactoryDate(toDate);
-
-    const response = await Promise.race([
-      ff.calendarEvents(fromFormatted, toFormatted),
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 2200)),
-    ]);
-
-    if (!response || !Array.isArray(response.data) || response.data.length === 0) {
-      return [];
-    }
-
-    const refYear = fromDate.getUTCFullYear();
-    const results: MacroCalendarEvent[] = [];
-
-    for (const dayGroup of response.data) {
-      for (const item of dayGroup.events) {
-        const ccy = (item.currency || '').trim().toUpperCase();
-        if (!ccy) continue;
-
-        const impact = normalizeImpactTier(item.impact);
-        const { timestampUtcMs, isAllDayOrTentative } =
-          parseScrapedDateAndTimeToUtcMs(
-            dayGroup.date,
-            item.time,
-            response.tz || 'America/New_York',
-            refYear
-          );
-
-        // Verify ForexFactory.formatTimestamp static utility works on valid UTC timestamps
-        const formattedCheck =
-          !isAllDayOrTentative && timestampUtcMs > 0
-            ? ForexFactory.formatTimestamp(timestampUtcMs, 'UTC')
-            : 'All Day';
-        void formattedCheck;
-
-        const specs = resolveIndicatorKnowledge(item.title, ccy, impact);
-        const surprise = computeReleaseSurprise(
-          item.title,
-          ccy,
-          impact,
-          item.actual,
-          item.forecast
-        );
-
-        results.push({
-          eventId: `ff_${item.eventId}`,
-          title: item.title,
-          currency: ccy,
-          countryName: CURRENCY_COUNTRY_NAME[ccy] || ccy,
-          impact,
-          timestampUtcMs,
-          isAllDayOrTentative,
-          rawTimeLabel: item.time || 'Scheduled',
-          actual: item.actual || '',
-          forecast: item.forecast || '',
-          previous: item.previous || '',
-          unit: '',
-          period: '',
-          ...surprise,
-          ...specs,
-          sourceUrl: '',
-          affectedPairs: getAffectedPairsForCurrency(ccy),
-          dataOrigin: 'forexfactory_npm',
-        });
-      }
-    }
-
-    return results;
-  } catch {
-    return [];
-  }
+  // Direct scraping of forexfactory.com is blocked by Cloudflare (403) on server IPs.
+  // The official FairEconomy JSON mirror and Live Calendar feeds handle calendar events.
+  return [];
 }
 
 /**
@@ -563,7 +500,7 @@ export async function fetchNormalizedMacroCalendar(options?: {
 
     const rawTimeFormatted = isHoliday
       ? 'All Day'
-      : ForexFactory.formatTimestamp(parsedTs, 'America/New_York');
+      : formatTimestamp(parsedTs, 'America/New_York');
 
     const candidateEventId = match?.id
       ? `ff_tv_${match.id}`
@@ -637,7 +574,7 @@ export async function fetchNormalizedMacroCalendar(options?: {
       impact,
       timestampUtcMs: parsedTs,
       isAllDayOrTentative: false,
-      rawTimeLabel: ForexFactory.formatTimestamp(parsedTs, 'America/New_York'),
+      rawTimeLabel: formatTimestamp(parsedTs, 'America/New_York'),
       actual,
       forecast,
       previous,
@@ -661,7 +598,7 @@ export async function fetchNormalizedMacroCalendar(options?: {
   const engineResult: MacroCalendarEngineResult = {
     events: mergedEvents,
     engineMeta: {
-      primaryPackage: 'forexfactory@1.0.0',
+      primaryPackage: 'forexfactory_official_mirror',
       activeSource,
       fetchedAtIso: new Date().toISOString(),
       count: mergedEvents.length,

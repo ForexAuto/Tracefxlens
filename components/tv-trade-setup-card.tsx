@@ -27,6 +27,7 @@ import type {
   TradingSignalResponse,
 } from '@/lib/trading-data';
 import { recordSignalToHistory } from '@/lib/history-storage';
+import { TvConfirmDialog } from '@/components/tv-confirm-dialog';
 
 interface TvTradeSetupCardProps {
   signal: TradingSignalResponse | null;
@@ -101,6 +102,8 @@ export function TvTradeSetupCard({
   const [savedHistory, setSavedHistory] = useState(false);
   const [auditOpen, setAuditOpen] = useState(false);
   const [showAllLevels, setShowAllLevels] = useState(false);
+  const [showReanalyzeConfirm, setShowReanalyzeConfirm] = useState(false);
+  const [showDismissConfirm, setShowDismissConfirm] = useState(false);
 
   const handleCopyValue = async (key: string, text: string) => {
     try {
@@ -436,7 +439,7 @@ export function TvTradeSetupCard({
             {/* Re-Analyze Button */}
             <button
               type="button"
-              onClick={() => onAnalyze()}
+              onClick={() => setShowReanalyzeConfirm(true)}
               title="Re-run analysis on the latest TradingView chart screen"
               className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-400 hover:border-slate-700 hover:text-white transition-colors"
             >
@@ -446,7 +449,7 @@ export function TvTradeSetupCard({
             {onDismiss && (
               <button
                 type="button"
-                onClick={onDismiss}
+                onClick={() => setShowDismissConfirm(true)}
                 aria-label="Dismiss setup card"
                 className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-500 hover:text-slate-300 transition-colors"
               >
@@ -767,6 +770,38 @@ export function TvTradeSetupCard({
           </div>
         )}
       </div>
+
+      {/* Confirmation Dialog: Re-Analyze Live Chart */}
+      <TvConfirmDialog
+        open={showReanalyzeConfirm}
+        title="Re-Analyze Live Chart?"
+        description={`This will capture a new screenshot of your TradingView screen and recalculate institutional setups, key levels, and risk-reward targets, replacing the current ${signal.signalType} setup for ${signal.detectedPair}.`}
+        confirmLabel="Re-Analyze"
+        cancelLabel="Keep Current Setup"
+        variant="primary"
+        icon={<RotateCcw className="h-4 w-4 text-sky-400" />}
+        onConfirm={() => {
+          setShowReanalyzeConfirm(false);
+          onAnalyze();
+        }}
+        onCancel={() => setShowReanalyzeConfirm(false)}
+      />
+
+      {/* Confirmation Dialog: Dismiss Setup Card */}
+      <TvConfirmDialog
+        open={showDismissConfirm}
+        title="Dismiss Trade Setup Card?"
+        description={`Are you sure you want to dismiss the ${signal.signalType} setup card for ${signal.detectedPair}? You can generate a new trade setup at any time by clicking Analyze Chart.`}
+        confirmLabel="Dismiss Card"
+        cancelLabel="Keep Card"
+        variant="danger"
+        icon={<X className="h-4 w-4 text-rose-400" />}
+        onConfirm={() => {
+          setShowDismissConfirm(false);
+          onDismiss?.();
+        }}
+        onCancel={() => setShowDismissConfirm(false)}
+      />
     </motion.section>
   );
 }
