@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { randomUUID } from 'node:crypto';
 import type { NewsPredictionRecord, NewsPredictionV1 } from '@/lib/news-prediction';
 
 let client: SupabaseClient | null | undefined;
@@ -57,7 +58,7 @@ export async function createNewsPredictionVersion(input: {
     .order('version', { ascending: false }).limit(1).maybeSingle();
   if (latestError) throw new Error(`Unable to check prediction version: ${latestError.message}`);
   const version = Number(latest?.version || 0) + 1;
-  const id = crypto.randomUUID();
+  const id = randomUUID();
   const generatedAt = new Date().toISOString();
   const prediction = { ...input.prediction, id, version, generatedAt };
   const row = {
