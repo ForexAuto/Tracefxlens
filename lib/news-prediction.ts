@@ -74,7 +74,7 @@ export interface NewsPredictionRecord {
 
 const SUPPORTED_EVENT_PATTERNS = [
   /\bcpi\b|consumer price|core inflation|inflation rate/i,
-  /\bpce\b|personal consumption expenditures/i,
+  /\bpce\b|personal consumption expenditures/i,\n  /\bppi\b|producer price|producer price index/i,
   /non.?farm|nonfarm|payroll|employment change/i,
   /unemployment|jobless claims|initial claims|continuing claims/i,
   /average hourly earnings|wage growth|employment cost/i,
