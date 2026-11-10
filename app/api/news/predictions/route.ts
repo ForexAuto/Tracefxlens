@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchNormalizedMacroCalendar } from '@/lib/forex-factory-adapter';
@@ -26,10 +25,11 @@ function extractJson(raw: string): Record<string, unknown> | null {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const predictions = await listNewsPredictions();
-    return NextResponse.json({ predictions });
+    const fingerprint = req.nextUrl.searchParams.get('eventFingerprint');
+    return NextResponse.json({ predictions: fingerprint ? predictions.filter((item) => item.eventFingerprint === fingerprint) : predictions });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to load predictions.' },
