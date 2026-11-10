@@ -115,7 +115,8 @@ function isStringArray(value: unknown, maxItems = 8): value is string[] {
 }
 
 export function validateNewsPredictionPayload(
-  raw: unknown
+  raw: unknown,
+  event: MacroCalendarEvent
 ): Omit<NewsPredictionV1, 'id' | 'eventId' | 'eventFingerprint' | 'eventTitle' | 'eventTimestampUtcMs' | 'currency' | 'version' | 'generatedAt' | 'modelVersion' | 'schemaVersion' | 'status' | 'evidence'> & {
   evidence?: Partial<NewsPredictionV1['evidence']>;
 } | null {
@@ -125,9 +126,13 @@ export function validateNewsPredictionPayload(
   const reaction = value.marketReaction;
   const plan = value.tradingPlan;
   const probabilities = outcome?.probabilities;
+  const isPolicyEvent = /fomc|federal funds rate|fed interest rate|federal reserve rate|fed monetary policy/i.test(event.title);
+  const allowedOutcomes = isPolicyEvent
+    ? ['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA']
+    : ['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'];
   if (
     !outcome ||
-    !['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'].includes(outcome.primary) ||
+    !allowedOutcomes.includes(outcome.primary) ||
     !probabilities ||
     !['positive', 'inline', 'negative'].every((key) => Number.isFinite(probabilities[key]) && probabilities[key] >= 0 && probabilities[key] <= 100) ||
     Math.abs(probabilities.positive + probabilities.inline + probabilities.negative - 100) > 0.01 ||
