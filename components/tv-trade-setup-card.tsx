@@ -360,6 +360,20 @@ export function TvTradeSetupCard({
                   >
                     {signal.signalType}
                   </h2>
+                  {typeof signal.signalConfidence === 'number' && (
+                    <span
+                    title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
+                    className={`inline-flex items-center rounded-md border px-2 py-1 font-[family-name:var(--font-mono)] text-sm font-bold tabular-nums shadow-sm ${
+                      signal.signalConfidence >= 80
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : signal.signalConfidence >= 65
+                        ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                    }`}
+                  >
+                    {signal.signalConfidence}%
+                  </span>
+                  )}
                   <span className="font-[family-name:var(--font-mono)] text-xs text-slate-400">
                     {meta.executionHint}
                   </span>
