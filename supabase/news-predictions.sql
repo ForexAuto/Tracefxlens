@@ -36,11 +36,25 @@ drop policy if exists "news_predictions_insert_policy" on public.news_prediction
 create policy "news_predictions_insert_policy"
   on public.news_predictions for insert to anon, authenticated, service_role with check (true);
 
-drop policy if exists "news_predictions_update_policy" on public.news_predictions;
-create policy "news_predictions_update_policy"
-  on public.news_predictions for update to anon, authenticated, service_role using (true) with check (true);
+-- Forecast rows are append-only: refreshing inserts a new version and never edits
+-- an earlier forecast. The release/evaluation workflow will use a separate audit
+-- table or a narrowly scoped RPC in a later migration.
+create or replace function public.reject_news_prediction_mutation()
+returns trigger
+language plpgsql
+as $
+begin
+  raise exception 'News prediction versions are immutable; create a new version instead.'
+    using errcode = '23514';
+end;
+$;
 
-grant select, insert, update on public.news_predictions to anon, authenticated, service_role;
+drop trigger if exists trg_news_predictions_immutable on public.news_predictions;
+create trigger trg_news_predictions_immutable
+  before update or delete on public.news_predictions
+  for each row execute function public.reject_news_prediction_mutation();
+
+grant select, insert on public.news_predictions to anon, authenticated, service_role;
 
 comment on table public.news_predictions is
   'Append-only versioned pre-release economic forecasts. Each refresh creates a new version; prior prediction JSON remains unchanged.';
