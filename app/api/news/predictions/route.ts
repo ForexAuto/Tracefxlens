@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
       },
     });
     const raw = extractJson(response.text || '');
-    const validated = validateNewsPredictionPayload(raw);
+    const validated = validateNewsPredictionPayload(raw, event);
     if (!validated) {
       return NextResponse.json({ error: 'The AI returned an invalid prediction. Please refresh and try again.' }, { status: 502 });
     }
