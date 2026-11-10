@@ -100,7 +100,7 @@ export function NewsEventOverview({
   }, [event?.eventId]);
 
   useEffect(() => {
-    if (!event || !newsPrediction || newsEvaluation || !event.actual?.trim() || !event.forecast?.trim()) return;
+    if (!event || !newsPrediction || newsPrediction.eventFingerprint !== getNewsEventFingerprint(event) || newsEvaluation || !event.actual?.trim() || !event.forecast?.trim()) return;
     let active = true;
     setEvaluationLoading(true);
     fetch('/api/news/predictions', {
