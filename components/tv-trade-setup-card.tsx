@@ -338,28 +338,14 @@ export function TvTradeSetupCard({
                 {signal.detectedTimeframe} <span className="px-1 text-slate-700">/</span> {signal.executionCategory}
               </p>
             </div>
-            <div className="shrink-0 text-right">
+            <div className="shrink-0 pt-0.5 text-right">
               <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400 sm:text-xs">
-                AI Confidence
-              </p>
-              <p
-                title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
-                className={`mt-0.5 font-[family-name:var(--font-mono)] text-3xl font-bold leading-none tracking-tight tabular-nums sm:text-4xl ${
-                  typeof signal.signalConfidence !== 'number'
-                    ? 'text-slate-500'
-                    : signal.signalConfidence >= 80
-                    ? 'text-emerald-400'
-                    : signal.signalConfidence >= 65
-                    ? 'text-sky-400'
-                    : 'text-amber-400'
-                }`}
-              >
-                {typeof signal.signalConfidence === 'number' ? `${signal.signalConfidence}%` : '—'}
+                Confidence
               </p>
             </div>
           </div>
 
-          <div className="mt-5 flex items-end justify-between gap-3">
+          <div className="mt-3 flex items-end justify-between gap-3">
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="flex items-center gap-2">
@@ -377,10 +363,23 @@ export function TvTradeSetupCard({
                 {signal.entryTriggerNote ? <span className="text-slate-500"> · {signal.entryTriggerNote}</span> : null}
               </p>
             </div>
-            <div className="hidden shrink-0 text-right sm:block">
-              <p className="text-[10px] uppercase tracking-wider text-slate-500">Risk / Reward</p>
-              <p className="mt-1 font-[family-name:var(--font-mono)] text-sm font-semibold tabular-nums text-sky-300">
-                {signal.riskRewardRatio}
+            <div className="shrink-0 self-center text-right">
+              <p
+                title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
+                className={`font-[family-name:var(--font-mono)] text-3xl font-bold leading-none tracking-tight tabular-nums sm:text-4xl ${
+                  typeof signal.signalConfidence !== 'number'
+                    ? 'text-slate-500'
+                    : signal.signalConfidence >= 80
+                    ? 'text-emerald-400'
+                    : signal.signalConfidence >= 65
+                    ? 'text-sky-400'
+                    : 'text-amber-400'
+                }`}
+              >
+                {typeof signal.signalConfidence === 'number' ? `${signal.signalConfidence}%` : '—'}
+              </p>
+              <p className="mt-2 text-[9px] uppercase tracking-[0.16em] text-slate-600">
+                R:R {signal.riskRewardRatio}
               </p>
             </div>
           </div>
