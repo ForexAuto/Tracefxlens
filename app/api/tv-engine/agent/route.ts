@@ -378,6 +378,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
           type: Type.STRING,
           description: 'Confidence summary (e.g. "High Confluence").',
         },
+        signalConfidence: {
+          type: Type.NUMBER,
+          description: 'Integer 1-99 AI estimate of setup quality from confluence and risk/reward; NOT win probability.',
+        },
         technicalRationale: {
           type: Type.ARRAY,
           items: { type: Type.STRING },
@@ -701,6 +705,11 @@ export async function POST(req: NextRequest) {
                 marketStructure: String(
                   callArgs.marketStructure || 'Market Structure Confirmed'
                 ),
+                signalConfidence:
+                  typeof callArgs.signalConfidence === 'number' &&
+                  Number.isFinite(callArgs.signalConfidence)
+                    ? Math.min(99, Math.max(1, Math.round(callArgs.signalConfidence)))
+                    : undefined,
                 confidenceSummary: String(
                   callArgs.confidenceSummary || 'Confluence Verified'
                 ),
