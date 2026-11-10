@@ -17,6 +17,7 @@ import {
   formatRelativeCountdown,
 } from '@/lib/macro-news';
 import { isSupportedUsdHighImpactEvent, getNewsEventFingerprint, type NewsPredictionRecord } from '@/lib/news-prediction';
+import type { NewsPredictionEvaluation } from '@/lib/news-prediction-evaluation';
 
 interface NewsEventOverviewProps {
   event: MacroCalendarEvent | null;
@@ -66,12 +67,14 @@ export function NewsEventOverview({
   onCloseMobile,
 }: NewsEventOverviewProps) {
   const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
+  const [newsEvaluation, setNewsEvaluation] = useState<NewsPredictionEvaluation | null>(null);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     setNewsPrediction(null);
+    setNewsEvaluation(null);
     setPredictionError(null);
     if (!event || event.currency !== 'USD') return () => { active = false; };
     const fingerprint = getNewsEventFingerprint(event);
@@ -83,7 +86,10 @@ export function NewsEventOverview({
       })
       .then((payload) => {
         if (active && Array.isArray(payload.predictions) && payload.predictions.length) {
-          setNewsPrediction(payload.predictions.sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0]);
+          const latest = payload.predictions.sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0];
+          setNewsPrediction(latest);
+          const evaluation = Array.isArray(payload.evaluations) ? payload.evaluations.find((item: NewsPredictionEvaluation) => item.predictionId === latest.id) : null;
+          setNewsEvaluation(evaluation || null);
         }
       })
       .catch((error) => {
@@ -107,6 +113,28 @@ export function NewsEventOverview({
       setNewsPrediction(payload.prediction as NewsPredictionRecord);
     } catch (error) {
       setPredictionError(error instanceof Error ? error.message : 'Unable to generate prediction.');
+    } finally {
+      setPredictionLoading(false);
+    }
+  };
+
+  const evaluateNewsPredictionNow = async () => {
+    if (!event || !newsPrediction) return;
+    setPredictionLoading(true);
+    setPredictionError(null);
+    try {
+      const response = await fetch('/api/news/predictions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'evaluate', eventId: event.eventId }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to evaluate prediction.');
+      const current = (payload.evaluations || []).find((item: NewsPredictionEvaluation) => item.predictionId === newsPrediction.id);
+      if (current) setNewsEvaluation(current);
+      else throw new Error('Evaluation saved, but no result was returned for the selected forecast version.');
+    } catch (error) {
+      setPredictionError(error instanceof Error ? error.message : 'Unable to evaluate prediction.');
     } finally {
       setPredictionLoading(false);
     }
@@ -431,6 +459,27 @@ export function NewsEventOverview({
               {newsPrediction.prediction.evidence.missingData.length > 0 && (
                 <p className="text-[11px] leading-relaxed text-amber-300/90">Data limitations: {newsPrediction.prediction.evidence.missingData.join(' ')}</p>
               )}
+              {newsEvaluation && (
+                <div className="border-t border-slate-800 pt-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-200">Post-release evaluation</span>
+                    <span className="text-[10px] text-emerald-300">Evaluated</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="rounded-lg bg-slate-800/60 p-2">
+                      <div className="text-[10px] text-slate-400">Actual vs consensus</div>
+                      <div className="mt-1 text-xs font-semibold text-white">{newsEvaluation.actualCategory.replace(/_/g, ' ')}</div>
+                      <div className="mt-0.5 text-[10px] text-slate-400">{newsEvaluation.actual} actual · {newsEvaluation.forecast} forecast</div>
+                    </div>
+                    <div className="rounded-lg bg-slate-800/60 p-2">
+                      <div className="text-[10px] text-slate-400">Brier score</div>
+                      <div className="mt-1 font-mono text-lg font-semibold text-white">{newsEvaluation.brierScore.toFixed(3)}</div>
+                      <div className="mt-0.5 text-[10px] text-slate-500">Lower is better · 0 is perfect</div>
+                    </div>
+                  </div>
+                  <p className="text-[10px] leading-relaxed text-slate-500">This scores the economic release versus consensus, not the resulting price move. Market-reaction accuracy is not yet scored.</p>
+                </div>
+              )}
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-700 bg-[#0D1320] p-4">
@@ -450,6 +499,16 @@ export function NewsEventOverview({
           </button>
           {!isSupportedUsdHighImpactEvent(event) && !newsPrediction && (
             <p className="text-[10px] text-slate-500">Available for supported upcoming USD high-impact releases only.</p>
+          )}
+          {newsPrediction && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
+            <button
+              type="button"
+              disabled={predictionLoading}
+              onClick={() => void evaluateNewsPredictionNow()}
+              className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:opacity-40"
+            >
+              {predictionLoading ? 'Evaluating release...' : 'Evaluate prediction against actual'}
+            </button>
           )}
           <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
         </section>
