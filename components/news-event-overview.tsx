@@ -384,9 +384,9 @@ export function NewsEventOverview({
               </div>
               <div className="grid grid-cols-3 gap-2">
                 {[
-                  ['Positive', newsPrediction.prediction.outcome.probabilities.positive],
+                  ['Stronger', newsPrediction.prediction.outcome.probabilities.positive],
                   ['In line', newsPrediction.prediction.outcome.probabilities.inline],
-                  ['Negative', newsPrediction.prediction.outcome.probabilities.negative],
+                  ['Weaker', newsPrediction.prediction.outcome.probabilities.negative],
                 ].map(([label, value]) => (
                   <div key={String(label)} className="rounded-lg bg-slate-800/60 p-2">
                     <div className="text-[10px] text-slate-400">{label}</div>
