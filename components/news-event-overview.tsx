@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import {
   ArrowUpRight,
@@ -16,6 +16,7 @@ import {
   formatFullDateTimeInZone,
   formatRelativeCountdown,
 } from '@/lib/macro-news';
+import { isSupportedUsdHighImpactEvent, getNewsEventFingerprint, type NewsPredictionRecord } from '@/lib/news-prediction';
 
 interface NewsEventOverviewProps {
   event: MacroCalendarEvent | null;
@@ -64,6 +65,53 @@ export function NewsEventOverview({
   onRefreshBrief,
   onCloseMobile,
 }: NewsEventOverviewProps) {
+  const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
+  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setNewsPrediction(null);
+    setPredictionError(null);
+    if (!event || event.currency !== 'USD') return () => { active = false; };
+    const fingerprint = getNewsEventFingerprint(event);
+    fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}`, { cache: 'no-store' })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Unable to load saved prediction.');
+        return payload;
+      })
+      .then((payload) => {
+        if (active && Array.isArray(payload.predictions) && payload.predictions.length) {
+          setNewsPrediction(payload.predictions.sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0]);
+        }
+      })
+      .catch((error) => {
+        if (active) setPredictionError(error instanceof Error ? error.message : 'Unable to load saved prediction.');
+      });
+    return () => { active = false; };
+  }, [event?.eventId]);
+
+  const generateNewsPrediction = async () => {
+    if (!event) return;
+    setPredictionLoading(true);
+    setPredictionError(null);
+    try {
+      const response = await fetch('/api/news/predictions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: event.eventId }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || 'Unable to generate prediction.');
+      setNewsPrediction(payload.prediction as NewsPredictionRecord);
+    } catch (error) {
+      setPredictionError(error instanceof Error ? error.message : 'Unable to generate prediction.');
+    } finally {
+      setPredictionLoading(false);
+    }
+  };
+
   if (!event) {
     return (
       <div className="rounded-2xl border border-slate-800/90 bg-[#111726] p-6 text-center">
@@ -317,7 +365,97 @@ export function NewsEventOverview({
         ) : null}
       </div>
 
-      {/* 5. Directly Affected TraceFX Pairs -> 1-Click Analyze Handoff */}
+      {/* 5. Assisted AI News Prediction */}
+      {event.currency === 'USD' && (
+        <section className="p-5 sm:p-6 space-y-3" aria-label="AI news prediction">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <h3 className="text-xs font-semibold text-slate-100">AI News Prediction</h3>
+              <p className="mt-1 text-[11px] text-slate-500">Pre-release economic forecast and market scenarios</p>
+            </div>
+            <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-300">USD V1</span>
+          </div>
+
+          {newsPrediction ? (
+            <div className="rounded-xl border border-slate-800 bg-[#0D1320] p-3.5 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-semibold text-white">{newsPrediction.prediction.outcome.primary.replace(/_/g, ' ')}</span>
+                <span className="text-[10px] text-slate-400">Version {newsPrediction.version} · {new Date(newsPrediction.generatedAt).toLocaleString()}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {[
+                  ['Positive', newsPrediction.prediction.outcome.probabilities.positive],
+                  ['In line', newsPrediction.prediction.outcome.probabilities.inline],
+                  ['Negative', newsPrediction.prediction.outcome.probabilities.negative],
+                ].map(([label, value]) => (
+                  <div key={String(label)} className="rounded-lg bg-slate-800/60 p-2">
+                    <div className="text-[10px] text-slate-400">{label}</div>
+                    <div className="mt-0.5 font-mono text-lg font-semibold text-white">{value}%</div>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-400">Evidence quality</span>
+                <span className={newsPrediction.prediction.evidence.quality === 'HIGH' ? 'text-emerald-400' : newsPrediction.prediction.evidence.quality === 'MEDIUM' ? 'text-amber-300' : 'text-rose-300'}>
+                  {newsPrediction.prediction.evidence.quality}
+                </span>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-300">{newsPrediction.prediction.outcome.explanation}</p>
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <div className="text-[11px] font-semibold text-slate-200">Expected market reaction</div>
+                {([
+                  ['USD', newsPrediction.prediction.marketReaction.usd],
+                  ['XAU/USD', newsPrediction.prediction.marketReaction.xauUsd],
+                  ['EUR/USD', newsPrediction.prediction.marketReaction.eurUsd],
+                  ['GBP/USD', newsPrediction.prediction.marketReaction.gbpUsd],
+                  ['USD/JPY', newsPrediction.prediction.marketReaction.usdJpy],
+                ] as const).map(([symbol, bias]) => (
+                  <div key={symbol} className="flex items-center justify-between text-xs">
+                    <span className="text-slate-400">{symbol}</span>
+                    <span className={bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>{bias}</span>
+                  </div>
+                ))}
+                <p className="text-xs leading-relaxed text-slate-400">{newsPrediction.prediction.marketReaction.explanation}</p>
+              </div>
+              <div className="border-t border-slate-800 pt-3 space-y-2">
+                <div className="text-[11px] font-semibold text-slate-200">Trading plan</div>
+                <p className="text-xs leading-relaxed text-slate-300">{newsPrediction.prediction.tradingPlan.entryApproach}</p>
+                <ul className="list-disc space-y-1 pl-4 text-xs text-slate-400">
+                  {newsPrediction.prediction.tradingPlan.confirmationConditions.map((item, index) => <li key={index}>{item}</li>)}
+                </ul>
+                <div className="text-[11px] font-semibold text-slate-200">Invalidation</div>
+                <ul className="list-disc space-y-1 pl-4 text-xs text-slate-400">
+                  {newsPrediction.prediction.marketReaction.invalidationConditions.map((item, index) => <li key={index}>{item}</li>)}
+                </ul>
+              </div>
+              {newsPrediction.prediction.evidence.missingData.length > 0 && (
+                <p className="text-[11px] leading-relaxed text-amber-300/90">Data limitations: {newsPrediction.prediction.evidence.missingData.join(' ')}</p>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-xl border border-dashed border-slate-700 bg-[#0D1320] p-4">
+              <p className="text-xs leading-relaxed text-slate-400">Generate a forecast from the current calendar evidence. The AI will not invent unavailable market data.</p>
+            </div>
+          )}
+
+          {predictionError && <p role="alert" className="text-xs leading-relaxed text-rose-300">{predictionError}</p>}
+          <button
+            type="button"
+            disabled={predictionLoading || !isSupportedUsdHighImpactEvent(event)}
+            onClick={() => void generateNewsPrediction()}
+            className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <RotateCcw className={`h-3.5 w-3.5 ${predictionLoading ? 'animate-spin' : ''}`} />
+            {predictionLoading ? 'Generating forecast...' : newsPrediction ? 'Refresh prediction · save new version' : 'Generate AI prediction'}
+          </button>
+          {!isSupportedUsdHighImpactEvent(event) && !newsPrediction && (
+            <p className="text-[10px] text-slate-500">Available for supported upcoming USD high-impact releases only.</p>
+          )}
+          <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
+        </section>
+      )}
+
+      {/* 6. Directly Affected TraceFX Pairs -> 1-Click Analyze Handoff */}
       <div className="p-5 sm:p-6">
         <div className="mb-2.5 flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold text-slate-200">
