@@ -8,6 +8,8 @@ import {
   validateNewsPredictionPayload,
 } from '@/lib/news-prediction';
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
+import { evaluateNewsPrediction } from '@/lib/news-prediction-evaluation';
+import { listNewsPredictionEvaluations, saveNewsPredictionEvaluation } from '@/lib/news-prediction-evaluation-store';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -29,7 +31,9 @@ export async function GET(req: NextRequest) {
   try {
     const predictions = await listNewsPredictions();
     const fingerprint = req.nextUrl.searchParams.get('eventFingerprint');
-    return NextResponse.json({ predictions: fingerprint ? predictions.filter((item) => item.eventFingerprint === fingerprint) : predictions });
+    const filtered = fingerprint ? predictions.filter((item) => item.eventFingerprint === fingerprint) : predictions;
+    const evaluations = await listNewsPredictionEvaluations(filtered.map((item) => item.id));
+    return NextResponse.json({ predictions: filtered, evaluations });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'Unable to load predictions.' },
@@ -48,7 +52,33 @@ export async function POST(req: NextRequest) {
 
     const calendar = await fetchNormalizedMacroCalendar({ forceRefresh: true });
     const event = calendar.events.find((candidate) => candidate.eventId === eventId);
-    if (!event || !isSupportedUsdHighImpactEvent(event)) {
+    if (!event || event.currency.toUpperCase() !== 'USD' || event.impact !== 'High' || event.isAllDayOrTentative) {
+      return NextResponse.json({ error: 'This is not a supported USD high-impact calendar event.' }, { status: 400 });
+    }
+
+    if (body?.action === 'evaluate') {
+      if (!event.actual?.trim() || !event.forecast?.trim()) {
+        return NextResponse.json({ error: 'The calendar feed does not yet contain both the actual release and consensus forecast.' }, { status: 409 });
+      }
+      const fingerprint = getNewsEventFingerprint(event);
+      const records = (await listNewsPredictions(100)).filter((item) => item.eventFingerprint === fingerprint);
+      if (!records.length) {
+        return NextResponse.json({ error: 'No saved AI prediction exists for this event.' }, { status: 404 });
+      }
+      const evaluations = [];
+      for (const record of records) {
+        const evaluation = evaluateNewsPrediction(record, event);
+        if (!evaluation) continue;
+        const saved = await saveNewsPredictionEvaluation(evaluation);
+        evaluations.push(saved);
+      }
+      if (!evaluations.length) {
+        return NextResponse.json({ error: 'The actual and forecast values could not be compared safely. Check that their units and numeric formats match.' }, { status: 422 });
+      }
+      return NextResponse.json({ evaluations, evaluatedCount: evaluations.length });
+    }
+
+    if (!isSupportedUsdHighImpactEvent(event)) {
       return NextResponse.json(
         { error: 'This event is not an eligible upcoming USD high-impact release, or it has already been released.' },
         { status: 400 }
