@@ -311,118 +311,6 @@ export function NewsEventOverview({
         </div>
       )}
 
-      {/* 3. Official Macroeconomic Overview & Specifications */}
-      <div className="p-5 sm:p-6 space-y-3.5 text-xs leading-relaxed">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="font-semibold text-slate-200">
-            Official Indicator Specifications
-          </h3>
-          <span className="text-[11px] text-slate-500">{event.frequency}</span>
-        </div>
-
-        <div>
-          <span className="font-semibold text-slate-200">
-            What It Measures:{' '}
-          </span>
-          <span className="text-slate-300">{event.officialOverview}</span>
-        </div>
-
-        <div>
-          <span className="font-semibold text-slate-200">Usual Effect: </span>
-          <span className="text-slate-300">{event.usualEffect}</span>
-        </div>
-
-        <div>
-          <span className="font-semibold text-slate-200">
-            Why Traders Care:{' '}
-          </span>
-          <span className="text-slate-300">{event.whyTradersCare}</span>
-        </div>
-
-        <div>
-          <span className="font-semibold text-slate-200">
-            Killzone Protocol:{' '}
-          </span>
-          <span className="text-amber-300/95">{event.killzoneGuidance}</span>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-400">
-          <span>
-            Source: <span className="text-slate-300">{event.sourceAgency}</span>
-          </span>
-          {event.sourceUrl && (
-            <a
-              href={event.sourceUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 font-medium text-sky-400 transition-colors hover:text-sky-300 whitespace-nowrap"
-            >
-              <span>Official Agency</span>
-              <ExternalLink className="h-3 w-3" />
-            </a>
-          )}
-        </div>
-      </div>
-
-      {/* 4. AI Macro Trading Playbook */}
-      <div className="p-5 sm:p-6 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="text-xs font-semibold text-slate-200">
-            Macro &amp; CRT Execution Playbook
-          </h3>
-          <button
-            type="button"
-            disabled={isBriefLoading}
-            onClick={() => onRefreshBrief(event)}
-            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0D1320] px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:opacity-50 whitespace-nowrap shrink-0"
-          >
-            <RotateCcw
-              className={`h-3 w-3 text-sky-400 ${
-                isBriefLoading ? 'animate-spin' : ''
-              }`}
-            />
-            <span>{isBriefLoading ? 'Updating...' : 'Refresh Brief'}</span>
-          </button>
-        </div>
-
-        {isBriefLoading && !aiBrief ? (
-          <div className="space-y-2.5 py-1" aria-busy="true">
-            <div className="h-3.5 w-11/12 rounded bg-slate-800/80 animate-pulse" />
-            <div className="h-3.5 w-full rounded bg-slate-800/70 animate-pulse" />
-            <div className="h-3.5 w-5/6 rounded bg-slate-800/70 animate-pulse" />
-            <div className="h-3.5 w-4/5 rounded bg-slate-800/60 animate-pulse" />
-          </div>
-        ) : aiBrief ? (
-          <div className="space-y-2.5 text-xs leading-relaxed">
-            <p className="font-medium text-slate-100">
-              {aiBrief.headlineVerdict}
-            </p>
-            <div>
-              <span className="font-semibold text-emerald-400">
-                Hawkish / Beat Scenario:{' '}
-              </span>
-              <span className="text-slate-300">
-                {aiBrief.bullishPrintPlaybook}
-              </span>
-            </div>
-            <div>
-              <span className="font-semibold text-rose-400">
-                Dovish / Miss Scenario:{' '}
-              </span>
-              <span className="text-slate-300">
-                {aiBrief.bearishPrintPlaybook}
-              </span>
-            </div>
-            <div>
-              <span className="font-semibold text-sky-400">
-                CRT Post-News Trigger:{' '}
-              </span>
-              <span className="text-slate-300">{aiBrief.crtExecutionTip}</span>
-            </div>
-          </div>
-        ) : null}
-      </div>
-
       {/* 5. Assisted AI News Prediction */}
       {event.currency === 'USD' && (
         <section className="p-5 sm:p-6 space-y-3" aria-label="AI news prediction">
@@ -544,6 +432,120 @@ export function NewsEventOverview({
           <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
         </section>
       )}
+
+
+      {/* 3. Official Macroeconomic Overview & Specifications */}
+      <div className="p-5 sm:p-6 space-y-3.5 text-xs leading-relaxed">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold text-slate-200">
+            Official Indicator Specifications
+          </h3>
+          <span className="text-[11px] text-slate-500">{event.frequency}</span>
+        </div>
+
+        <div>
+          <span className="font-semibold text-slate-200">
+            What It Measures:{' '}
+          </span>
+          <span className="text-slate-300">{event.officialOverview}</span>
+        </div>
+
+        <div>
+          <span className="font-semibold text-slate-200">Usual Effect: </span>
+          <span className="text-slate-300">{event.usualEffect}</span>
+        </div>
+
+        <div>
+          <span className="font-semibold text-slate-200">
+            Why Traders Care:{' '}
+          </span>
+          <span className="text-slate-300">{event.whyTradersCare}</span>
+        </div>
+
+        <div>
+          <span className="font-semibold text-slate-200">
+            Killzone Protocol:{' '}
+          </span>
+          <span className="text-amber-300/95">{event.killzoneGuidance}</span>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] text-slate-400">
+          <span>
+            Source: <span className="text-slate-300">{event.sourceAgency}</span>
+          </span>
+          {event.sourceUrl && (
+            <a
+              href={event.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-medium text-sky-400 transition-colors hover:text-sky-300 whitespace-nowrap"
+            >
+              <span>Official Agency</span>
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      </div>
+
+      {/* 4. AI Macro Trading Playbook */}
+      <div className="p-5 sm:p-6 space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold text-slate-200">
+            Macro &amp; CRT Execution Playbook
+          </h3>
+          <button
+            type="button"
+            disabled={isBriefLoading}
+            onClick={() => onRefreshBrief(event)}
+            className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0D1320] px-2.5 py-1 text-[11px] font-medium text-slate-300 transition-colors hover:border-slate-700 hover:text-white disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <RotateCcw
+              className={`h-3 w-3 text-sky-400 ${
+                isBriefLoading ? 'animate-spin' : ''
+              }`}
+            />
+            <span>{isBriefLoading ? 'Updating...' : 'Refresh Brief'}</span>
+          </button>
+        </div>
+
+        {isBriefLoading && !aiBrief ? (
+          <div className="space-y-2.5 py-1" aria-busy="true">
+            <div className="h-3.5 w-11/12 rounded bg-slate-800/80 animate-pulse" />
+            <div className="h-3.5 w-full rounded bg-slate-800/70 animate-pulse" />
+            <div className="h-3.5 w-5/6 rounded bg-slate-800/70 animate-pulse" />
+            <div className="h-3.5 w-4/5 rounded bg-slate-800/60 animate-pulse" />
+          </div>
+        ) : aiBrief ? (
+          <div className="space-y-2.5 text-xs leading-relaxed">
+            <p className="font-medium text-slate-100">
+              {aiBrief.headlineVerdict}
+            </p>
+            <div>
+              <span className="font-semibold text-emerald-400">
+                Hawkish / Beat Scenario:{' '}
+              </span>
+              <span className="text-slate-300">
+                {aiBrief.bullishPrintPlaybook}
+              </span>
+            </div>
+            <div>
+              <span className="font-semibold text-rose-400">
+                Dovish / Miss Scenario:{' '}
+              </span>
+              <span className="text-slate-300">
+                {aiBrief.bearishPrintPlaybook}
+              </span>
+            </div>
+            <div>
+              <span className="font-semibold text-sky-400">
+                CRT Post-News Trigger:{' '}
+              </span>
+              <span className="text-slate-300">{aiBrief.crtExecutionTip}</span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
 
       {/* 6. Directly Affected TraceFX Pairs -> 1-Click Analyze Handoff */}
       <div className="p-5 sm:p-6">
