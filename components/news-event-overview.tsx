@@ -68,6 +68,7 @@ export function NewsEventOverview({
 }: NewsEventOverviewProps) {
   const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
   const [newsEvaluation, setNewsEvaluation] = useState<NewsPredictionEvaluation | null>(null);
+  const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
 
@@ -97,6 +98,34 @@ export function NewsEventOverview({
       });
     return () => { active = false; };
   }, [event?.eventId]);
+
+  useEffect(() => {
+    if (!event || !newsPrediction || newsEvaluation || !event.actual?.trim() || !event.forecast?.trim()) return;
+    let active = true;
+    setEvaluationLoading(true);
+    fetch('/api/news/predictions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'evaluate', eventId: event.eventId }),
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || 'Unable to evaluate released event.');
+        return payload;
+      })
+      .then((payload) => {
+        if (!active) return;
+        const current = (payload.evaluations || []).find((item: NewsPredictionEvaluation) => item.predictionId === newsPrediction.id);
+        if (current) setNewsEvaluation(current);
+      })
+      .catch((error) => {
+        if (active) setPredictionError(error instanceof Error ? error.message : 'Unable to evaluate released event.');
+      })
+      .finally(() => {
+        if (active) setEvaluationLoading(false);
+      });
+    return () => { active = false; };
+  }, [event?.eventId, event?.actual, event?.forecast, newsPrediction?.id, newsEvaluation?.id]);
 
   const generateNewsPrediction = async () => {
     if (!event) return;
@@ -503,11 +532,11 @@ export function NewsEventOverview({
           {newsPrediction && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
             <button
               type="button"
-              disabled={predictionLoading}
+              disabled={predictionLoading || evaluationLoading}
               onClick={() => void evaluateNewsPredictionNow()}
               className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:opacity-40"
             >
-              {predictionLoading ? 'Evaluating release...' : 'Evaluate prediction against actual'}
+              {predictionLoading || evaluationLoading ? 'Evaluating release...' : 'Evaluate prediction against actual'}
             </button>
           )}
           <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
