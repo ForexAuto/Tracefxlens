@@ -323,149 +323,143 @@ export function TvTradeSetupCard({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-      className={`mt-4 rounded-xl border border-slate-800/90 bg-[#0E1424] overflow-hidden ${meta.glowClass}`}
+      className={`mt-4 overflow-hidden rounded-2xl border border-slate-700/70 bg-[#0B1120] shadow-[0_18px_55px_rgba(0,0,0,0.28)] ${meta.glowClass}`}
     >
-      {/* Top Header & Super-Powered TradingView Actions */}
-      <div className="p-4 sm:p-5">
-        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-          <div className="min-w-0">
-            {/* Unboxed Metadata with Typographic Separators */}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
-              <span className="font-[family-name:var(--font-mono)] font-semibold text-slate-100 tabular-nums">
+      {/* Signal Hero Header */}
+      <div className="relative overflow-hidden border-b border-slate-800/80 bg-[radial-gradient(ellipse_at_top_left,rgba(16,185,129,0.10),transparent_52%),linear-gradient(135deg,#111a2a_0%,#0b1020_58%,#101827_100%)] p-4 sm:p-6">
+        <div className="pointer-events-none absolute -right-16 -top-24 h-56 w-56 rounded-full bg-emerald-400/[0.06] blur-3xl" />
+        <div className="relative">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="font-[family-name:var(--font-mono)] text-xs font-semibold tracking-[0.28em] text-slate-300 sm:text-sm">
                 {signal.detectedPair}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="font-[family-name:var(--font-mono)] text-slate-200 tabular-nums">
-                {signal.detectedTimeframe}
-              </span>
-              <span aria-hidden="true">·</span>
-              <span className="text-slate-300">{signal.executionCategory}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-[family-name:var(--font-mono)] font-medium text-sky-300 tabular-nums">
-                R:R {signal.riskRewardRatio}
-              </span>
+              </p>
+              <p className="mt-1.5 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                {signal.detectedTimeframe} <span className="px-1 text-slate-700">/</span> {signal.executionCategory}
+              </p>
             </div>
-
-            {/* Signal Badge & Direction */}
-            <div className="mt-2.5 flex items-center gap-3">
-              <div
-                className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${meta.badgeBg}`}
+            <div className="shrink-0 text-right">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-400 sm:text-xs">
+                AI Confidence
+              </p>
+              <p
+                title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
+                className={`mt-0.5 font-[family-name:var(--font-mono)] text-3xl font-bold leading-none tracking-tight tabular-nums sm:text-4xl ${
+                  typeof signal.signalConfidence !== 'number'
+                    ? 'text-slate-500'
+                    : signal.signalConfidence >= 80
+                    ? 'text-emerald-400'
+                    : signal.signalConfidence >= 65
+                    ? 'text-sky-400'
+                    : 'text-amber-400'
+                }`}
               >
-                <DirectionIcon className="h-6 w-6" />
-              </div>
-              <div>
-                <div className="flex items-baseline gap-2.5">
-                  <h2
-                    className={`font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-extrabold tracking-tight ${meta.textClass}`}
-                  >
-                    {signal.signalType}
-                  </h2>
-                  {typeof signal.signalConfidence === 'number' && (
-                    <span
-                    title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
-                    className={`inline-flex items-center rounded-md border px-2 py-1 font-[family-name:var(--font-mono)] text-sm font-bold tabular-nums shadow-sm ${
-                      signal.signalConfidence >= 80
-                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                        : signal.signalConfidence >= 65
-                        ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
-                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
-                    }`}
-                  >
-                    {signal.signalConfidence}%
-                  </span>
-                  )}
-                  <span className="font-[family-name:var(--font-mono)] text-xs text-slate-400">
-                    {meta.executionHint}
-                  </span>
-                </div>
-                {signal.entryTriggerNote && (
-                  <p className="mt-0.5 text-xs text-slate-300 line-clamp-2">
-                    {signal.entryTriggerNote}
-                  </p>
-                )}
-              </div>
+                {typeof signal.signalConfidence === 'number' ? `${signal.signalConfidence}%` : '—'}
+              </p>
             </div>
           </div>
 
-          {/* Action Button Strip: 1-Click TV Drawing, Order Ticket, Copy, History */}
-          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start">
-            {/* Draw on TradingView Chart Button */}
+          <div className="mt-5 flex items-end justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <div className="flex items-center gap-2">
+                  <DirectionIcon className={`h-7 w-7 sm:h-9 sm:w-9 ${meta.textClass}`} strokeWidth={2.4} />
+                  <h2 className={`font-[family-name:var(--font-display)] text-4xl font-extrabold leading-none tracking-tight sm:text-5xl ${meta.textClass}`}>
+                    {signal.signalType}
+                  </h2>
+                </div>
+                <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] sm:text-xs ${meta.badgeBg}`}>
+                  {signal.signalType === 'BUY' ? 'Bullish' : signal.signalType === 'SELL' ? 'Bearish' : 'Neutral'}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-relaxed text-slate-400">
+                {meta.executionHint}
+                {signal.entryTriggerNote ? <span className="text-slate-500"> · {signal.entryTriggerNote}</span> : null}
+              </p>
+            </div>
+            <div className="hidden shrink-0 text-right sm:block">
+              <p className="text-[10px] uppercase tracking-wider text-slate-500">Risk / Reward</p>
+              <p className="mt-1 font-[family-name:var(--font-mono)] text-sm font-semibold tabular-nums text-sky-300">
+                {signal.riskRewardRatio}
+              </p>
+            </div>
+          </div>
+
+          <div
+            className="mt-5 h-2 overflow-hidden rounded-full bg-slate-800/90 ring-1 ring-inset ring-white/[0.04]"
+            role="meter"
+            aria-label="AI setup confidence"
+            aria-valuemin={0}
+            aria-valuemax={99}
+            aria-valuenow={typeof signal.signalConfidence === 'number' ? signal.signalConfidence : 0}
+          >
+            <motion.div
+              initial={{ width: 0 }}
+              animate={{ width: `${typeof signal.signalConfidence === 'number' ? Math.min(99, Math.max(1, signal.signalConfidence)) : 0}%` }}
+              transition={{ duration: 0.8, ease: 'easeOut' }}
+              className={`h-full rounded-full ${
+                signal.signalType === 'SELL'
+                  ? 'bg-gradient-to-r from-rose-500 via-rose-400 to-rose-300'
+                  : signal.signalType === 'HOLD'
+                  ? 'bg-gradient-to-r from-amber-500 via-amber-400 to-amber-300'
+                  : 'bg-gradient-to-r from-emerald-500 via-emerald-400 to-emerald-300'
+              }`}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center justify-between text-[9px] font-medium uppercase tracking-[0.14em] text-slate-600">
+            <span>Lower confluence</span>
+            <span>Stronger confluence</span>
+          </div>
+
+          {/* TradingView actions */}
+          <div className="mt-5 flex flex-wrap items-center gap-2 border-t border-white/[0.06] pt-4">
             <button
               type="button"
               onClick={() => onMarkOnChart(signal)}
-              title="Instruct the AI agent to draw Entry, SL, and TP levels directly onto your live TradingView chart"
-              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-sky-500/40 bg-sky-500/12 px-3 py-1.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/22 transition-colors whitespace-nowrap"
+              title="Draw Entry, Stop Loss, and Take Profit levels on the TradingView chart"
+              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-sky-400/25 bg-sky-400/[0.08] px-3 py-1.5 text-xs font-semibold text-sky-200 transition-all hover:border-sky-300/50 hover:bg-sky-400/[0.15]"
             >
               <PenTool className="h-3.5 w-3.5 text-sky-400" />
               <span>Mark on Chart</span>
             </button>
-
-            {/* Open Order Ticket Button */}
             <button
               type="button"
               onClick={() => onOpenOrderTicket(signal)}
-              title="Open the TradingView Order Ticket with Entry, Stop Loss, and Take Profit pre-configured"
-              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/12 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/22 transition-colors whitespace-nowrap"
+              title="Open a pre-configured TradingView order ticket"
+              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-400/[0.08] px-3 py-1.5 text-xs font-semibold text-emerald-200 transition-all hover:border-emerald-300/50 hover:bg-emerald-400/[0.15]"
             >
               <Ticket className="h-3.5 w-3.5 text-emerald-400" />
               <span>Order Ticket</span>
             </button>
-
-            {/* Copy Ticket Button */}
             <button
               type="button"
               onClick={() => handleCopyValue('full-ticket', fullTicketText)}
-              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111726] px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-slate-700 hover:text-white transition-colors whitespace-nowrap"
+              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition-all hover:border-slate-600 hover:text-white"
             >
-              {copiedKey === 'full-ticket' ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Copied</span>
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5 text-slate-400" />
-                  <span>Copy</span>
-                </>
-              )}
+              {copiedKey === 'full-ticket' ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span>Copied</span></> : <><Copy className="h-3.5 w-3.5 text-slate-400" /><span>Copy</span></>}
             </button>
-
-            {/* Save to History Button */}
             <button
               type="button"
               onClick={handleSaveToHistory}
-              title="Archive signal to TraceFX History database"
-              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#111726] px-2.5 py-1.5 text-xs font-medium text-slate-300 hover:border-slate-700 hover:text-white transition-colors whitespace-nowrap"
+              title="Archive signal to TraceFX History"
+              className="flex min-h-[36px] items-center gap-1.5 rounded-lg border border-slate-700/70 bg-slate-900/60 px-3 py-1.5 text-xs font-medium text-slate-300 transition-all hover:border-slate-600 hover:text-white"
             >
-              {savedHistory ? (
-                <>
-                  <Check className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Saved</span>
-                </>
-              ) : (
-                <>
-                  <History className="h-3.5 w-3.5 text-slate-400" />
-                  <span>History</span>
-                </>
-              )}
+              {savedHistory ? <><Check className="h-3.5 w-3.5 text-emerald-400" /><span>Saved</span></> : <><History className="h-3.5 w-3.5 text-slate-400" /><span>History</span></>}
             </button>
-
-            {/* Re-Analyze Button */}
             <button
               type="button"
               onClick={() => setShowReanalyzeConfirm(true)}
-              title="Re-run analysis on the latest TradingView chart screen"
-              className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-400 hover:border-slate-700 hover:text-white transition-colors"
+              title="Re-run analysis on the latest TradingView chart"
+              className="ml-auto flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900/60 text-slate-400 transition-all hover:border-slate-600 hover:text-white"
             >
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
-
             {onDismiss && (
               <button
                 type="button"
                 onClick={() => setShowDismissConfirm(true)}
                 aria-label="Dismiss setup card"
-                className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-800 bg-[#111726] text-slate-500 hover:text-slate-300 transition-colors"
+                className="flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg border border-slate-700/70 bg-slate-900/60 text-slate-500 transition-all hover:border-rose-500/40 hover:text-rose-300"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -475,9 +469,9 @@ export function TvTradeSetupCard({
       </div>
 
       {/* Primary Execution Coordinates (Current Price · Entry · Stop Loss) */}
-      <div className="grid grid-cols-1 divide-y divide-slate-800/80 border-t border-slate-800/80 sm:grid-cols-3 sm:divide-x sm:divide-y-0 bg-[#0B0F1C]">
+      <div className="grid grid-cols-1 gap-px border-t border-slate-800/80 bg-slate-800/70 sm:grid-cols-3">
         {/* Current Price */}
-        <div className="flex items-center justify-between p-3.5 sm:block sm:p-4">
+        <div className="flex items-center justify-between bg-[#0D1525] p-4 sm:block sm:p-4">
           <div className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">
             Current Market
           </div>
@@ -487,7 +481,7 @@ export function TvTradeSetupCard({
         </div>
 
         {/* Entry Price */}
-        <div className="flex items-center justify-between p-3.5 sm:p-4">
+        <div className="flex items-center justify-between bg-[#0D1525] p-4">
           <div>
             <div className="text-[11px] font-semibold text-sky-400 uppercase tracking-wider">
               {signal.signalType === 'HOLD' ? 'Watch Trigger' : 'Entry Price'}
@@ -541,7 +535,7 @@ export function TvTradeSetupCard({
       </div>
 
       {/* Take-Profit Targets Grid */}
-      <div className="border-t border-slate-800/80 p-4 sm:p-5">
+      <div className="border-t border-slate-800/80 bg-[#0D1423]/80 p-4 sm:p-5">
         <div className="mb-2.5 flex items-center justify-between text-xs">
           <span className="font-semibold text-slate-200">
             Take-Profit Liquidity Targets
@@ -549,7 +543,7 @@ export function TvTradeSetupCard({
           <span className="text-[11px] text-slate-500">Tap to copy price</span>
         </div>
 
-        <div className="grid grid-cols-1 divide-y divide-slate-800/70 sm:grid-cols-3 sm:divide-x sm:divide-y-0 sm:border sm:border-slate-800/80 sm:rounded-lg overflow-hidden bg-[#0A0E1A]">
+        <div className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-slate-800/80 bg-slate-800/80 sm:grid-cols-3">
           {[
             {
               key: 'tp1',
@@ -576,7 +570,7 @@ export function TvTradeSetupCard({
               <div
                 key={tp.key}
                 onClick={() => handleCopyValue(tp.key, tp.price)}
-                className="flex items-center justify-between p-3 cursor-pointer hover:bg-slate-800/40 transition-colors"
+                className="flex items-center justify-between bg-[#0B1220] p-3.5 cursor-pointer transition-colors hover:bg-[#111D30]"
               >
                 <div>
                   <div className="flex items-center gap-1.5 text-xs">
@@ -658,7 +652,7 @@ export function TvTradeSetupCard({
       )}
 
       {/* Technical Confluence & SMC Structure */}
-      <div className="border-t border-slate-800/80 p-4 sm:p-5 space-y-3.5">
+      <div className="border-t border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.48),rgba(8,13,24,0.72))] p-4 sm:p-5 space-y-4">
         <div>
           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
             <span className="font-semibold text-slate-200">
