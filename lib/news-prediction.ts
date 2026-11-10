@@ -115,8 +115,7 @@ function isStringArray(value: unknown, maxItems = 8): value is string[] {
 }
 
 export function validateNewsPredictionPayload(
-  raw: unknown,
-  event: MacroCalendarEvent
+  raw: unknown
 ): Omit<NewsPredictionV1, 'id' | 'eventId' | 'eventFingerprint' | 'eventTitle' | 'eventTimestampUtcMs' | 'currency' | 'version' | 'generatedAt' | 'modelVersion' | 'schemaVersion' | 'status' | 'evidence'> & {
   evidence?: Partial<NewsPredictionV1['evidence']>;
 } | null {
