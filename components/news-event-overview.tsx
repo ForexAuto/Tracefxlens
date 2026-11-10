@@ -76,6 +76,7 @@ export function NewsEventOverview({
     let active = true;
     setNewsPrediction(null);
     setNewsEvaluation(null);
+    setEvaluationLoading(false);
     setPredictionError(null);
     if (!event || event.currency !== 'USD') return () => { active = false; };
     const fingerprint = getNewsEventFingerprint(event);
@@ -506,6 +507,7 @@ export function NewsEventOverview({
                       <div className="mt-0.5 text-[10px] text-slate-500">Lower is better · 0 is perfect</div>
                     </div>
                   </div>
+                  <p className="text-[10px] leading-relaxed text-slate-400">Model call: <span className="font-semibold text-slate-200">{newsEvaluation.predictedCategory.replace(/_/g, ' ')}</span></p>
                   <p className="text-[10px] leading-relaxed text-slate-500">This scores the economic release versus consensus, not the resulting price move. Market-reaction accuracy is not yet scored.</p>
                 </div>
               )}
