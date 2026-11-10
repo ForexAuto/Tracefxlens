@@ -377,11 +377,27 @@ export function SignalResult({
                 <DirectionIcon className="h-5 w-5" />
               </div>
               <div>
-                <h2
-                  className={`font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-bold tracking-tight ${meta.textClass}`}
-                >
-                  {signal.signalType}
-                </h2>
+                <div className="flex items-center gap-2.5">
+                  <h2
+                    className={`font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-bold tracking-tight ${meta.textClass}`}
+                  >
+                    {signal.signalType}
+                  </h2>
+                  {typeof signal.signalConfidence === 'number' && (
+                    <span
+                    title="AI-estimated setup quality based on technical confluence; not a win-probability forecast"
+                    className={`inline-flex items-center rounded-md border px-2 py-1 font-[family-name:var(--font-mono)] text-sm font-bold tabular-nums shadow-sm ${
+                      signal.signalConfidence >= 80
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : signal.signalConfidence >= 65
+                        ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+                        : 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                    }`}
+                  >
+                    {signal.signalConfidence}%
+                  </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-400">{executionSubtitle}</p>
               </div>
             </div>

@@ -68,7 +68,8 @@ RULES:
    - Provide the key breakout watch levels for entryPrice and invalidation.
 5. Provide 3-4 concise, professional technical rationale points using SMC terminology.
 6. Provide 2-5 key mapped price levels with roles (Support, Resistance, Bullish OB, Bearish OB, Fair Value Gap, Liquidity, Structure Break).
-7. Ensure all price numbers strictly match the numerical scale of the visible asset (e.g. for Gold/XAUUSD ~2700.00, for EURUSD ~1.0500, for BTCUSD ~85000).`;
+7. Estimate signalConfidence as an integer from 1 to 99 reflecting the quality and clarity of this setup's technical confluence, structure, directional alignment, and risk/reward. It is an AI setup-quality score, NOT a probability of winning the trade. Do not inflate scores; use lower scores for weak or ambiguous setups.
+8. Ensure all price numbers strictly match the numerical scale of the visible asset (e.g. for Gold/XAUUSD ~2700.00, for EURUSD ~1.0500, for BTCUSD ~85000).`;
 
 export async function POST(req: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -167,6 +168,10 @@ export async function POST(req: NextRequest) {
             riskRewardRatio: { type: Type.STRING },
             marketStructure: { type: Type.STRING },
             confidenceSummary: { type: Type.STRING },
+            signalConfidence: {
+              type: Type.NUMBER,
+              description: 'Integer 1-99 AI estimate of setup quality, not win probability.',
+            },
             technicalRationale: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
@@ -246,6 +251,11 @@ export async function POST(req: NextRequest) {
       marketStructure: String(
         parsed.marketStructure || 'Market Structure Confirmed'
       ),
+      signalConfidence:
+        typeof parsed.signalConfidence === 'number' &&
+        Number.isFinite(parsed.signalConfidence)
+          ? Math.min(99, Math.max(1, Math.round(parsed.signalConfidence)))
+          : undefined,
       confidenceSummary: String(
         parsed.confidenceSummary || 'Confluence Verified'
       ),
