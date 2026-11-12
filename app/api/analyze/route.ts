@@ -9,6 +9,8 @@ import {
   resolveTopDownTimeframePair,
   type SignalType,
   type TradingSignalResponse,
+  type VisionEnhancementPayload,
+  type VisionVerificationMeta,
   type ZoneRole,
 } from '@/lib/trading-data';
 import {
