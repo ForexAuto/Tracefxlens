@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   RefreshCw,
+  Square,
   Maximize2,
   X,
   Download,
@@ -110,7 +111,7 @@ export function TvEngineWorkspace() {
       orderLock,
       manualMode,
     });
-  }, [isHydrated, activeSignal, turns, orderLock, promptInput, manualMode]);
+  }, [isHydrated, activeSignal, manualMode]);
 
   // Ensure state is flushed when switching tabs or navigating away
   useEffect(() => {
@@ -128,7 +129,7 @@ export function TvEngineWorkspace() {
       window.removeEventListener('pagehide', handleFlush);
       window.removeEventListener('beforeunload', handleFlush);
     };
-  }, [isHydrated, activeSignal, turns, orderLock, promptInput, manualMode]);
+  }, [isHydrated, activeSignal, manualMode]);
 
   const fetchSessionStatus = useCallback(
     async (refresh = false, auto = false) => {
