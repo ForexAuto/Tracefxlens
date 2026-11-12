@@ -5,6 +5,7 @@ import {
   buildNewsEvidenceSnapshot,
   getNewsEventFingerprint,
   isSupportedNewsHighImpactEvent,
+  type NewsOutcomeDirection,
 } from '@/lib/news-prediction';
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
 import { evaluateNewsPrediction } from '@/lib/news-prediction-evaluation';
@@ -142,9 +143,12 @@ export async function POST(req: NextRequest) {
     const reason = shortText(raw.reason, 'No clear directional advantage identified.');
     const confirmation = shortText(raw.confirmation, 'Wait for price action to confirm after release.');
     const invalidation = shortText(raw.invalidation, 'Reassess if price action contradicts the expected direction.');
+    const outcomePrimary: NewsOutcomeDirection = signal === 'BUY'
+      ? 'ABOVE_EXPECTATIONS'
+      : signal === 'SELL' ? 'BELOW_EXPECTATIONS' : 'INSUFFICIENT_DATA';
     const prediction = {
       outcome: {
-        primary: signal === 'BUY' ? 'ABOVE_EXPECTATIONS' : signal === 'SELL' ? 'BELOW_EXPECTATIONS' : 'INSUFFICIENT_DATA',
+        primary: outcomePrimary,
         probabilities: { positive: 34, inline: 33, negative: 33 },
         explanation: reason,
       },
