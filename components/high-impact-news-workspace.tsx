@@ -38,6 +38,19 @@ interface CalendarApiResponse {
   error?: string;
 }
 
+function formatLiveCountdown(timestampUtcMs: number, nowMs: number, isAllDayOrTentative: boolean): string {
+  if (isAllDayOrTentative) return 'All Day';
+  const totalSeconds = Math.max(0, Math.floor((timestampUtcMs - nowMs) / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m ${seconds}s`;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 function getHorizonBoundsInZone(
   horizon: NewsHorizon,
   nowMs: number,
@@ -196,7 +209,7 @@ export function HighImpactNewsWorkspace() {
 
     const interval = window.setInterval(() => {
       setNowMs(Date.now());
-    }, 15_000);
+    }, 1_000);
 
     return () => {
       window.clearTimeout(bootTimer);
@@ -310,13 +323,24 @@ export function HighImpactNewsWorkspace() {
       items: MacroCalendarEvent[];
     }> = [];
 
+    // Keep every upcoming release ahead of every released event. Within each
+    // section, upcoming events are chronological and released events newest-first.
+    const orderedEvents = [...filteredEvents].sort((a, b) => {
+      const aReleased = Boolean(a.actual) || a.timestampUtcMs <= nowMs;
+      const bReleased = Boolean(b.actual) || b.timestampUtcMs <= nowMs;
+      if (aReleased !== bReleased) return Number(aReleased) - Number(bReleased);
+      return aReleased
+        ? b.timestampUtcMs - a.timestampUtcMs
+        : a.timestampUtcMs - b.timestampUtcMs;
+    });
+
     const sourceForDayGroups =
       currencyFilter === 'ALL'
-        ? filteredEvents.filter((ev) => ev.currency !== 'USD')
-        : filteredEvents;
+        ? orderedEvents.filter((ev) => ev.currency !== 'USD')
+        : orderedEvents;
 
     if (currencyFilter === 'ALL') {
-      const usdItems = filteredEvents.filter((ev) => ev.currency === 'USD');
+      const usdItems = orderedEvents.filter((ev) => ev.currency === 'USD');
       if (usdItems.length > 0) {
         groups.push({
           dateKey: 'usd-priority-top',
@@ -345,7 +369,7 @@ export function HighImpactNewsWorkspace() {
     }
 
     return groups;
-  }, [filteredEvents, currencyFilter, horizon, timezone, todayKey]);
+  }, [filteredEvents, currencyFilter, horizon, timezone, todayKey, nowMs]);
 
   const selectedEvent = useMemo(() => {
     const topVisible = groupedDays[0]?.items[0] || filteredEvents[0] || null;
@@ -867,7 +891,13 @@ export function HighImpactNewsWorkspace() {
                             timezone
                           )
                         : '';
+                      const isReleased = Boolean(ev.actual) || ev.timestampUtcMs <= nowMs;
                       const rel = formatRelativeCountdown(
+                        ev.timestampUtcMs,
+                        nowMs,
+                        ev.isAllDayOrTentative
+                      );
+                      const liveCountdown = formatLiveCountdown(
                         ev.timestampUtcMs,
                         nowMs,
                         ev.isAllDayOrTentative
@@ -886,20 +916,21 @@ export function HighImpactNewsWorkspace() {
                         >
                           {/* Left: Time + Currency + Event Title */}
                           <div className="flex items-start gap-3 min-w-0 flex-1">
-                            <div className="w-[74px] shrink-0 font-[family-name:var(--font-mono)] tabular-nums">
-                              <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
+                            <div className="w-[112px] shrink-0 font-[family-name:var(--font-mono)] tabular-nums">
+                              <div className="text-[17px] sm:text-lg font-bold leading-tight tracking-tight text-white whitespace-nowrap">
                                 {formattedTime}
                               </div>
                               <div
-                                className={`mt-0.5 text-[11px] whitespace-nowrap ${
-                                  rel.isImminent
-                                    ? 'text-amber-400 font-medium'
-                                    : rel.isPast
+                                aria-label={isReleased ? 'Event released' : `Time until release: ${liveCountdown}`}
+                                className={`mt-1 text-[11px] sm:text-xs font-semibold leading-tight whitespace-nowrap ${
+                                  isReleased
                                     ? 'text-slate-500'
-                                    : 'text-sky-400/90'
+                                    : rel.isImminent
+                                    ? 'text-amber-300'
+                                    : 'text-sky-400'
                                 }`}
                               >
-                                {rel.text}
+                                {isReleased ? 'Released' : liveCountdown}
                               </div>
                             </div>
 
