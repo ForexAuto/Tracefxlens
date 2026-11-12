@@ -22,7 +22,7 @@ export interface NewsPredictionV1 {
   eventFingerprint: string;
   eventTitle: string;
   eventTimestampUtcMs: number;
-  currency: 'USD';
+  currency: string;
   version: number;
   outcome: {
     primary: NewsOutcomeDirection;
@@ -30,11 +30,14 @@ export interface NewsPredictionV1 {
     explanation: string;
   };
   marketReaction: {
-    usd: NewsMarketBias;
-    xauUsd: NewsMarketBias;
-    eurUsd: NewsMarketBias;
-    gbpUsd: NewsMarketBias;
-    usdJpy: NewsMarketBias;
+    currencyBias?: NewsMarketBias;
+    pairBiases?: Array<{ symbol: string; bias: NewsMarketBias }>;
+    /** Legacy USD-only fields retained for previously saved v1 forecasts. */
+    usd?: NewsMarketBias;
+    xauUsd?: NewsMarketBias;
+    eurUsd?: NewsMarketBias;
+    gbpUsd?: NewsMarketBias;
+    usdJpy?: NewsMarketBias;
     explanation: string;
     invalidationConditions: string[];
   };
@@ -54,7 +57,7 @@ export interface NewsPredictionV1 {
   };
   generatedAt: string;
   modelVersion: string;
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   status: 'PREDICTED' | 'RELEASED' | 'EVALUATED';
 }
 
@@ -72,35 +75,26 @@ export interface NewsPredictionRecord {
   status: NewsPredictionV1['status'];
 }
 
-const SUPPORTED_EVENT_PATTERNS = [
-  /\bcpi\b|consumer price|core inflation|inflation rate/i,
-  /\bpce\b|personal consumption expenditures/i,
-  /\bppi\b|producer price|producer price index/i,
-  /non.?farm|nonfarm|payroll|employment change/i,
-  /unemployment|jobless claims|initial claims|continuing claims/i,
-  /average hourly earnings|wage growth|employment cost/i,
-  /fomc|federal funds rate|fed interest rate|federal reserve rate/i,
-  /fed chair|federal reserve chair|fomc press conference|fed monetary policy/i,
-  /\bgdp\b|gross domestic product/i,
-  /retail sales/i,
-  /ism manufacturing|ism services|ism non.?manufacturing/i,
-];
+const SUPPORTED_CURRENCIES = new Set(['USD', 'EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'NZD', 'CNY']);
 
-export function isSupportedUsdHighImpactEvent(event: MacroCalendarEvent): boolean {
+export function isSupportedNewsHighImpactEvent(event: MacroCalendarEvent): boolean {
+  const currency = event.currency.trim().toUpperCase();
   return (
-    event.currency.toUpperCase() === 'USD' &&
+    SUPPORTED_CURRENCIES.has(currency) &&
     event.impact === 'High' &&
     !event.isAllDayOrTentative &&
     !event.actual?.trim() &&
-    event.timestampUtcMs > Date.now() &&
-    SUPPORTED_EVENT_PATTERNS.some((pattern) => pattern.test(event.title))
+    event.timestampUtcMs > Date.now()
   );
 }
+
+/** Backward-compatible alias for callers from the original USD-only release. */
+export const isSupportedUsdHighImpactEvent = isSupportedNewsHighImpactEvent;
 
 export function getNewsEventFingerprint(event: MacroCalendarEvent): string {
   const normalizedTitle = event.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const releaseMinute = Math.floor(event.timestampUtcMs / 60_000);
-  return `usd:${normalizedTitle}:${releaseMinute}`;
+  return `${event.currency.trim().toUpperCase()}:${normalizedTitle}:${releaseMinute}`;
 }
 
 function isString(value: unknown, max = 1200): value is string {
@@ -127,19 +121,32 @@ export function validateNewsPredictionPayload(
   const reaction = value.marketReaction;
   const plan = value.tradingPlan;
   const probabilities = outcome?.probabilities;
-  const isPolicyEvent = /fomc|federal funds rate|fed interest rate|federal reserve rate|fed monetary policy/i.test(event.title);
-  const allowedOutcomes = isPolicyEvent
-    ? ['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA']
-    : ['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'];
+  const isPolicyEvent = /rate decision|interest rate|policy rate|central bank|monetary policy|minutes|press conference|cash rate|refinancing|deposit facility|bank rate/i.test(event.title);
+  const allowedOutcomes = [
+    'ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS',
+    'HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'STRONGER', 'WEAKER',
+    'INSUFFICIENT_DATA',
+  ];
+  const pairBiases = reaction?.pairBiases;
+  const expectedSymbols = event.affectedPairs.map((pair) => pair.symbol);
+  const validPairBiases = Array.isArray(pairBiases) &&
+    pairBiases.length === expectedSymbols.length &&
+    pairBiases.every((item: any) =>
+      item && expectedSymbols.includes(item.symbol) && isBias(item.bias)
+    ) &&
+    expectedSymbols.every((symbol) => pairBiases.some((item: any) => item.symbol === symbol));
   if (
     !outcome ||
     !allowedOutcomes.includes(outcome.primary) ||
+    (isPolicyEvent && !['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA'].includes(outcome.primary) &&
+      !['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER'].includes(outcome.primary)) ||
     !probabilities ||
     !['positive', 'inline', 'negative'].every((key) => Number.isFinite(probabilities[key]) && probabilities[key] >= 0 && probabilities[key] <= 100) ||
     Math.abs(probabilities.positive + probabilities.inline + probabilities.negative - 100) > 0.01 ||
     !isString(outcome.explanation) ||
     !reaction ||
-    !['usd', 'xauUsd', 'eurUsd', 'gbpUsd', 'usdJpy'].every((key) => isBias(reaction[key])) ||
+    !isBias(reaction.currencyBias) ||
+    !validPairBiases ||
     !isString(reaction.explanation) ||
     !isStringArray(reaction.invalidationConditions) ||
     !plan ||
@@ -160,11 +167,11 @@ export function validateNewsPredictionPayload(
       explanation: outcome.explanation.trim(),
     },
     marketReaction: {
-      usd: reaction.usd,
-      xauUsd: reaction.xauUsd,
-      eurUsd: reaction.eurUsd,
-      gbpUsd: reaction.gbpUsd,
-      usdJpy: reaction.usdJpy,
+      currencyBias: reaction.currencyBias,
+      pairBiases: pairBiases.map((item: { symbol: string; bias: NewsMarketBias }) => ({
+        symbol: item.symbol,
+        bias: item.bias,
+      })),
       explanation: reaction.explanation.trim(),
       invalidationConditions: reaction.invalidationConditions,
     },
