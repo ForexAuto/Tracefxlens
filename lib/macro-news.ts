@@ -254,9 +254,40 @@ const CURRENCY_AFFECTED_PAIRS: Record<string, AffectedPairMapping[]> = {
   ],
 };
 
+const TRACEFX_FOREX_PAIRS = [
+  'EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF', 'AUD/USD', 'USD/CAD',
+  'NZD/USD', 'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 'AUD/JPY', 'CHF/JPY',
+  'EUR/AUD', 'GBP/AUD', 'USD/ZAR', 'USD/MXN',
+] as const;
+
+const TRACEFX_USD_QUOTED_ASSETS = [
+  'XAU/USD', 'XAG/USD', 'WTI/USD', 'BRENT/USD', 'XPT/USD',
+  'NATGAS/USD', 'XCU/USD', 'BTC/USD', 'ETH/USD', 'SOL/USD',
+  'XRP/USD', 'BNB/USD', 'ADA/USD', 'AVAX/USD', 'LINK/USD',
+] as const;
+
 export function getAffectedPairsForCurrency(currency: string): AffectedPairMapping[] {
   const ccy = currency.trim().toUpperCase();
-  return CURRENCY_AFFECTED_PAIRS[ccy] || CURRENCY_AFFECTED_PAIRS.USD;
+  const curated = CURRENCY_AFFECTED_PAIRS[ccy] || [];
+  const universe = ccy === 'USD'
+    ? [...TRACEFX_FOREX_PAIRS, ...TRACEFX_USD_QUOTED_ASSETS]
+    : TRACEFX_FOREX_PAIRS.filter((symbol) => symbol.split('/').includes(ccy));
+  const mapped = universe.map((symbol): AffectedPairMapping => {
+    const [base, quote] = symbol.split('/');
+    const isBase = base === ccy;
+    return {
+      symbol,
+      relationship: isBase
+        ? `Direct ${ccy} exposure · TraceFX supported instrument`
+        : `Inverse ${ccy} exposure · TraceFX supported instrument`,
+      bullishCurrencyEffect: isBase ? 'UP' : 'DOWN',
+    };
+  });
+  const bySymbol = new Map<string, AffectedPairMapping>();
+  [...curated, ...mapped].forEach((pair) => {
+    if (!bySymbol.has(pair.symbol)) bySymbol.set(pair.symbol, pair);
+  });
+  return [...bySymbol.values()];
 }
 
 /**
