@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import type {
   DetectedPlotBounds,
@@ -110,7 +110,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  if (!process.env.GEMINI_API_KEY) {
+  if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json({ signal: draftSignal });
   }
 
@@ -121,15 +121,6 @@ export async function POST(req: NextRequest) {
   if (!refPart || !markedPart) {
     return NextResponse.json({ signal: draftSignal });
   }
-
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 
   const isTopDownCrt = draftSignal.analysisMode === 'top_down_crt';
   const macroTf = draftSignal.crtContext?.macroTimeframe || 'H1';
@@ -226,35 +217,15 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     chartMarkup: draftSignal.chartMarkup,
   });
 
-  const parts: Array<
-    { inlineData: { mimeType: string; data: string } } | { text: string }
-  > = [
-    { inlineData: refPart },
-    { inlineData: markedPart },
-  ];
-  if (zoomPart) {
-    parts.push({ inlineData: zoomPart });
-  }
   const verifyPromptText = `Audit and refine this Draft 1 signal & chartMarkup JSON by comparing Image 2 (drawn overlays) against Image 1 (0..1000 ruler grid):\n${compactDraftContext}`;
-  parts.push({
-    text: verifyPromptText,
-  });
-
-  const verifyCandidates: Array<{
-    model: string;
-    timeoutMs: number;
-    thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
-  }> = [
-    {
-      model: 'gemini-3.8-flash',
-      timeoutMs: 15000,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-    },
-    {
-      model: 'gemini-3.8-flash',
-      timeoutMs: 18000,
-    },
+  const inputContent = [
+    { type: 'input_image', image_url: `data:${refPart.mimeType};base64,${refPart.data}`, detail: 'high' },
+    { type: 'input_image', image_url: `data:${markedPart.mimeType};base64,${markedPart.data}`, detail: 'high' },
+    ...(zoomPart ? [{ type: 'input_image', image_url: `data:${zoomPart.mimeType};base64,${zoomPart.data}`, detail: 'high' }] : []),
+    { type: 'input_text', text: verifyPromptText },
   ];
+
+  const verifyCandidates = [{ timeoutMs: 30000 }, { timeoutMs: 35000 }];
 
   for (const candidate of verifyCandidates) {
     if (req.signal.aborted) break;
@@ -265,20 +236,15 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     req.signal.addEventListener('abort', onParentAbort, { once: true });
 
     try {
-      const response = await ai.models.generateContent({
-        model: candidate.model,
-        contents: { parts },
-        config: {
-          systemInstruction: verifySystemInstruction,
-          temperature: 0.1,
-          responseMimeType: 'application/json',
-          abortSignal: controller.signal,
-          ...(candidate.thinkingConfig
-            ? { thinkingConfig: candidate.thinkingConfig }
-            : {}),
-        },
+      const response = await createOpenAIResponse({
+        instructions: verifySystemInstruction,
+        input: [{ role: 'user', content: inputContent }],
+        responseFormat: 'json_object',
+        reasoningEffort: 'low',
+        maxOutputTokens: 7000,
+        signal: controller.signal,
       });
-      const responseText = response.text || '';
+      const responseText = extractOpenAIOutputText(response);
 
       const rawObj = extractJsonObject(responseText);
       if (!rawObj) continue;

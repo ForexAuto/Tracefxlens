@@ -1,11 +1,4 @@
-import {
-  type Content,
-  type FunctionDeclaration,
-  GoogleGenAI,
-  type Part,
-  ThinkingLevel,
-  Type,
-} from '@google/genai';
+import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
 import { NextRequest } from 'next/server';
 import type {
   TvAgentStep,
@@ -23,16 +16,16 @@ export const dynamic = 'force-dynamic';
 
 const MAX_AGENT_STEPS = 12;
 
-const TV_AGENT_TOOLS: FunctionDeclaration[] = [
+const TV_AGENT_TOOLS: Array<{ name: string; description: string; parameters: Record<string, unknown> }> = [
   {
     name: 'switch_symbol',
     description:
       'Switch the active TradingView chart to any currency pair, commodity, index, stock, or crypto symbol (e.g. "OANDA:XAUUSD", "FX:EURUSD", "BINANCE:BTCUSDT", "NASDAQ:NQ1!").',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         symbol: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'Target TradingView ticker or exchange:ticker, e.g. OANDA:XAUUSD or BTCUSDT.',
         },
@@ -45,10 +38,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Change the active TradingView candle timeframe/interval (e.g. "1m", "5m", "15m", "30m", "1H", "4H", "1D", "1W").',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         timeframe: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Desired timeframe such as 1m, 5m, 15m, 1H, 4H, 1D, 1W.',
         },
       },
@@ -60,15 +53,15 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Open the TradingView Indicators dialog or search and add an indicator (public, built-in, or user invite-only/favorites) onto the chart.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         action: {
-          type: Type.STRING,
+          type: 'string',
           description:
             '"add" to search and click the top matching indicator, or "open_menu" to open the Indicators modal so you can inspect Invite-only/Favorites tabs visually.',
         },
         indicatorQuery: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'Optional indicator search text, e.g. "Relative Strength Index", "Moving Average Exponential", "Smart Money Concepts".',
         },
@@ -81,27 +74,27 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Draw native TradingView objects directly onto the chart canvas using normalized [0..1000] viewport coordinates inspected from the screenshot.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         tool: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'One of: "horizontal_line", "horizontal_ray", "vertical_line", "trendline", "fib_retracement", "rectangle", "long_position", "short_position".',
         },
         startX: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized start X coordinate (0..1000) inside the chart canvas.',
         },
         startY: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized start Y coordinate (0..1000) matching the exact price level / candle wick.',
         },
         endX: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized end X coordinate (0..1000) for two-point tools (trendline, rectangle, fib_retracement).',
         },
         endY: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized end Y coordinate (0..1000) for two-point tools.',
         },
       },
@@ -113,10 +106,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Perform standard TradingView chart view adjustments: reset chart view (Alt+R), zoom in/out, pan left/right, undo last drawing, open alerts dialog (Alt+A), or toggle log scale.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         action: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'One of: "reset_view", "zoom_in", "zoom_out", "pan_left", "pan_right", "undo", "open_alerts", "toggle_log_scale".',
         },
@@ -129,10 +122,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Load a specific TradingView chart layout URL or open the top-right Saved Layouts menu.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         layoutUrlOrName: {
-          type: Type.STRING,
+          type: 'string',
           description:
             'Full https://www.tradingview.com/chart/... URL or the name of the saved layout to open.',
         },
@@ -145,10 +138,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Save the current TradingView chart layout (all drawings, levels, indicators, symbol and interval changes) to the cloud (Ctrl+S / Save Layout). Call this tool whenever any changes are made to the chart so that drawings and setups persist permanently.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         reason: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Reason for saving chart layout (e.g. "Saved trendline and SMC levels").',
         },
       },
@@ -159,35 +152,35 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Open the TradingView Order Ticket (Shift+T) or request permission to submit a BUY/SELL trade order. ALWAYS call this tool with action="submit_order" before clicking any final Buy/Sell order placement button.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         action: {
-          type: Type.STRING,
+          type: 'string',
           description:
             '"open_ticket" to open and inspect the order panel, or "submit_order" right before placing a live or paper trade.',
         },
         side: {
-          type: Type.STRING,
+          type: 'string',
           description: '"BUY" or "SELL".',
         },
         orderType: {
-          type: Type.STRING,
+          type: 'string',
           description: 'e.g. "Market", "Limit", "Stop".',
         },
         quantity: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Order size / units / lots if specified.',
         },
         price: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Entry price if Limit/Stop.',
         },
         stopLoss: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Stop loss level if specified.',
         },
         takeProfit: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Take profit level if specified.',
         },
       },
@@ -199,26 +192,26 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Click any button, menu item, tab, watchlist row, dialog close button, indicator settings icon, or chart coordinate at normalized [0..1000] viewport coordinates.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         x: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized X coordinate from 0 (left edge) to 1000 (right edge).',
         },
         y: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Normalized Y coordinate from 0 (top edge) to 1000 (bottom edge).',
         },
         button: {
-          type: Type.STRING,
+          type: 'string',
           description: '"left" (default) or "right" (context menu).',
         },
         doubleClick: {
-          type: Type.BOOLEAN,
+          type: 'boolean',
           description: 'True to double-click.',
         },
         reason: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Concise plain-English description of what is being clicked (shown to user).',
         },
       },
@@ -230,14 +223,14 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Click-and-drag from (fromX, fromY) to (toX, toY) in normalized [0..1000] coordinates—useful for dragging SL/TP handles on Long/Short Position tools, resizing indicator panes, or panning the chart.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
-        fromX: { type: Type.NUMBER, description: 'Start X (0..1000).' },
-        fromY: { type: Type.NUMBER, description: 'Start Y (0..1000).' },
-        toX: { type: Type.NUMBER, description: 'End X (0..1000).' },
-        toY: { type: Type.NUMBER, description: 'End Y (0..1000).' },
+        fromX: { type: 'number', description: 'Start X (0..1000).' },
+        fromY: { type: 'number', description: 'Start Y (0..1000).' },
+        toX: { type: 'number', description: 'End X (0..1000).' },
+        toY: { type: 'number', description: 'End Y (0..1000).' },
         reason: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Concise description of what is being dragged.',
         },
       },
@@ -249,19 +242,19 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Type text into the currently focused TradingView input field (e.g. alert message, price input, Pine Script editor, quantity box).',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
-        text: { type: Type.STRING, description: 'Text to type.' },
+        text: { type: 'string', description: 'Text to type.' },
         clearFirst: {
-          type: Type.BOOLEAN,
+          type: 'boolean',
           description: 'True to select-all and clear existing input text before typing.',
         },
         pressEnter: {
-          type: Type.BOOLEAN,
+          type: 'boolean',
           description: 'True to press Enter after typing.',
         },
         reason: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Concise description of what is being typed.',
         },
       },
@@ -273,14 +266,14 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Press a keyboard key or shortcut on TradingView (e.g. "Escape", "Enter", "Delete", "Alt+KeyA", "Alt+KeyR", "Control+KeyZ").',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         keys: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Playwright key chord such as "Escape", "Enter", "Alt+KeyR".',
         },
         reason: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Why this key is being pressed.',
         },
       },
@@ -292,16 +285,16 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Scroll mouse wheel at normalized (x, y) to scroll indicator lists, watchlists, or zoom chart candles.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
-        x: { type: Type.NUMBER, description: 'X coordinate (0..1000).' },
-        y: { type: Type.NUMBER, description: 'Y coordinate (0..1000).' },
-        deltaX: { type: Type.NUMBER, description: 'Horizontal scroll delta.' },
+        x: { type: 'number', description: 'X coordinate (0..1000).' },
+        y: { type: 'number', description: 'Y coordinate (0..1000).' },
+        deltaX: { type: 'number', description: 'Horizontal scroll delta.' },
         deltaY: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Vertical scroll delta (positive scrolls down, negative scrolls up).',
         },
-        reason: { type: Type.STRING, description: 'Concise scroll reason.' },
+        reason: { type: 'string', description: 'Concise scroll reason.' },
       },
       required: ['x', 'y', 'deltaY', 'reason'],
     },
@@ -311,10 +304,10 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Pause 1 to 5 seconds when waiting for heavy TradingView indicators, Pine compilation, or broker panels to finish loading.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
-        seconds: { type: Type.NUMBER, description: 'Seconds to wait (1 to 5).' },
-        reason: { type: Type.STRING, description: 'Reason for waiting.' },
+        seconds: { type: 'number', description: 'Seconds to wait (1 to 5).' },
+        reason: { type: 'string', description: 'Reason for waiting.' },
       },
       required: ['seconds', 'reason'],
     },
@@ -324,86 +317,86 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
     description:
       'Generate and render a ready-to-trade setup card below the TradingView chart terminal. Call this tool whenever the user asks for a chart analysis, trade signal, trade setup, entry/SL/TP levels, or market direction.',
     parameters: {
-      type: Type.OBJECT,
+      type: 'object',
       properties: {
         signalType: {
-          type: Type.STRING,
+          type: 'string',
           description: '"BUY", "SELL", or "HOLD".',
         },
         pair: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Symbol, e.g. "XAUUSD" or "EURUSD".',
         },
         timeframe: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Timeframe, e.g. "15m", "1H".',
         },
         currentPrice: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Current price visible on the right-hand price axis or candle close.',
         },
         entryPrice: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Exact recommended entry price.',
         },
         stopLoss: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Exact stop loss price level.',
         },
         takeProfit1: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Take profit 1 (conservative partial exit).',
         },
         takeProfit2: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Take profit 2 (primary structural target).',
         },
         takeProfit3: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Take profit 3 (extended runner objective).',
         },
-        preferredTakeProfit: { type: Type.INTEGER, description: 'Choose 1, 2, or 3 as the single recommended primary take-profit target.' },
-        preferredTakeProfitReason: { type: Type.STRING, description: 'One concise reason this target best balances realistic reach and reward versus risk.' },
+        preferredTakeProfit: { type: 'integer', description: 'Choose 1, 2, or 3 as the single recommended primary take-profit target.' },
+        preferredTakeProfitReason: { type: 'string', description: 'One concise reason this target best balances realistic reach and reward versus risk.' },
         riskRewardRatio: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Calculated risk-to-reward ratio (e.g. "1:2.8").',
         },
         entryTriggerNote: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Technical entry trigger note (e.g. "M15 Bullish CHoCH + FVG Retest").',
         },
         marketStructure: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Market structure summary (e.g. "Bullish Break of Structure").',
         },
         confidenceSummary: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Confidence summary (e.g. "High Confluence").',
         },
         signalConfidence: {
-          type: Type.NUMBER,
+          type: 'number',
           description: 'Integer 1-99 AI estimate of setup quality from confluence and risk/reward; NOT win probability.',
         },
         technicalRationale: {
-          type: Type.ARRAY,
-          items: { type: Type.STRING },
+          type: 'array',
+          items: { type: 'string' },
           description: '2 to 4 technical confluence points.',
         },
         keyLevels: {
-          type: Type.ARRAY,
+          type: 'array',
           items: {
-            type: Type.OBJECT,
+            type: 'object',
             properties: {
-              label: { type: Type.STRING },
-              price: { type: Type.STRING },
-              role: { type: Type.STRING },
+              label: { type: 'string' },
+              price: { type: 'string' },
+              role: { type: 'string' },
             },
             required: ['label', 'price', 'role'],
           },
           description: 'Mapped key price levels with role.',
         },
         invalidationCondition: {
-          type: Type.STRING,
+          type: 'string',
           description: 'Condition that invalidates this trade setup.',
         },
       },
@@ -462,32 +455,26 @@ OPERATING RULES:
 7. CHART PERSISTENCE & AUTO-SAVE MANDATE: Whenever any modifications are made to the chart (adding or removing indicators, drawing trendlines, rays, horizontal levels, rectangles, or switching symbols/timeframes), ALWAYS ensure the chart layout is saved (via save_chart_layout or Ctrl+S) so all user work and drawings persist permanently.
 8. When the user's instruction is fully satisfied, stop calling tools and provide a concise, clear summary of everything you performed and any key chart observations (use clean prose, no filler).`;
 
-function extractBase64FromDataUrl(dataUrl: string): string {
-  const commaIdx = dataUrl.indexOf(',');
-  return commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
-}
-
 /**
  * Strips heavy base64 images from older user turns so multi-step loops stay fast and lean,
  * while strictly keeping all model turns (including thoughtSignature) intact.
  */
-function pruneOlderScreenshots(contents: Content[]): void {
-  for (const turn of contents) {
-    if (turn.role !== 'user' || !Array.isArray(turn.parts)) continue;
-    turn.parts = turn.parts.map((part) => {
-      if (part.inlineData) {
-        return { text: '[Earlier viewport frame superseded by latest live screenshot]' };
-      }
-      return part;
-    });
+function pruneOlderScreenshots(input: any[]): void {
+  for (const item of input) {
+    if (item?.role !== 'user' || !Array.isArray(item.content)) continue;
+    item.content = item.content.map((part: any) =>
+      part?.type === 'input_image'
+        ? { type: 'input_text', text: '[Earlier viewport frame superseded by latest live screenshot]' }
+        : part
+    );
   }
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return new Response(
-      JSON.stringify({ error: 'GEMINI_API_KEY is not configured on the server.' }),
+      JSON.stringify({ error: 'OPENAI_API_KEY is not configured on the server.' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
@@ -518,15 +505,6 @@ export async function POST(req: NextRequest) {
 
   const orderLock = body.orderLock !== false; // default true
   const allowOrderExecution = Boolean(body.allowOrderExecution);
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 
   const encoder = new TextEncoder();
 
@@ -569,7 +547,7 @@ export async function POST(req: NextRequest) {
           pointer: null,
         });
 
-        const contents: Content[] = [];
+        const input: any[] = [];
 
         // Include recent brief conversation context (last 6 messages)
         const recentHistory = Array.isArray(body.history)
@@ -577,28 +555,18 @@ export async function POST(req: NextRequest) {
           : [];
         for (const msg of recentHistory) {
           if (!msg.text?.trim()) continue;
-          contents.push({
-            role: msg.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: msg.text.trim() }],
-          });
+          input.push({ role: msg.role, content: [{ type: 'input_text', text: msg.text.trim() }] });
         }
 
-        contents.push({
+        input.push({
           role: 'user',
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: extractBase64FromDataUrl(initialSnap.frameDataUrl),
-              },
-            },
-            {
-              text: `Current TradingView page title: "${initialSnap.pageTitle}"\nCurrent URL: ${initialSnap.url}\nOrder Safety Lock: ${
-                orderLock && !allowOrderExecution
-                  ? 'ENABLED (must request approval via open_or_submit_order before submitting any trade)'
-                  : 'UNLOCKED (order submission permitted)'
-              }\n\nUser Instruction: ${prompt}`,
-            },
+          content: [
+            { type: 'input_image', image_url: initialSnap.frameDataUrl, detail: 'high' },
+            { type: 'input_text', text: `Current TradingView page title: "${initialSnap.pageTitle}"\nCurrent URL: ${initialSnap.url}\nOrder Safety Lock: ${
+              orderLock && !allowOrderExecution
+                ? 'ENABLED (must request approval via open_or_submit_order before submitting any trade)'
+                : 'UNLOCKED (order submission permitted)'
+            }\n\nUser Instruction: ${prompt}` },
           ],
         });
 
@@ -621,46 +589,45 @@ export async function POST(req: NextRequest) {
                 : `Verifying result & planning step ${stepsExecuted + 1}...`,
           });
 
-          let response;
+          const tools = TV_AGENT_TOOLS.map((tool) => ({
+            type: 'function',
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.parameters,
+            strict: false,
+          }));
+          let response: any;
           try {
-            response = await ai.models.generateContent({
-              model: 'gemini-3.8-flash',
-              contents,
-              config: {
-                systemInstruction: SYSTEM_INSTRUCTION,
-                tools: [{ functionDeclarations: TV_AGENT_TOOLS }],
-                thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-              },
+            response = await createOpenAIResponse({
+              instructions: SYSTEM_INSTRUCTION,
+              input,
+              tools,
+              reasoningEffort: 'medium',
+              maxOutputTokens: 9000,
+              signal: req.signal,
             });
           } catch {
-            // Transient retry on gemini-3.8-flash
             await new Promise((resolve) => setTimeout(resolve, 350));
-            response = await ai.models.generateContent({
-              model: 'gemini-3.8-flash',
-              contents,
-              config: {
-                systemInstruction: SYSTEM_INSTRUCTION,
-                tools: [{ functionDeclarations: TV_AGENT_TOOLS }],
-                thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-              },
+            response = await createOpenAIResponse({
+              instructions: SYSTEM_INSTRUCTION,
+              input,
+              tools,
+              reasoningEffort: 'medium',
+              maxOutputTokens: 9000,
+              signal: req.signal,
             });
           }
 
-          const candidateContent = response.candidates?.[0]?.content;
-          const functionCalls = response.functionCalls;
-
-          if (!functionCalls || functionCalls.length === 0) {
+          const functionCalls = (response.output || []).filter((item: any) => item.type === 'function_call');
+          if (!functionCalls.length) {
             finalSummary =
-              (response.text || '').trim() ||
+              extractOpenAIOutputText(response).trim() ||
               `Completed ${stepsExecuted} action${stepsExecuted === 1 ? '' : 's'} on TradingView.`;
             break;
           }
 
-          if (candidateContent) {
-            contents.push(candidateContent);
-          }
-
-          const responseParts: Part[] = [];
+          input.push(...response.output);
+          const toolOutputs: any[] = [];
           let latestSnapAfterTools = initialSnap;
 
           for (const call of functionCalls) {
@@ -669,7 +636,8 @@ export async function POST(req: NextRequest) {
             }
 
             const toolName = call.name || 'unknown_tool';
-            const callArgs = (call.args || {}) as Record<string, unknown>;
+            let callArgs: Record<string, unknown> = {};
+            try { callArgs = JSON.parse(call.arguments || '{}'); } catch { callArgs = {}; }
 
             // Handle publishing ready-to-trade setup card
             if (toolName === 'generate_trade_setup') {
@@ -799,15 +767,13 @@ export async function POST(req: NextRequest) {
                 },
               });
 
-              responseParts.push({
-                functionResponse: {
-                  id: call.id,
-                  name: toolName,
-                  response: {
-                    ok: true,
-                    result: `Successfully published ready-to-trade setup card below the chart terminal for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}). The user can now inspect the setup card, 1-click mark levels on chart, or execute the order.`,
-                  },
-                },
+              toolOutputs.push({
+                type: 'function_call_output',
+                call_id: call.call_id,
+                output: JSON.stringify({
+                  ok: true,
+                  result: `Successfully published ready-to-trade setup card below the chart terminal for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}). The user can now inspect the setup card, 1-click mark levels on chart, or execute the order.`,
+                }),
               });
               continue;
             }
@@ -937,41 +903,31 @@ export async function POST(req: NextRequest) {
               });
             }
 
-            responseParts.push({
-              functionResponse: {
-                id: call.id,
-                name: toolName,
-                response: {
-                  ok: outcome.ok,
-                  result: outcome.resultMessage,
-                  pageTitle: latestSnapAfterTools.pageTitle,
-                  url: latestSnapAfterTools.url,
-                },
-              },
+            toolOutputs.push({
+              type: 'function_call_output',
+              call_id: call.call_id,
+              output: JSON.stringify({
+                ok: outcome.ok,
+                result: outcome.resultMessage,
+                pageTitle: latestSnapAfterTools.pageTitle,
+                url: latestSnapAfterTools.url,
+              }),
             });
           }
 
-          // Prune older screenshots before attaching the newest live viewport image
-          pruneOlderScreenshots(contents);
+          // Feed tool results back to GPT-6.1 Sol, then attach the newest live viewport.
+          input.push(...toolOutputs);
+          pruneOlderScreenshots(input);
 
           if (latestSnapAfterTools.frameDataUrl) {
-            responseParts.push({
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: extractBase64FromDataUrl(
-                  latestSnapAfterTools.frameDataUrl
-                ),
-              },
-            });
-            responseParts.push({
-              text: `Updated live TradingView screenshot after step ${stepsExecuted}. Page title: "${latestSnapAfterTools.pageTitle}". Verify whether all parts of the user's instruction are complete, or execute the next required action.`,
+            input.push({
+              role: 'user',
+              content: [
+                { type: 'input_image', image_url: latestSnapAfterTools.frameDataUrl, detail: 'high' },
+                { type: 'input_text', text: `Updated live TradingView screenshot after step ${stepsExecuted}. Page title: "${latestSnapAfterTools.pageTitle}". Verify whether all parts of the user's instruction are complete, or execute the next required action.` },
+              ],
             });
           }
-
-          contents.push({
-            role: 'user',
-            parts: responseParts,
-          });
         }
 
         if (hasChartModifications) {

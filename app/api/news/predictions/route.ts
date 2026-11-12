@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchNormalizedMacroCalendar } from '@/lib/forex-factory-adapter';
 import { fetchMacroCorrelationFeed } from '@/lib/macro-correlation';
@@ -140,9 +140,9 @@ export async function POST(req: NextRequest) {
     }
 
     const fingerprint = `${getNewsEventFingerprint(event)}:${selectedPair}`;
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ error: 'GEMINI_API_KEY is not configured.' }, { status: 503 });
+      return NextResponse.json({ error: 'OPENAI_API_KEY is not configured.' }, { status: 503 });
     }
 
     // Reuse the app's existing live macro and instrument OHLC feeds. All fetches
@@ -178,7 +178,6 @@ export async function POST(req: NextRequest) {
           ? 'MEDIUM' as const
           : evidenceBase.quality,
     };
-    const ai = new GoogleGenAI({ apiKey });
     const systemInstruction = `You are TraceFX Lens. Analyse ONLY the selected instrument for the supplied high-impact news event. Return ONLY compact JSON with these keys: signal, confidence, reason, confirmation, invalidation. signal must be BUY, SELL or NO_TRADE. confidence must be an integer from 0 to 100 representing your subjective confidence in this directional assessment, not a statistical win probability. reason, confirmation and invalidation should each be one short sentence. Do not include other instruments, probabilities, long explanations, markdown or extra keys. If evidence is mixed or insufficient, choose NO_TRADE and a low confidence score.`;
     const prompt = [
       `Currency: ${event.currency}`,
@@ -200,18 +199,15 @@ export async function POST(req: NextRequest) {
       'Assess the likely directional reaction for this instrument only. Avoid certainty when evidence is weak.',
     ].join('\n');
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: prompt,
-      config: {
-        systemInstruction,
-        temperature: 0.2,
-        responseMimeType: 'application/json',
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-        abortSignal: req.signal,
-      },
+    const response = await createOpenAIResponse({
+      instructions: systemInstruction,
+      input: prompt,
+      responseFormat: 'json_object',
+      reasoningEffort: 'medium',
+      maxOutputTokens: 1800,
+      signal: req.signal,
     });
-    const raw = extractJson(response.text || '');
+    const raw = extractJson(extractOpenAIOutputText(response));
     const signalValue = raw?.signal;
     const confidence = Number(raw?.confidence);
     if (!raw || (signalValue !== 'BUY' && signalValue !== 'SELL' && signalValue !== 'NO_TRADE') ||
@@ -262,7 +258,7 @@ export async function POST(req: NextRequest) {
         quality: evidence.quality,
         historicalReleaseCount: historicalReleases?.count ?? 0,
       },
-      modelVersion: 'gemini-3.8-flash-single-instrument',
+      modelVersion: 'gpt-6.1-sol-single-instrument',
       status: 'PREDICTED' as const,
     };
     const saved = await createNewsPredictionVersion({

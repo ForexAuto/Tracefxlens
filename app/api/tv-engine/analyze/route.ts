@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
+import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   type KeyPriceLevel,
@@ -74,10 +74,10 @@ RULES:
 8. Ensure all price numbers strictly match the numerical scale of the visible asset (e.g. for Gold/XAUUSD ~2700.00, for EURUSD ~1.0500, for BTCUSD ~85000).`;
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
-      { error: 'GEMINI_API_KEY is not configured on the server.' },
+      { error: 'OPENAI_API_KEY is not configured on the server.' },
       { status: 500 }
     );
   }
@@ -113,15 +113,6 @@ export async function POST(req: NextRequest) {
 
   const { pair, timeframe } = parsePairAndTimeframeFromTitle(pageTitle);
 
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
-
   const base64Data = extractBase64FromDataUrl(frameDataUrl);
 
   const userPrompt = body.customPrompt?.trim()
@@ -129,90 +120,21 @@ export async function POST(req: NextRequest) {
     : `Live TradingView Page: "${pageTitle}"\nDetected Symbol/Timeframe: ${pair} (${timeframe})\n\nAnalyze current candlesticks, market structure, liquidity sweeps, and price action on this TradingView screen. Output the complete ready-to-trade setup card.`;
 
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: base64Data,
-              },
-            },
-            { text: userPrompt },
-          ],
-        },
-      ],
-      config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            isValidChart: { type: Type.BOOLEAN },
-            validationMessage: { type: Type.STRING },
-            signalType: {
-              type: Type.STRING,
-              description: 'Must be "BUY", "SELL", or "HOLD".',
-            },
-            detectedPair: { type: Type.STRING },
-            detectedTimeframe: { type: Type.STRING },
-            currentMarketPrice: { type: Type.STRING },
-            entryPrice: { type: Type.STRING },
-            entryTriggerNote: { type: Type.STRING },
-            stopLoss: { type: Type.STRING },
-            takeProfit1: { type: Type.STRING },
-            takeProfit2: { type: Type.STRING },
-            takeProfit3: { type: Type.STRING },
-            preferredTakeProfit: { type: Type.INTEGER, description: 'Choose 1, 2, or 3 as the single recommended primary take-profit target.' },
-            preferredTakeProfitReason: { type: Type.STRING, description: 'One concise reason this target best balances realistic reach and reward versus risk.' },
-            riskRewardRatio: { type: Type.STRING },
-            marketStructure: { type: Type.STRING },
-            confidenceSummary: { type: Type.STRING },
-            signalConfidence: {
-              type: Type.NUMBER,
-              description: 'Integer 1-99 AI estimate of setup quality, not win probability.',
-            },
-            technicalRationale: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING },
-            },
-            keyLevels: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  label: { type: Type.STRING },
-                  price: { type: Type.STRING },
-                  role: { type: Type.STRING },
-                },
-                required: ['label', 'price', 'role'],
-              },
-            },
-            invalidationCondition: { type: Type.STRING },
-          },
-          required: [
-            'isValidChart',
-            'signalType',
-            'currentMarketPrice',
-            'entryPrice',
-            'stopLoss',
-            'takeProfit1',
-            'takeProfit2',
-            'takeProfit3',
-            'preferredTakeProfit',
-            'preferredTakeProfitReason',
-            'riskRewardRatio',
-            'technicalRationale',
-          ],
-        },
-      },
+    const response = await createOpenAIResponse({
+      instructions: SYSTEM_INSTRUCTION,
+      input: [{
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: `data:image/jpeg;base64,${base64Data}`, detail: 'high' },
+          { type: 'input_text', text: userPrompt },
+        ],
+      }],
+      responseFormat: 'json_object',
+      reasoningEffort: 'medium',
+      maxOutputTokens: 6000,
+      signal: req.signal,
     });
-
-    const text = response.text || '';
+    const text = extractOpenAIOutputText(response);
     let parsed: any;
     try {
       parsed = JSON.parse(text);

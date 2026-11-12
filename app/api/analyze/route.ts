@@ -1,4 +1,4 @@
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { createOpenAIResponseStream, OPENAI_TRADING_MODEL } from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   type AnalysisMode,
@@ -35,26 +35,11 @@ interface ModelCandidate {
   label: string;
   firstChunkTimeoutMs: number;
   stallTimeoutMs: number;
-  thinkingConfig?: {
-    thinkingLevel?: ThinkingLevel;
-    thinkingBudget?: number;
-  };
 }
 
 const MODEL_CANDIDATES: ModelCandidate[] = [
-  {
-    model: 'gemini-3.8-flash',
-    label: 'gemini-3.8-flash',
-    firstChunkTimeoutMs: 18000,
-    stallTimeoutMs: 30000,
-    thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
-  },
-  {
-    model: 'gemini-3.8-flash',
-    label: 'gemini-3.8-flash (retry)',
-    firstChunkTimeoutMs: 22000,
-    stallTimeoutMs: 30000,
-  },
+  { model: OPENAI_TRADING_MODEL, label: OPENAI_TRADING_MODEL, firstChunkTimeoutMs: 30000, stallTimeoutMs: 45000 },
+  { model: OPENAI_TRADING_MODEL, label: `${OPENAI_TRADING_MODEL} (retry)`, firstChunkTimeoutMs: 35000, stallTimeoutMs: 45000 },
 ];
 
 function isRetryableModelError(err: unknown): boolean {
@@ -131,7 +116,7 @@ function formatCleanErrorMessage(err: unknown): string {
     upper.includes('HIGH DEMAND') ||
     upper.includes('OVERLOADED')
   ) {
-    return 'AI vision servers are experiencing temporary high demand right now. Tap Retry Chart Scan in a few seconds.';
+    return 'The AI analysis service is temporarily unavailable. Tap Retry Chart Scan in a few seconds.';
   }
 
   if (
@@ -354,11 +339,11 @@ async function nextChunkWithTimeout<T>(
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.GEMINI_API_KEY) {
+  if (!process.env.OPENAI_API_KEY) {
     return NextResponse.json(
       {
         error:
-          'GEMINI_API_KEY is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets.',
+          'OPENAI_API_KEY is not configured on the server. Add OPENAI_API_KEY in Vercel Settings > Environment Variables.',
       },
       { status: 500 }
     );
@@ -487,15 +472,6 @@ export async function POST(req: NextRequest) {
     Number(macroVisionEnhancement?.subPaneCount ?? 0)
   );
   const macroHasSubPanes = macroSubPaneCount > 0;
-
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
 
   // Build ordered multimodal image stack + dynamic image index mapping
   const imagePartsWithLabels: Array<{
@@ -1268,26 +1244,20 @@ TOP-DOWN MARKET ANALYSIS:
 
             const textPieceIterator: AsyncIterator<string> = (async function* () {
               let connectTimer: ReturnType<typeof setTimeout> | null = null;
-              const multimodalParts: Array<
-                | { inlineData: { mimeType: string; data: string } }
-                | { text: string }
-              > = imagePartsWithLabels.map((item) => item.part);
-              multimodalParts.push({ text: promptText });
+              const multimodalParts: Array<Record<string, string>> = imagePartsWithLabels.map((item) => ({
+                type: 'input_image',
+                image_url: `data:${item.part.inlineData.mimeType};base64,${item.part.inlineData.data}`,
+                detail: 'high',
+              }));
+              multimodalParts.push({ type: 'input_text', text: promptText });
 
               const responseStream = await Promise.race([
-                ai.models.generateContentStream({
-                  model: candidate.model,
-                  contents: {
-                    parts: multimodalParts,
-                  },
-                  config: {
-                    systemInstruction,
-                    temperature: 0.2,
-                    abortSignal: attemptController.signal,
-                    ...(candidate.thinkingConfig
-                      ? { thinkingConfig: candidate.thinkingConfig }
-                      : {}),
-                  },
+                createOpenAIResponseStream({
+                  instructions: systemInstruction,
+                  input: [{ role: 'user', content: multimodalParts }],
+                  reasoningEffort: 'medium',
+                  maxOutputTokens: 12000,
+                  signal: attemptController.signal,
                 }),
                 new Promise<never>((_, reject) => {
                   connectTimer = setTimeout(() => {
