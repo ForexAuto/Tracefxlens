@@ -530,7 +530,7 @@ export function HistoryWorkspace() {
             </button>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
             {filteredRecords.map((rec) => {
               const dirMeta = getDirectionVisual(rec.signalType);
               const DirIcon = dirMeta.Icon;
