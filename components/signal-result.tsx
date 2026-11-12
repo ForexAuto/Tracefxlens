@@ -106,7 +106,7 @@ export function SignalResult({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
   const [showAllLevels, setShowAllLevels] = useState<boolean>(false);
-  const [liveQuote, setLiveQuote] = useState<{ bid: string; ask: string; timestamp: string } | null>(null);
+  const [liveQuote, setLiveQuote] = useState<{ bid: string; ask: string; timestamp: string; source: string; stale: boolean } | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -119,7 +119,7 @@ export function SignalResult({
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Live quote unavailable');
         if (active) {
-          setLiveQuote({ bid: String(data.bid), ask: String(data.ask), timestamp: String(data.timestamp) });
+          setLiveQuote({ bid: String(data.bid), ask: String(data.ask), timestamp: String(data.timestamp), source: String(data.source || 'Public market feed'), stale: Boolean(data.stale) });
           setQuoteError(null);
         }
       } catch (error) {
@@ -421,6 +421,9 @@ export function SignalResult({
                 <div className="text-xs font-semibold uppercase tracking-wider text-sky-300">Ask</div>
                 <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.ask}</div>
               </div>
+            </div>
+            <div className={`mt-2 text-[10px] ${liveQuote.stale ? 'text-amber-300' : 'text-slate-500'}`}>
+              {liveQuote.stale ? 'Quote may be delayed' : 'Live quote'} · {liveQuote.source}
             </div>
           ) : (
             <div>
