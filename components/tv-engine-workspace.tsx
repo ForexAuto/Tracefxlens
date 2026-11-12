@@ -674,7 +674,7 @@ export function TvEngineWorkspace() {
         <div className="mb-5 flex flex-col justify-between gap-2 sm:flex-row sm:items-end">
           <div>
             <h1 className="font-[family-name:var(--font-display)] text-xl sm:text-2xl font-bold tracking-tight text-white [text-wrap:balance]">
-              TradingView Autonomous Control Engine
+              TradingView Chart Analysis Engine
             </h1>
             <p className="mt-1 text-xs sm:text-sm text-slate-400 max-w-2xl">
               Live TradingView chart connection, AI technical analysis, trade setups, and essential chart actions in one focused workspace.
