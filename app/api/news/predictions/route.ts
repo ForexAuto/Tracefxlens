@@ -137,7 +137,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'The AI returned an invalid signal. Please try again.' }, { status: 502 });
     }
 
-    const signal = signalValue;
+    const signal: 'BUY' | 'SELL' | 'NO_TRADE' = signalValue;
     const shortText = (value: unknown, fallback: string) =>
       typeof value === 'string' && value.trim() ? value.trim().slice(0, 240) : fallback;
     const bias: NewsMarketBias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
