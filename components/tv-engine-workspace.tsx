@@ -1064,9 +1064,8 @@ export function TvEngineWorkspace() {
               </div>
             </div>
           )}
+          </div>
         </div>
-
-
       </main>
 
       {/* Connect Session Modal */}
