@@ -39,6 +39,10 @@ function sanitizeIncomingRecord(raw: unknown): SignalHistoryRecord | null {
     takeProfit1: String(r.takeProfit1 || '—').slice(0, 40),
     takeProfit2: String(r.takeProfit2 || '—').slice(0, 40),
     takeProfit3: String(r.takeProfit3 || '—').slice(0, 40),
+    preferredTakeProfit: [1, 2, 3].includes(Number(r.preferredTakeProfit))
+      ? (Number(r.preferredTakeProfit) as 1 | 2 | 3)
+      : undefined,
+    preferredTakeProfitReason: String(r.preferredTakeProfitReason || '').slice(0, 300) || undefined,
     riskRewardRatio: String(r.riskRewardRatio || '1 : 2.0').slice(0, 32),
     marketStructure: String(r.marketStructure || '').slice(0, 140),
     confidenceSummary: String(r.confidenceSummary || '').slice(0, 140),
