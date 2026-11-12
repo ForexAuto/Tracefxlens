@@ -118,72 +118,45 @@ export function validateNewsPredictionPayload(
 } | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const value = raw as Record<string, any>;
-  const outcome = value.outcome;
-  const reaction = value.marketReaction;
-  const plan = value.tradingPlan;
-  const probabilities = outcome?.probabilities;
-  const isPolicyEvent = /rate decision|interest rate|policy rate|central bank|monetary policy|minutes|press conference|cash rate|refinancing|deposit facility|bank rate/i.test(event.title);
-  const allowedOutcomes = isPolicyEvent
-    ? ['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA']
-    : ['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'];
-  const suppliedPairBiases = Array.isArray(reaction?.pairBiases) ? reaction.pairBiases : [];
-  const expectedPairs = event.affectedPairs;
+  const reaction = value.marketReaction || {};
+  const currencyBias = reaction.currencyBias || value.currencySignal;
+  const supplied = Array.isArray(reaction.pairBiases) ? reaction.pairBiases : Array.isArray(value.pairSignals) ? value.pairSignals : [];
+  const expectedPairs = event.affectedPairs.slice(0, 5);
   const expectedSymbols = expectedPairs.map((pair) => pair.symbol);
-  // Gemini may omit symbols when an event affects a large instrument universe.
-  const validSuppliedPairBiases = suppliedPairBiases.every((item: any) =>
-    item && expectedSymbols.includes(item.symbol) && isBias(item.bias)
+  const validSupplied = supplied.every((item: any) =>
+    item && expectedSymbols.includes(item.symbol) && isBias(item.bias || item.signal)
   );
-  const derivePairBias = (pair: (typeof expectedPairs)[number]): NewsMarketBias => {
-    if (!isBias(reaction?.currencyBias) || reaction.currencyBias === 'UNCONFIRMED' || reaction.currencyBias === 'NEUTRAL') {
-      return reaction?.currencyBias === 'NEUTRAL' ? 'NEUTRAL' : 'UNCONFIRMED';
+  if (!isBias(currencyBias) || !validSupplied) return null;
+  const pairBiases = expectedPairs.map((pair) => {
+    const item = supplied.find((candidate: any) => candidate.symbol === pair.symbol);
+    let bias: NewsMarketBias = item ? (item.bias || item.signal) : 'UNCONFIRMED';
+    if (!item && currencyBias !== 'UNCONFIRMED' && currencyBias !== 'NEUTRAL') {
+      bias = pair.bullishCurrencyEffect === 'UP'
+        ? currencyBias
+        : currencyBias === 'BULLISH' ? 'BEARISH' : 'BULLISH';
     }
-    if (pair.bullishCurrencyEffect === 'UP') return reaction.currencyBias;
-    return reaction.currencyBias === 'BULLISH' ? 'BEARISH' : 'BULLISH';
-  };
-  const normalizedPairBiases = expectedPairs.map((pair) => {
-    const supplied = suppliedPairBiases.find((item: any) => item?.symbol === pair.symbol && isBias(item?.bias));
-    return { symbol: pair.symbol, bias: supplied?.bias || derivePairBias(pair) };
+    return { symbol: pair.symbol, bias };
   });
-  if (
-    !outcome ||
-    !allowedOutcomes.includes(outcome.primary) ||
-    !probabilities ||
-    !['positive', 'inline', 'negative'].every((key) => Number.isFinite(probabilities[key]) && probabilities[key] >= 0 && probabilities[key] <= 100) ||
-    Math.abs(probabilities.positive + probabilities.inline + probabilities.negative - 100) > 0.01 ||
-    !isString(outcome.explanation) ||
-    !reaction ||
-    !isBias(reaction.currencyBias) ||
-    !validSuppliedPairBiases ||
-    !isString(reaction.explanation) ||
-    !isStringArray(reaction.invalidationConditions) ||
-    !plan ||
-    !isStringArray(plan.preferredInstruments) ||
-    !isStringArray(plan.confirmationConditions) ||
-    !isString(plan.entryApproach) ||
-    !isStringArray(plan.risks)
-  ) return null;
-
+  const direction = currencyBias === 'BULLISH' ? 'ABOVE_EXPECTATIONS'
+    : currencyBias === 'BEARISH' ? 'BELOW_EXPECTATIONS' : 'INSUFFICIENT_DATA';
+  const probability = { positive: 34, inline: 33, negative: 33 };
   return {
     outcome: {
-      primary: outcome.primary,
-      probabilities: {
-        positive: probabilities.positive,
-        inline: probabilities.inline,
-        negative: probabilities.negative,
-      },
-      explanation: outcome.explanation.trim(),
+      primary: direction,
+      probabilities: probability,
+      explanation: 'Compact AI signal. Review the pair directions and confirm with price action before trading.',
     },
     marketReaction: {
-      currencyBias: reaction.currencyBias,
-      pairBiases: normalizedPairBiases,
-      explanation: reaction.explanation.trim(),
-      invalidationConditions: reaction.invalidationConditions,
+      currencyBias,
+      pairBiases,
+      explanation: 'Directional pair signals based on the supplied calendar event.',
+      invalidationConditions: [],
     },
     tradingPlan: {
-      preferredInstruments: plan.preferredInstruments,
-      confirmationConditions: plan.confirmationConditions,
-      entryApproach: plan.entryApproach.trim(),
-      risks: plan.risks,
+      preferredInstruments: pairBiases.filter((item) => item.bias === 'BULLISH' || item.bias === 'BEARISH').map((item) => item.symbol),
+      confirmationConditions: [],
+      entryApproach: 'Wait for post-release price confirmation; do not enter on the forecast alone.',
+      risks: ['News volatility and spread expansion can cause slippage.'],
     },
   };
 }
