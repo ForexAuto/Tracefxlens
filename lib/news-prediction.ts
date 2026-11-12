@@ -94,7 +94,8 @@ export const isSupportedUsdHighImpactEvent = isSupportedNewsHighImpactEvent;
 export function getNewsEventFingerprint(event: MacroCalendarEvent): string {
   const normalizedTitle = event.title.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const releaseMinute = Math.floor(event.timestampUtcMs / 60_000);
-  return `${event.currency.trim().toUpperCase()}:${normalizedTitle}:${releaseMinute}`;
+  const currency = event.currency.trim().toUpperCase();
+  return `${currency === 'USD' ? 'usd' : currency}:${normalizedTitle}:${releaseMinute}`;
 }
 
 function isString(value: unknown, max = 1200): value is string {
@@ -122,11 +123,9 @@ export function validateNewsPredictionPayload(
   const plan = value.tradingPlan;
   const probabilities = outcome?.probabilities;
   const isPolicyEvent = /rate decision|interest rate|policy rate|central bank|monetary policy|minutes|press conference|cash rate|refinancing|deposit facility|bank rate/i.test(event.title);
-  const allowedOutcomes = [
-    'ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS',
-    'HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'STRONGER', 'WEAKER',
-    'INSUFFICIENT_DATA',
-  ];
+  const allowedOutcomes = isPolicyEvent
+    ? ['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA']
+    : ['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'];
   const pairBiases = reaction?.pairBiases;
   const expectedSymbols = event.affectedPairs.map((pair) => pair.symbol);
   const validPairBiases = Array.isArray(pairBiases) &&
@@ -138,8 +137,6 @@ export function validateNewsPredictionPayload(
   if (
     !outcome ||
     !allowedOutcomes.includes(outcome.primary) ||
-    (isPolicyEvent && !['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA'].includes(outcome.primary) &&
-      !['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER'].includes(outcome.primary)) ||
     !probabilities ||
     !['positive', 'inline', 'negative'].every((key) => Number.isFinite(probabilities[key]) && probabilities[key] >= 0 && probabilities[key] <= 100) ||
     Math.abs(probabilities.positive + probabilities.inline + probabilities.negative - 100) > 0.01 ||
