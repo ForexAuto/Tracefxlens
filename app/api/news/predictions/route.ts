@@ -108,7 +108,9 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'The calendar feed does not yet contain both the actual release and consensus forecast.' }, { status: 409 });
       }
       const fingerprint = getNewsEventFingerprint(event);
-      const records = (await listNewsPredictions(100)).filter((item) => item.eventFingerprint === fingerprint);
+      const records = (await listNewsPredictions(100)).filter((item) =>
+        item.eventFingerprint === fingerprint || item.eventFingerprint.startsWith(`${fingerprint}:`)
+      );
       if (!records.length) {
         return NextResponse.json({ error: 'No saved AI prediction exists for this event.' }, { status: 404 });
       }
