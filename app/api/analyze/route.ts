@@ -691,7 +691,7 @@ Line 4 (Step 4 Directional Signal Classification):
 Line 5 (Step 5 Entry, Stop-Loss & TP1-TP3 Validation):
 {"event":"step","step":5,"finding":"<1 specific sentence confirming exact Entry, SL, and TP1-TP3 price ordering invariants and calculated R:R ratio>"}
 
-Line 6 (Final Validated Signal Ticket + Evidence-Based Spatial Chart Markup in [0..1000] image space where x:0=left..1000=right, y:0=top..1000=bottom; replace every <num> with REAL measured numbers from the ruler grid & [T#]/[H#]/[L#]/[G#] anchors — NEVER invent placeholder coordinates):
+Line 6 (Final Validated Trading Signal — market analysis and trade levels only):
 {"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"<string>","currentMarketPrice":"<exact price>","entryPrice":"<exact price>","entryTriggerNote":"<1 concise sentence>","stopLoss":"<exact price>","takeProfit1":"<exact price>","takeProfit2":"<exact price>","takeProfit3":"<exact price>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise structure-based reason>","riskRewardRatio":"<1 : X.X>","marketStructure":"<short label>","confidenceSummary":"<short confluence label>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"technicalRationale":["<observation 1>","<observation 2>","<observation 3>","<observation 4>"],"keyLevels":[{"label":"<zone/OB/FVG/liquidity name>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise invalidation sentence>"}
 
 MARKET ANALYSIS ONLY:
@@ -778,7 +778,7 @@ TOP-DOWN MARKET ANALYSIS:
           ? `Connected to Top-Down CRT gatekeeper — calibrating ${selectedPair} ${macroTf} macro & ${executionTf} execution axes${
               ohlcAssistEnabled ? ' + spot OHLC & DXY/US10Y...' : '...'
             }`
-          : `Connected to AI gatekeeper — calibrating ${selectedPair} ruler grid & axis${
+          : `Connected to AI gatekeeper — reading ${selectedPair} chart structure and price action${
               ohlcAssistEnabled ? ' + spot OHLC & DXY/US10Y...' : '...'
             }`,
       });
@@ -1352,7 +1352,7 @@ TOP-DOWN MARKET ANALYSIS:
             }
 
             lastError = new Error(
-              'MODEL_STREAM_ENDED_EARLY: Stream closed before final signal coordinates.'
+              'MODEL_STREAM_ENDED_EARLY: Stream closed before final signal.'
             );
             if (attempt < MODEL_CANDIDATES.length - 1) {
               continue;
