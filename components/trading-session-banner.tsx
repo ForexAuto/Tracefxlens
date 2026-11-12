@@ -73,7 +73,7 @@ export function TradingSessionHeader({
           Forex · Commodities · Crypto
         </p>
         <h1 className="mt-0.5 font-[family-name:var(--font-display)] text-2xl sm:text-3xl font-bold tracking-tight text-white [text-wrap:balance]">
-          AI Chart Signal &amp; Structure Analysis
+          Chart Intelligence &amp; Market Structure
         </h1>
       </div>
 
