@@ -243,6 +243,7 @@ export function TvEngineWorkspace() {
         }));
       }
       setManualMode(false);
+      setTurns([]);
     } catch {
       // ignore
     }
@@ -1036,7 +1037,7 @@ export function TvEngineWorkspace() {
             </div>
           )}
 
-          {pendingOrderTurn?.pendingOrder && !isAgentRunning && (
+          {isConnected && pendingOrderTurn?.pendingOrder && !isAgentRunning && (
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
               <div className="text-sm font-semibold text-amber-200">Order approval required</div>
               <p className="mt-1 text-xs leading-relaxed text-slate-300">
