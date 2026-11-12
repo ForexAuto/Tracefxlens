@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import {
   ArrowUpRight,
@@ -106,6 +106,31 @@ export function SignalResult({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
   const [showAllLevels, setShowAllLevels] = useState<boolean>(false);
+  const [liveQuote, setLiveQuote] = useState<{ bid: string; ask: string; timestamp: string } | null>(null);
+  const [quoteError, setQuoteError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const pair = signal?.detectedPair || selectedPair;
+    if (!pair) return;
+    let active = true;
+    const loadQuote = async () => {
+      try {
+        const response = await fetch(`/api/market-quote?pair=${encodeURIComponent(pair)}`, { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || 'Live quote unavailable');
+        if (active) {
+          setLiveQuote({ bid: String(data.bid), ask: String(data.ask), timestamp: String(data.timestamp) });
+          setQuoteError(null);
+        }
+      } catch (error) {
+        if (active) setQuoteError(error instanceof Error ? error.message : 'Live quote unavailable');
+      }
+    };
+    setLiveQuote(null);
+    void loadQuote();
+    const timer = window.setInterval(loadQuote, 5000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [signal?.detectedPair, selectedPair]);
 
   const structureCounts = useMemo(
     () => getStructureLayerCounts(signal),
@@ -381,62 +406,28 @@ export function SignalResult({
         </div>
       </div>
 
-      {/* Take-Profit Exit Targets */}
-      <div className="border-t border-slate-800/80 p-5 sm:p-6">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-slate-300">{isTopDownCrt ? `${macroTfLabel} Macro Draw on Liquidity Targets` : 'Take-Profit Exit Targets'}</h3>
-          <span className="text-xs text-slate-500">Tap level to copy</span>
-        </div>
-        {signal.preferredTakeProfit && (
-        <div className="mb-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.08] p-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">AI Recommended Main Target</span>
-            <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-300">TP {signal.preferredTakeProfit}</span>
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-slate-200">{signal.preferredTakeProfitReason || 'Selected by the model as the preferred target for this setup.'}</p>
-        </div>
-      )}
-        <div className="divide-y divide-slate-800/70">
-          {[
-            { key: 'tp1', code: 'TP 1', role: isTopDownCrt ? `${macroTfLabel} CRT 50% Equilibrium / Internal Target` : 'Conservative Partial Exit', price: signal.takeProfit1, number: 1 },
-            { key: 'tp2', code: 'TP 2', role: isTopDownCrt ? `Opposing ${macroTfLabel} CRT Range Extreme` : 'Primary Structural Target', price: signal.takeProfit2, number: 2 },
-            { key: 'tp3', code: 'TP 3', role: isTopDownCrt ? `External ${macroTfLabel} Draw on Liquidity` : 'Extended Runner Objective', price: signal.takeProfit3, number: 3 },
-          ].map((tp) => {
-            const tpNum = parseNumericPrice(tp.price);
-            const delta = formatPctDelta(entryNum, tpNum);
-            const isPreferred = signal.preferredTakeProfit === tp.number;
-            return (
-              <div key={tp.key} className={`flex min-h-[52px] items-center justify-between gap-3 py-2 ${isPreferred ? 'rounded-lg bg-emerald-500/[0.06] px-2 ring-1 ring-inset ring-emerald-400/40' : ''}`}>
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-[family-name:var(--font-mono)] text-xs font-semibold text-emerald-400 tabular-nums">{tp.code}</span>
-                    <span className="text-slate-600" aria-hidden="true">·</span>
-                    <span className="truncate text-xs text-slate-400">{tp.role}</span>
-                    {isPreferred && <span className="rounded-full bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-300">Use this</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {delta && <span className="hidden sm:inline font-[family-name:var(--font-mono)] text-xs text-slate-500 tabular-nums">{delta}</span>}
-                  <span className="font-[family-name:var(--font-mono)] text-base font-semibold text-emerald-300 tabular-nums">{tp.price}</span>
-                  <button type="button" onClick={() => handleCopyValue(tp.key, tp.price)} aria-label={`Copy ${tp.code} price`} className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100">
-                    {copiedKey === tp.key ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-
       {/* Primary Execution Coordinates: Current Price · Entry · Stop Loss */}
       <div className="grid grid-cols-1 divide-y divide-slate-800/80 border-t border-slate-800/80 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
         {/* Current Price */}
-        <div className="flex items-center justify-between p-4 sm:block sm:p-5">
-          <div className="text-xs text-slate-400">Current Market</div>
-          <div className="mt-0.5 font-[family-name:var(--font-mono)] text-base sm:text-lg font-semibold text-slate-200 tabular-nums">
-            {signal.currentMarketPrice}
-          </div>
+        <div className="flex flex-col justify-center gap-3 p-4 sm:col-span-1 sm:p-5">
+          <div className="text-lg font-semibold text-slate-200">Current Market</div>
+          {liveQuote ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-rose-300">Bid</div>
+                <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.bid}</div>
+              </div>
+              <div>
+                <div className="text-xs font-semibold uppercase tracking-wider text-sky-300">Ask</div>
+                <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.ask}</div>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{signal.currentMarketPrice}</div>
+              <div className="mt-1 text-[11px] text-amber-300">{quoteError || 'Waiting for live Bid/Ask quote…'} · Chart reference shown</div>
+            </div>
+          )}
         </div>
 
         {/* Entry Point */}
@@ -497,6 +488,53 @@ export function SignalResult({
         </div>
       </div>
 
+
+      {/* Take-Profit Exit Targets */}
+      <div className="border-t border-slate-800/80 p-5 sm:p-6">
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-xs font-semibold text-slate-300">{isTopDownCrt ? `${macroTfLabel} Macro Draw on Liquidity Targets` : 'Take-Profit Exit Targets'}</h3>
+          <span className="text-xs text-slate-500">Tap level to copy</span>
+        </div>
+        {signal.preferredTakeProfit && (
+        <div className="mb-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.08] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">AI Recommended Main Target</span>
+            <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-300">TP {signal.preferredTakeProfit}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-slate-200">{signal.preferredTakeProfitReason || 'Selected by the model as the preferred target for this setup.'}</p>
+        </div>
+      )}
+        <div className="divide-y divide-slate-800/70">
+          {[
+            { key: 'tp1', code: 'TP 1', role: isTopDownCrt ? `${macroTfLabel} CRT 50% Equilibrium / Internal Target` : 'Conservative Partial Exit', price: signal.takeProfit1, number: 1 },
+            { key: 'tp2', code: 'TP 2', role: isTopDownCrt ? `Opposing ${macroTfLabel} CRT Range Extreme` : 'Primary Structural Target', price: signal.takeProfit2, number: 2 },
+            { key: 'tp3', code: 'TP 3', role: isTopDownCrt ? `External ${macroTfLabel} Draw on Liquidity` : 'Extended Runner Objective', price: signal.takeProfit3, number: 3 },
+          ].map((tp) => {
+            const tpNum = parseNumericPrice(tp.price);
+            const delta = formatPctDelta(entryNum, tpNum);
+            const isPreferred = signal.preferredTakeProfit === tp.number;
+            return (
+              <div key={tp.key} className={`flex min-h-[52px] items-center justify-between gap-3 py-2 ${isPreferred ? 'rounded-lg bg-emerald-500/[0.06] px-2 ring-1 ring-inset ring-emerald-400/40' : ''}`}>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-[family-name:var(--font-mono)] text-xs font-semibold text-emerald-400 tabular-nums">{tp.code}</span>
+                    <span className="text-slate-600" aria-hidden="true">·</span>
+                    <span className="truncate text-xs text-slate-400">{tp.role}</span>
+                    {isPreferred && <span className="rounded-full bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-300">Use this</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {delta && <span className="hidden sm:inline font-[family-name:var(--font-mono)] text-xs text-slate-500 tabular-nums">{delta}</span>}
+                  <span className="font-[family-name:var(--font-mono)] text-base font-semibold text-emerald-300 tabular-nums">{tp.price}</span>
+                  <button type="button" onClick={() => handleCopyValue(tp.key, tp.price)} aria-label={`Copy ${tp.code} price`} className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100">
+                    {copiedKey === tp.key ? <Check className="h-4 w-4 text-emerald-400" /> : <Copy className="h-4 w-4" />}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
 
       {signal.visionVerification && (() => {
