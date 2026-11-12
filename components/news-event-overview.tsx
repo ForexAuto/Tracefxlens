@@ -16,7 +16,7 @@ import {
   formatFullDateTimeInZone,
   formatRelativeCountdown,
 } from '@/lib/macro-news';
-import { isSupportedUsdHighImpactEvent, getNewsEventFingerprint, type NewsPredictionRecord } from '@/lib/news-prediction';
+import { isSupportedNewsHighImpactEvent, getNewsEventFingerprint, type NewsPredictionRecord } from '@/lib/news-prediction';
 import type { NewsPredictionEvaluation } from '@/lib/news-prediction-evaluation';
 
 interface NewsEventOverviewProps {
@@ -78,7 +78,7 @@ export function NewsEventOverview({
     setNewsEvaluation(null);
     setEvaluationLoading(false);
     setPredictionError(null);
-    if (!event || event.currency !== 'USD') return () => { active = false; };
+    if (!event) return () => { active = false; };
     const fingerprint = getNewsEventFingerprint(event);
     fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}`, { cache: 'no-store' })
       .then(async (response) => {
@@ -312,14 +312,13 @@ export function NewsEventOverview({
       )}
 
       {/* 5. Assisted AI News Prediction */}
-      {event.currency === 'USD' && (
-        <section className="p-5 sm:p-6 space-y-3" aria-label="AI news prediction">
+      <section className="p-5 sm:p-6 space-y-3" aria-label="AI news prediction">
           <div className="flex items-center justify-between gap-2">
             <div>
               <h3 className="text-xs font-semibold text-slate-100">AI News Prediction</h3>
               <p className="mt-1 text-[11px] text-slate-500">Pre-release economic forecast and market scenarios</p>
             </div>
-            <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-300">USD V1</span>
+            <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-300">{event.currency} · GLOBAL V2</span>
           </div>
 
           {newsPrediction ? (
@@ -349,18 +348,21 @@ export function NewsEventOverview({
               <p className="text-xs leading-relaxed text-slate-300">{newsPrediction.prediction.outcome.explanation}</p>
               <div className="border-t border-slate-800 pt-3 space-y-2">
                 <div className="text-[11px] font-semibold text-slate-200">Expected market reaction</div>
-                {([
-                  ['USD', newsPrediction.prediction.marketReaction.usd],
-                  ['XAU/USD', newsPrediction.prediction.marketReaction.xauUsd],
-                  ['EUR/USD', newsPrediction.prediction.marketReaction.eurUsd],
-                  ['GBP/USD', newsPrediction.prediction.marketReaction.gbpUsd],
-                  ['USD/JPY', newsPrediction.prediction.marketReaction.usdJpy],
-                ] as const).map(([symbol, bias]) => (
-                  <div key={symbol} className="flex items-center justify-between text-xs">
-                    <span className="text-slate-400">{symbol}</span>
-                    <span className={bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>{bias}</span>
-                  </div>
-                ))}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-slate-400">{event.currency} outlook</span>
+                  <span className={newsPrediction.prediction.marketReaction.currencyBias === 'BULLISH' ? 'text-emerald-400' : newsPrediction.prediction.marketReaction.currencyBias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>
+                    {newsPrediction.prediction.marketReaction.currencyBias || (event.currency === 'USD' ? newsPrediction.prediction.marketReaction.usd : 'UNCONFIRMED')}
+                  </span>
+                </div>
+                {event.affectedPairs.map((pair) => {
+                  const bias = newsPrediction.prediction.marketReaction.pairBiases?.find((item) => item.symbol === pair.symbol)?.bias || 'UNCONFIRMED';
+                  return (
+                    <div key={pair.symbol} className="flex items-center justify-between text-xs">
+                      <span className="text-slate-400">{pair.symbol}</span>
+                      <span className={bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>{bias}</span>
+                    </div>
+                  );
+                })}
                 <p className="text-xs leading-relaxed text-slate-400">{newsPrediction.prediction.marketReaction.explanation}</p>
               </div>
               <div className="border-t border-slate-800 pt-3 space-y-2">
@@ -409,7 +411,7 @@ export function NewsEventOverview({
           {predictionError && <p role="alert" className="text-xs leading-relaxed text-rose-300">{predictionError}</p>}
           <button
             type="button"
-            disabled={predictionLoading || !isSupportedUsdHighImpactEvent(event)}
+            disabled={predictionLoading || !isSupportedNewsHighImpactEvent(event)}
             onClick={() => void generateNewsPrediction()}
             className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-40"
           >
@@ -417,7 +419,7 @@ export function NewsEventOverview({
             {predictionLoading ? 'Generating forecast...' : newsPrediction ? 'Refresh prediction · save new version' : 'Generate AI prediction'}
           </button>
           {!isSupportedUsdHighImpactEvent(event) && !newsPrediction && (
-            <p className="text-[10px] text-slate-500">Available for supported upcoming USD high-impact releases only.</p>
+            <p className="text-[10px] text-slate-500">Available for upcoming high-impact releases across supported major currencies.</p>
           )}
           {newsPrediction && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
             <button
@@ -431,7 +433,6 @@ export function NewsEventOverview({
           )}
           <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
         </section>
-      )}
 
 
       {/* 3. Official Macroeconomic Overview & Specifications */}
