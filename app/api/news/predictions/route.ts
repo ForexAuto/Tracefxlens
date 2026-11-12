@@ -4,7 +4,7 @@ import { fetchNormalizedMacroCalendar } from '@/lib/forex-factory-adapter';
 import {
   buildNewsEvidenceSnapshot,
   getNewsEventFingerprint,
-  isSupportedUsdHighImpactEvent,
+  isSupportedNewsHighImpactEvent,
   validateNewsPredictionPayload,
 } from '@/lib/news-prediction';
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
@@ -52,8 +52,8 @@ export async function POST(req: NextRequest) {
 
     const calendar = await fetchNormalizedMacroCalendar({ forceRefresh: true });
     const event = calendar.events.find((candidate) => candidate.eventId === eventId);
-    if (!event || event.currency.toUpperCase() !== 'USD' || event.impact !== 'High' || event.isAllDayOrTentative) {
-      return NextResponse.json({ error: 'This is not a supported USD high-impact calendar event.' }, { status: 400 });
+    if (!event || !/^[A-Z]{3}$/.test(event.currency.toUpperCase()) || event.impact !== 'High' || event.isAllDayOrTentative) {
+      return NextResponse.json({ error: 'This is not a supported high-impact currency event.' }, { status: 400 });
     }
 
     if (body?.action === 'evaluate') {
@@ -78,9 +78,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ evaluations, evaluatedCount: evaluations.length });
     }
 
-    if (!isSupportedUsdHighImpactEvent(event)) {
+    if (!isSupportedNewsHighImpactEvent(event)) {
       return NextResponse.json(
-        { error: 'This event is not an eligible upcoming USD high-impact release, or it has already been released.' },
+        { error: 'This event is not an eligible upcoming high-impact release for a supported currency, or it has already been released.' },
         { status: 400 }
       );
     }
@@ -93,8 +93,9 @@ export async function POST(req: NextRequest) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const systemInstruction = `You are TraceFX Lens News Prediction Engine v1. Produce a rigorous pre-release forecast using ONLY the supplied evidence. Do not browse or invent data. Missing live DXY, Treasury yield and positioning data must remain explicit. Estimate the economic release relative to consensus, separately from market direction. For ordinary numeric indicators use ABOVE_EXPECTATIONS, IN_LINE, BELOW_EXPECTATIONS. For FOMC/policy events use HIKE, HOLD, CUT or HAWKISH/DOVISH as appropriate. Probabilities must be mutually exclusive and sum to exactly 100. They are subjective model estimates, not calibrated win probabilities. If evidence is inadequate, use INSUFFICIENT_DATA and low evidence quality; do not invent certainty. Market biases must be UNCONFIRMED when the evidence does not support a directional call. Return JSON only with keys outcome {primary, probabilities {positive, inline, negative}, explanation}, marketReaction {usd, xauUsd, eurUsd, gbpUsd, usdJpy, explanation, invalidationConditions}, tradingPlan {preferredInstruments, confirmationConditions, entryApproach, risks}. Use concise but useful explanations.`;
+    const systemInstruction = `You are TraceFX Lens Global News Prediction Engine v2. Produce a rigorous pre-release forecast for any supplied major-currency high-impact event using ONLY the supplied evidence. Do not browse or invent data. Identify the event currency and explain the likely currency-supportive, neutral and currency-negative outcomes. Estimate the economic release relative to consensus separately from the direction of every affected trading pair. For ordinary numeric indicators use ABOVE_EXPECTATIONS, IN_LINE or BELOW_EXPECTATIONS; for policy decisions and central-bank communication use HIKE, HOLD, CUT, HAWKISH or DOVISH as appropriate. Interpret positive/inline/negative probabilities as the chance of a currency-supportive, neutral or currency-negative outcome, adjusted for inverse indicators such as unemployment and jobless claims. Probabilities must sum to exactly 100 and are subjective model estimates, not calibrated win probabilities. If evidence is inadequate, use INSUFFICIENT_DATA and UNCONFIRMED biases; do not invent certainty. Return JSON only with keys outcome {primary, probabilities {positive, inline, negative}, explanation}, marketReaction {currencyBias, pairBiases:[{symbol,bias}], explanation, invalidationConditions}, tradingPlan {preferredInstruments, confirmationConditions, entryApproach, risks}. Include exactly one pairBiases item for every supplied affected pair symbol and no other symbols. Biases are relative to the quoted pair price (BULLISH means the pair is expected to rise).`;
     const prompt = [
+      `Event currency: ${event.currency}`,
       `Event: ${event.title}`,
       `Release time UTC: ${new Date(event.timestampUtcMs).toISOString()}`,
       `Consensus: ${event.forecast || 'Unavailable'}`,
@@ -103,7 +104,7 @@ export async function POST(req: NextRequest) {
       `Indicator definition: ${event.officialOverview}`,
       `Usual effect: ${event.usualEffect}`,
       `Why traders care: ${event.whyTradersCare}`,
-      `Affected pairs: ${event.affectedPairs.map((pair) => pair.symbol + ' (' + pair.relationship + ')').join(', ')}`,
+      `Affected pairs (provide a separate directional bias for every symbol): ${event.affectedPairs.map((pair) => pair.symbol + ' (' + pair.relationship + '; stronger ${event.currency} effect points ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
       `Evidence quality: ${evidence.quality}`,
       `Missing evidence: ${evidence.missingData.join(' ')}`,
       `Available evidence: ${evidence.relevantData.join(' ')}`,
@@ -152,10 +153,10 @@ export async function POST(req: NextRequest) {
         eventFingerprint: fingerprint,
         eventTitle: event.title,
         eventTimestampUtcMs: event.timestampUtcMs,
-        currency: 'USD',
+        currency: event.currency.toUpperCase(),
         version: 0,
         generatedAt: new Date().toISOString(),
-        schemaVersion: 1,
+        schemaVersion: 2,
       },
       evidenceSnapshot: evidence,
     });
