@@ -688,6 +688,14 @@ export function computeResolvedChartMarkup(
         z.label.toLowerCase().includes('ob') ||
         z.label.toLowerCase().includes('order block');
 
+      const rawZoneTopY = topPriceNum !== null ? rawPriceToY(topPriceNum) : Number(z.topY);
+      const rawZoneBottomY = botPriceNum !== null ? rawPriceToY(botPriceNum) : Number(z.bottomY);
+      if (!Number.isFinite(rawZoneTopY) || !Number.isFinite(rawZoneBottomY)) return;
+      if (
+        (rawZoneTopY < minPlotY && rawZoneBottomY < minPlotY) ||
+        (rawZoneTopY > maxPlotY && rawZoneBottomY > maxPlotY)
+      ) return;
+
       let zTop =
         topPriceNum !== null
           ? clamp(rawPriceToY(topPriceNum), topY + 5, bottomY - 14)
@@ -775,7 +783,9 @@ export function computeResolvedChartMarkup(
         }
       }
 
-      const height = clamp(zBot - zTop, 8, maxAllowedZoneHeight);
+      const rawHeight = zBot - zTop;
+      if (rawHeight < 4 || rawHeight > maxAllowedZoneHeight) return;
+      const height = rawHeight;
 
       resolvedZones.push({
         id: `zone-${idx}`,
@@ -792,58 +802,6 @@ export function computeResolvedChartMarkup(
         priceText: z.topPrice || z.bottomPrice || '',
       });
     });
-  } else if (signal.keyLevels.length > 0) {
-    signal.keyLevels.slice(0, 8).forEach((lvl, idx) => {
-      const pNum = parseChartPrice(lvl.price);
-      if (pNum === null) return;
-      const centerY = clamp(rawPriceToY(pNum), topY + 14, bottomY - 14);
-      const height = 18;
-      let zTop = clamp(centerY - height / 2, topY + 5, bottomY - height - 5);
-      const zBot = zTop + height;
-      const tone = getZoneTone(lvl.role);
-      const role: ChartMarkupZone['role'] =
-        lvl.role === 'Fair Value Gap' || lvl.role === 'Structure Break'
-          ? 'Support'
-          : lvl.role;
-      const isOrderBlock = role === 'Bullish OB' || role === 'Bearish OB';
-
-      let startX = clamp(
-        leftX + 70 + (idx % 4) * 50,
-        leftX + 10,
-        Math.max(leftX + 50, lastCandleX - 32)
-      );
-      if (pixelGeo && pixelGeo.candles.length > 0) {
-        const originCandle = pixelGeo.findOriginCandleForBand(
-          startX,
-          zTop,
-          zBot,
-          tone,
-          isOrderBlock
-        );
-        if (originCandle) {
-          startX = clamp(
-            originCandle.x - originCandle.width * 0.5,
-            leftX + 6,
-            Math.max(leftX + 36, lastCandleX - 18)
-          );
-        }
-      }
-
-      resolvedZones.push({
-        id: `fallback-zone-${idx}`,
-        label: lvl.label,
-        role,
-        tone,
-        isOrderBlock,
-        mitigated: false,
-        isPrimary: idx === 0,
-        x: startX,
-        width: Math.max(55, rightX - startX),
-        topY: zTop,
-        height,
-        priceText: lvl.price,
-      });
-    });
   }
 
   // Resolve Fair Value Gaps (FVG / Imbalances) — locked onto real 3-candle wick-to-wick gaps
@@ -852,6 +810,15 @@ export function computeResolvedChartMarkup(
 
   const fairValueGaps: ResolvedFvgRect[] = rawFvgs
     .slice(0, 8)
+    .filter((f) => {
+      const topP = parseChartPrice(f.topPrice);
+      const botP = parseChartPrice(f.bottomPrice);
+      if (topP === null || botP === null || topP <= botP) return false;
+      const topY = rawPriceToY(topP);
+      const bottomY = rawPriceToY(botP);
+      return Number.isFinite(topY) && Number.isFinite(bottomY) &&
+        !((topY < minPlotY && bottomY < minPlotY) || (topY > maxPlotY && bottomY > maxPlotY));
+    })
     .map((f, idx): ResolvedFvgRect => {
       const fTone: 'bullish' | 'bearish' = f.tone === 'bearish' ? 'bearish' : 'bullish';
       const topP = parseChartPrice(f.topPrice);
@@ -931,27 +898,15 @@ export function computeResolvedChartMarkup(
           effectiveEndX = rightX;
         }
       } else if (pixelGeo && pixelGeo.candles.length > 0) {
-        // Fallback: anchor FVG startX directly onto the displacement candle at [fTop..fBot]
-        const impulseCandle = pixelGeo.findOriginCandleForBand(
-          startX,
-          fTop,
-          fBot,
-          fTone,
-          false
-        );
-        if (impulseCandle) {
-          startX = clamp(
-            impulseCandle.x - impulseCandle.width * 0.5,
-            leftX + 6,
-            Math.max(leftX + 36, lastCandleX - 14)
-          );
-          if (!isMitigated) {
-            effectiveEndX = rightX;
-          }
-        }
+        // No optical three-candle gap match: do not draw an unverified floating FVG.
+        return null as unknown as ResolvedFvgRect;
       }
 
-      const height = clamp(fBot - fTop, 6, maxAllowedFvgHeight);
+      const rawHeight = fBot - fTop;
+      if (rawHeight < 3 || rawHeight > maxAllowedFvgHeight) {
+        return null as unknown as ResolvedFvgRect;
+      }
+      const height = rawHeight;
       const clampedTop = clamp(fTop, topY + 5, bottomY - height - 5);
       return {
         id: `fvg-${idx}`,
@@ -966,7 +921,8 @@ export function computeResolvedChartMarkup(
         midY: clampedTop + height / 2,
         priceText: f.topPrice || f.bottomPrice || '',
       };
-    });
+    })
+    .filter((gap): gap is ResolvedFvgRect => gap !== null);
 
   // Resolve Horizontal BOS & CHoCH Market Structure Breaks (locked to true swing wick + breakout candle)
   const rawBreaks = rawMarkup?.structureBreaks ?? [];
