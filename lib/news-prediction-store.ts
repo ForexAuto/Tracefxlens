@@ -71,7 +71,8 @@ export async function createNewsPredictionVersion(input: {
     prediction_json: prediction,
     evidence_snapshot: input.evidenceSnapshot,
     generated_at: generatedAt,
-    locked_at: generatedAt,
+    // New forecasts must be inserted unlocked; release locking is handled separately.
+    locked_at: null,
     status: 'PREDICTED',
   };
   const { data, error } = await db.from('news_predictions').insert(row).select('*').single();
