@@ -299,18 +299,6 @@ export function NewsEventOverview({
                 <span className="text-sm font-semibold text-white">{newsPrediction.prediction.outcome.primary.replace(/_/g, ' ')}</span>
                 <span className="text-[10px] text-slate-400">Version {newsPrediction.version} · {new Date(newsPrediction.generatedAt).toLocaleString()}</span>
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  ['Stronger', newsPrediction.prediction.outcome.probabilities.positive],
-                  ['In line', newsPrediction.prediction.outcome.probabilities.inline],
-                  ['Weaker', newsPrediction.prediction.outcome.probabilities.negative],
-                ].map(([label, value]) => (
-                  <div key={String(label)} className="rounded-lg bg-slate-800/60 p-2">
-                    <div className="text-[10px] text-slate-400">{label}</div>
-                    <div className="mt-0.5 font-mono text-lg font-semibold text-white">{value}%</div>
-                  </div>
-                ))}
-              </div>
               <div className="flex items-center justify-between text-[11px]">
                 <span className="text-slate-400">Evidence quality</span>
                 <span className={newsPrediction.prediction.evidence.quality === 'HIGH' ? 'text-emerald-400' : newsPrediction.prediction.evidence.quality === 'MEDIUM' ? 'text-amber-300' : 'text-rose-300'}>
@@ -351,7 +339,7 @@ export function NewsEventOverview({
               {newsPrediction.prediction.evidence.missingData.length > 0 && (
                 <p className="text-[11px] leading-relaxed text-amber-300/90">Data limitations: {newsPrediction.prediction.evidence.missingData.join(' ')}</p>
               )}
-              {newsEvaluation && (
+              {newsEvaluation && newsPrediction?.prediction.schemaVersion === 1 && (
                 <div className="border-t border-slate-800 pt-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-semibold text-slate-200">Post-release evaluation</span>
@@ -393,7 +381,7 @@ export function NewsEventOverview({
           {!isSupportedNewsHighImpactEvent(event) && !newsPrediction && (
             <p className="text-[10px] text-slate-500">Available for upcoming high-impact releases across supported major currencies.</p>
           )}
-          {newsPrediction && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
+          {newsPrediction && newsPrediction.prediction.schemaVersion === 1 && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
             <button
               type="button"
               disabled={predictionLoading || evaluationLoading}
