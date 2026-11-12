@@ -1407,13 +1407,25 @@ Trigger & Tight Stop
         onCancel={cancelStopConfirmation}
       />
 
-      {/* Quiet Risk Disclaimer Footer */}
-      <footer className="border-t border-slate-800/60 py-5">
-        <div className="mx-auto flex max-w-6xl flex-col items-start justify-between gap-2 px-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:px-6 lg:px-8">
-          <span>TraceFX Lens · Technical Chart Analysis</span>
-          <span>
-            Signals are technical structure evaluations for informational decision support, not financial advice.
+      {/* Analyze page brand footer */}
+      <footer className="relative mt-8 overflow-hidden border-t border-cyan-400/15 bg-gradient-to-b from-slate-900/35 to-slate-950/70 py-8 sm:py-10">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
+        <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-4 text-center sm:px-6 lg:px-8">
+          <div className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-cyan-400/25 bg-cyan-400/[0.08] text-cyan-300 shadow-[0_0_24px_rgba(34,211,238,0.08)]">
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 17.5 8.2 12l3.5 3.2L21 5.5" />
+                <path d="M15.5 5.5H21v5.5" />
+              </svg>
+            </span>
+            <span className="text-2xl font-bold tracking-tight text-slate-100 sm:text-3xl">
+              TraceFX <span className="text-cyan-300">Lens</span>
+            </span>
+          </div>
+          <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-400 sm:text-xs">
+            Technical Chart Analysis
           </span>
+          <span className="h-1 w-12 rounded-full bg-gradient-to-r from-cyan-400/50 via-cyan-300 to-cyan-400/50" />
         </div>
       </footer>
     </div>
