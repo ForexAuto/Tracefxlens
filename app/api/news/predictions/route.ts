@@ -5,7 +5,6 @@ import {
   buildNewsEvidenceSnapshot,
   getNewsEventFingerprint,
   isSupportedNewsHighImpactEvent,
-  validateNewsPredictionPayload,
 } from '@/lib/news-prediction';
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
 import { evaluateNewsPrediction } from '@/lib/news-prediction-evaluation';
@@ -33,7 +32,9 @@ export async function GET(req: NextRequest) {
     const fingerprint = req.nextUrl.searchParams.get('eventFingerprint');
     const pair = req.nextUrl.searchParams.get('pair');
     const scopedFingerprint = fingerprint && pair ? `${fingerprint}:${pair}` : fingerprint;
-    const filtered = scopedFingerprint ? predictions.filter((item) => item.eventFingerprint === scopedFingerprint) : predictions;
+    const filtered = scopedFingerprint
+      ? predictions.filter((item) => item.eventFingerprint === scopedFingerprint)
+      : predictions;
     const evaluations = await listNewsPredictionEvaluations(filtered.map((item) => item.id));
     return NextResponse.json({ predictions: filtered, evaluations });
   } catch (error) {
@@ -63,7 +64,31 @@ export async function POST(req: NextRequest) {
       if (!event.actual?.trim() || !event.forecast?.trim()) {
         return NextResponse.json({ error: 'The calendar feed does not yet contain both the actual release and consensus forecast.' }, { status: 409 });
       }
-      const selectedMapping = event.affectedPairs.find((pair) => pair.symbol === selectedPair);
+      const fingerprint = getNewsEventFingerprint(event);
+      const records = (await listNewsPredictions(100)).filter((item) => item.eventFingerprint === fingerprint);
+      if (!records.length) {
+        return NextResponse.json({ error: 'No saved AI prediction exists for this event.' }, { status: 404 });
+      }
+      const evaluations = [];
+      for (const record of records) {
+        const evaluation = evaluateNewsPrediction(record, event);
+        if (!evaluation) continue;
+        evaluations.push(await saveNewsPredictionEvaluation(evaluation));
+      }
+      if (!evaluations.length) {
+        return NextResponse.json({ error: 'The actual and forecast values could not be compared safely. Check that their units and numeric formats match.' }, { status: 422 });
+      }
+      return NextResponse.json({ evaluations, evaluatedCount: evaluations.length });
+    }
+
+    if (!isSupportedNewsHighImpactEvent(event)) {
+      return NextResponse.json(
+        { error: 'This event is not an eligible upcoming high-impact release for a supported currency, or it has already been released.' },
+        { status: 400 }
+      );
+    }
+
+    const selectedMapping = event.affectedPairs.find((pair) => pair.symbol === selectedPair);
     if (!selectedMapping) {
       return NextResponse.json({ error: 'Choose an instrument from this event’s affected-pair list.' }, { status: 400 });
     }
@@ -110,40 +135,42 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'The AI returned an invalid signal. Please try again.' }, { status: 502 });
     }
 
-    const bias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
     const shortText = (value: unknown, fallback: string) =>
       typeof value === 'string' && value.trim() ? value.trim().slice(0, 240) : fallback;
-    const missingData = evidence.missingData;
+    const bias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
+    const reason = shortText(raw.reason, 'No clear directional advantage identified.');
+    const confirmation = shortText(raw.confirmation, 'Wait for price action to confirm after release.');
+    const invalidation = shortText(raw.invalidation, 'Reassess if price action contradicts the expected direction.');
     const prediction = {
       outcome: {
         primary: signal === 'BUY' ? 'ABOVE_EXPECTATIONS' : signal === 'SELL' ? 'BELOW_EXPECTATIONS' : 'INSUFFICIENT_DATA',
         probabilities: { positive: 34, inline: 33, negative: 33 },
-        explanation: shortText(raw.reason, 'No clear directional advantage identified.'),
+        explanation: reason,
       },
       marketReaction: {
         currencyBias: 'UNCONFIRMED' as const,
         pairBiases: [{ symbol: selectedPair, bias }],
-        explanation: shortText(raw.reason, 'AI assessment for the selected instrument.'),
-        invalidationConditions: [shortText(raw.invalidation, 'Reassess if price action contradicts the expected reaction.')],
+        explanation: reason,
+        invalidationConditions: [invalidation],
       },
       tradingPlan: {
         preferredInstruments: signal === 'NO_TRADE' ? [] : [selectedPair],
-        confirmationConditions: [shortText(raw.confirmation, 'Wait for price action to confirm the direction after release.')],
+        confirmationConditions: [confirmation],
         entryApproach: 'Wait for confirmation; do not trade the forecast alone.',
         risks: ['News volatility and spread expansion can cause slippage.'],
       },
       selectedInstrument: selectedPair,
       signal,
       confidencePercent: confidence,
-      signalReason: shortText(raw.reason, 'AI directional assessment for the selected instrument.'),
-      confirmation: shortText(raw.confirmation, 'Wait for price action to confirm after the release.'),
-      invalidation: shortText(raw.invalidation, 'Reassess if price action contradicts the expected direction.'),
+      signalReason: reason,
+      confirmation,
+      invalidation,
       evidence: {
         forecast: event.forecast || null,
         previous: event.previous || null,
         actualAtGeneration: event.actual || null,
         relevantData: evidence.relevantData,
-        missingData,
+        missingData: evidence.missingData,
         quality: evidence.quality,
       },
       modelVersion: 'gemini-3.1-flash-lite-single-instrument',
@@ -168,6 +195,7 @@ export async function POST(req: NextRequest) {
       },
       evidenceSnapshot: { ...evidence, selectedInstrument: selectedPair },
     });
+
     return NextResponse.json({ prediction: saved });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to generate news prediction.';
