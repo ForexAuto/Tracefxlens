@@ -17,7 +17,6 @@ import {
   formatRelativeCountdown,
 } from '@/lib/macro-news';
 import { isSupportedNewsHighImpactEvent, getNewsEventFingerprint, type NewsPredictionRecord } from '@/lib/news-prediction';
-import type { NewsPredictionEvaluation } from '@/lib/news-prediction-evaluation';
 
 interface NewsEventOverviewProps {
   event: MacroCalendarEvent | null;
@@ -68,8 +67,6 @@ export function NewsEventOverview({
 }: NewsEventOverviewProps) {
   const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
   const [selectedPair, setSelectedPair] = useState('');
-  const [newsEvaluation, setNewsEvaluation] = useState<NewsPredictionEvaluation | null>(null);
-  const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
 
@@ -78,13 +75,11 @@ export function NewsEventOverview({
     const preferred = event.affectedPairs.find((pair) => pair.symbol.replace('/', '').toUpperCase() === 'XAUUSD')
       || event.affectedPairs[0];
     setSelectedPair(preferred?.symbol || '');
-  }, [event?.eventId, selectedPair]);
+  }, [event?.eventId]);
 
   useEffect(() => {
     let active = true;
     setNewsPrediction(null);
-    setNewsEvaluation(null);
-    setEvaluationLoading(false);
     setPredictionError(null);
     if (!event || !selectedPair) return () => { active = false; };
     const fingerprint = getNewsEventFingerprint(event);
@@ -98,15 +93,13 @@ export function NewsEventOverview({
         if (active && Array.isArray(payload.predictions) && payload.predictions.length) {
           const latest = payload.predictions.sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0];
           setNewsPrediction(latest);
-          const evaluation = Array.isArray(payload.evaluations) ? payload.evaluations.find((item: NewsPredictionEvaluation) => item.predictionId === latest.id) : null;
-          setNewsEvaluation(evaluation || null);
         }
       })
       .catch((error) => {
         if (active) setPredictionError(error instanceof Error ? error.message : 'Unable to load saved prediction.');
       });
     return () => { active = false; };
-  }, [event?.eventId]);
+  }, [event?.eventId, selectedPair]);
 
   const generateNewsPrediction = async () => {
     if (!event) return;
@@ -128,27 +121,6 @@ export function NewsEventOverview({
     }
   };
 
-  const evaluateNewsPredictionNow = async () => {
-    if (!event || !newsPrediction) return;
-    setPredictionLoading(true);
-    setPredictionError(null);
-    try {
-      const response = await fetch('/api/news/predictions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'evaluate', eventId: event.eventId }),
-      });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Unable to evaluate prediction.');
-      const current = (payload.evaluations || []).find((item: NewsPredictionEvaluation) => item.predictionId === newsPrediction.id);
-      if (current) setNewsEvaluation(current);
-      else throw new Error('Evaluation saved, but no result was returned for the selected forecast version.');
-    } catch (error) {
-      setPredictionError(error instanceof Error ? error.message : 'Unable to evaluate prediction.');
-    } finally {
-      setPredictionLoading(false);
-    }
-  };
 
   if (!event) {
     return (
