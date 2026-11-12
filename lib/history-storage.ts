@@ -124,6 +124,8 @@ function mergeClientServerRecord(
     macroContext: a.macroContext || b.macroContext,
     chartImageUrl: a.chartImageUrl || b.chartImageUrl,
     chartMarkup: a.chartMarkup || b.chartMarkup,
+    preferredTakeProfit: a.preferredTakeProfit || b.preferredTakeProfit,
+    preferredTakeProfitReason: a.preferredTakeProfitReason || b.preferredTakeProfitReason,
     outcome: lockedOutcome,
     outcomeLockedAt: lockedAt,
   };
@@ -269,6 +271,8 @@ export async function recordSignalToHistory(
     takeProfit1: signal.takeProfit1,
     takeProfit2: signal.takeProfit2,
     takeProfit3: signal.takeProfit3,
+    preferredTakeProfit: signal.preferredTakeProfit,
+    preferredTakeProfitReason: signal.preferredTakeProfitReason,
     riskRewardRatio: signal.riskRewardRatio,
     marketStructure: signal.marketStructure,
     confidenceSummary: signal.confidenceSummary,
