@@ -166,9 +166,9 @@ You are given:
 ${zoomPart ? '- Image 3: A 2x magnified crop of the right-most active candles and Y-axis price scale stamped with [T1]..[Tk] and [LIVE] tick pointers.' : ''}
 ${opticalAnchorHint ? `\nOPTICAL ANCHOR DIRECTORY:\n${opticalAnchorHint}` : ''}
 
-Inspect Image 2 against Image 1${zoomPart ? ' and Image 3' : ''} for ANY visual or structural errors:
+Inspect Image 2 against Image 1${zoomPart ? ' and Image 3' : ''} for visual and structural errors. Be conservative: remove any annotation that cannot be confidently matched to a real candle, wick, three-candle gap, or printed price level. Empty arrays are valid; do not preserve a questionable drawing merely to maintain annotation counts.
 1. Y-Axis Calibration Drift: Do Entry (${draftSignal.entryPrice}), Current Market (${draftSignal.currentMarketPrice}), SL, and TP lines align with the true printed Y-axis numbers next to [T1]..[Tk] on Image 3? If drifted, fix axisCalibration.axisTicks (preserving exact tickId:"T#" + printed price), currentMarketPrice, and entryPrice.
-2. Floating Zones / FVGs / BOS / Swings: Did any Supply/Demand/OB rectangle, FVG box, BOS/CHoCH line, or HH/HL/LH/LL tag float in empty space instead of sitting on the real candle wicks/bodies? Snap their startX, endX, topPrice, bottomPrice, pivotId, gapId, x, and y onto the real origin candles and [H#]/[L#]/[G#] anchors read from Image 1.
+2. Floating Zones / FVGs / BOS / Swings: Keep a zone only when its origin candle and both price boundaries are visible; keep an FVG only when the three-candle imbalance and both boundaries are visible; keep a BOS/CHoCH only when the broken swing and breakout candle are identifiable; keep swings/trendlines only when they align with actual wick tips. Correct coordinates from Image 1 anchors, or remove the annotation if it cannot be verified. Never invent replacement coordinates.
 3. Indicator Sub-Pane Intrusion: ${
     hasSubPanes && detectedPlotBox
       ? `An indicator sub-pane exists below Y=${detectedPlotBox.bottomY}. Remove or move above Y=${detectedPlotBox.bottomY} any zone, FVG, swing, or trendline that bled into the bottom indicator pane.`
@@ -329,35 +329,34 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
           )
         : draftSignal.chartMarkup;
 
-      // Preserve rich structure counts if Pass 2 accidentally omitted arrays
+      // Respect explicit empty arrays from Pass 2: an empty array means the visual auditor rejected all items in that category.
+      // Fall back to Draft 1 only when Pass 2 omitted that category entirely.
+      const refinedRawMarkup =
+        rawObj.chartMarkup && typeof rawObj.chartMarkup === 'object'
+          ? rawObj.chartMarkup as Record<string, unknown>
+          : {};
       const mergedMarkup =
         refinedMarkup && draftSignal.chartMarkup
           ? {
               ...refinedMarkup,
-              zones:
-                refinedMarkup.zones.length > 0
-                  ? refinedMarkup.zones
-                  : draftSignal.chartMarkup.zones,
-              fairValueGaps:
-                (refinedMarkup.fairValueGaps?.length ?? 0) > 0
-                  ? refinedMarkup.fairValueGaps
-                  : draftSignal.chartMarkup.fairValueGaps,
-              structureBreaks:
-                (refinedMarkup.structureBreaks?.length ?? 0) > 0
-                  ? refinedMarkup.structureBreaks
-                  : draftSignal.chartMarkup.structureBreaks,
-              liquidityLevels:
-                (refinedMarkup.liquidityLevels?.length ?? 0) > 0
-                  ? refinedMarkup.liquidityLevels
-                  : draftSignal.chartMarkup.liquidityLevels,
-              trendlines:
-                (refinedMarkup.trendlines?.length ?? 0) > 0
-                  ? refinedMarkup.trendlines
-                  : draftSignal.chartMarkup.trendlines,
-              swings:
-                (refinedMarkup.swings?.length ?? 0) > 0
-                  ? refinedMarkup.swings
-                  : draftSignal.chartMarkup.swings,
+              zones: Array.isArray(refinedRawMarkup.zones)
+                ? refinedMarkup.zones
+                : draftSignal.chartMarkup.zones,
+              fairValueGaps: Array.isArray(refinedRawMarkup.fairValueGaps)
+                ? refinedMarkup.fairValueGaps
+                : draftSignal.chartMarkup.fairValueGaps,
+              structureBreaks: Array.isArray(refinedRawMarkup.structureBreaks)
+                ? refinedMarkup.structureBreaks
+                : draftSignal.chartMarkup.structureBreaks,
+              liquidityLevels: Array.isArray(refinedRawMarkup.liquidityLevels)
+                ? refinedMarkup.liquidityLevels
+                : draftSignal.chartMarkup.liquidityLevels,
+              trendlines: Array.isArray(refinedRawMarkup.trendlines)
+                ? refinedMarkup.trendlines
+                : draftSignal.chartMarkup.trendlines,
+              swings: Array.isArray(refinedRawMarkup.swings)
+                ? refinedMarkup.swings
+                : draftSignal.chartMarkup.swings,
             }
           : refinedMarkup || draftSignal.chartMarkup;
 
