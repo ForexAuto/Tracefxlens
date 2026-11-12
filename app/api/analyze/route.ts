@@ -9,8 +9,6 @@ import {
   resolveTopDownTimeframePair,
   type SignalType,
   type TradingSignalResponse,
-  type VisionEnhancementPayload,
-  type VisionVerificationMeta,
   type ZoneRole,
 } from '@/lib/trading-data';
 import {
@@ -27,7 +25,6 @@ import {
   normalizeKeyLevelRole,
   normalizeSignalType,
   parseNumPrice,
-  sanitizeChartMarkup,
   sanitizeCrtContext,
 } from '@/lib/signal-sanitizer';
 
@@ -738,7 +735,7 @@ Line 4 (Step 4 ${macroTf} Dominance Filter & Signal Veto Check):
 Line 5 (Step 5 ${macroTf} Target Projection & ${executionTf} Tight Risk Validation):
 {"event":"step","step":5,"finding":"<1 specific sentence confirming ${executionTf} tight Stop-Loss compression vs ${macroTf} macro TP1-TP3 targets and resulting amplified R:R ratio>"}
 
-Line 6 (Final Validated Top-Down CRT Signal Ticket + Dual Spatial Markup for BOTH ${executionTf} [chartMarkup] and ${macroTf} [macroChartMarkup] in [0..1000] coordinates):
+Line 6 (Final Validated Top-Down CRT Signal Ticket — market analysis only, no chart drawings):
 {"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"${topDownLabel}","currentMarketPrice":"<exact ${executionTf} current price>","entryPrice":"<exact ${executionTf} entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking ${macroTf} CRT bias + ${executionTf} trigger>","stopLoss":"<exact tight ${executionTf} invalidation price>","takeProfit1":"<${macroTf} CRT 50% EQ or first ${macroTf} internal target>","takeProfit2":"<Opposing ${macroTf} CRT Range High/Low draw on liquidity>","takeProfit3":"<External ${macroTf} swing/expansion liquidity target>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise reason grounded in macro liquidity and execution structure>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. ${macroTf} Bullish CRT + ${executionTf} CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or ${macroTf} Veto · Stand Aside>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"crtContext":{"macroTimeframe":"${macroTf}","executionTimeframe":"${executionTf}","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact ${macroTf} CRT High price>","crtRangeLow":"<exact ${macroTf} CRT Low price>","crtEquilibrium":"<exact ${macroTf} 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on ${macroTf} CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on ${executionTf} CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing ${macroTf} dominance + ${executionTf} execution outcome>"},"technicalRationale":["<${macroTf} CRT range & purge observation>","<${macroTf} draw-on-liquidity target rationale>","<${executionTf} execution CHoCH/FVG & noise filter observation>","<Risk compression: tight ${executionTf} SL vs ${macroTf} reward math>"],"keyLevels":[{"label":"<e.g. ${macroTf} CRT High / ${macroTf} CRT Low / ${macroTf} 50% EQ / ${executionTf} Bullish OB / ${executionTf} FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact ${executionTf} SL breach & ${macroTf} CRT invalidation>"}
 
 TOP-DOWN MARKET ANALYSIS:
@@ -816,7 +813,7 @@ TOP-DOWN MARKET ANALYSIS:
               : '',
             topDownOhlc ? `\n${topDownOhlc.promptBlock}` : '',
             macroFeed ? `\n${macroFeed.promptBlock}` : '',
-            `\nFirst verify both ${macroTf} and ${executionTf} screenshots on Line 1, then stream Steps 2–5 and the final result JSON object (including crtContext, ${executionTf} chartMarkup, and ${macroTf} macroChartMarkup) one per line.`,
+            `\nFirst verify both ${macroTf} and ${executionTf} screenshots on Line 1, then stream Steps 2–5 and the final result JSON object (including crtContext and the validated trade levels) one per line.`,
           ]
             .filter(Boolean)
             .join('\n')
@@ -1056,24 +1053,6 @@ TOP-DOWN MARKET ANALYSIS:
             vetoReason = enforced.vetoReason;
           }
 
-          const sanitizedMarkup = sanitizeChartMarkup(
-            rawSignalObj.chartMarkup,
-            rawSignalObj.entryPrice,
-            detectedPlotBox,
-            hasSubPanes,
-            visionEnhancement
-          );
-
-          const sanitizedMacroMarkup = isTopDownCrt
-            ? sanitizeChartMarkup(
-                rawSignalObj.macroChartMarkup,
-                rawSignalObj.entryPrice,
-                macroDetectedPlotBox,
-                macroHasSubPanes,
-                macroVisionEnhancement
-              )
-            : undefined;
-
           const rawKeyLevels: KeyPriceLevel[] = Array.isArray(rawSignalObj.keyLevels)
             ? rawSignalObj.keyLevels
                 .map((item) => {
@@ -1308,8 +1287,6 @@ TOP-DOWN MARKET ANALYSIS:
             technicalRationale: rawRationale.slice(0, 6),
             keyLevels: rawKeyLevels.slice(0, 14),
             invalidationCondition: String(rawSignalObj.invalidationCondition || ''),
-            chartMarkup: sanitizedMarkup,
-            macroChartMarkup: sanitizedMacroMarkup,
             visionVerification,
             auditTrail: collectedAudit,
           };
