@@ -288,6 +288,7 @@ export function HistoryWorkspace() {
       `Entry: ${rec.entryPrice}`,
       `Stop Loss: ${rec.stopLoss}`,
       `TP1: ${rec.takeProfit1} | TP2: ${rec.takeProfit2} | TP3: ${rec.takeProfit3}`,
+      ...(rec.preferredTakeProfit ? [`AI Recommended Main Target: TP${rec.preferredTakeProfit}`, `Reason: ${rec.preferredTakeProfitReason || 'Selected by model'}`] : []),
       `Risk / Reward: ${rec.riskRewardRatio}`,
     ].join('\n');
 
@@ -694,6 +695,16 @@ export function HistoryWorkspace() {
                       </div>
                     </div>
                   </div>
+
+                  {rec.preferredTakeProfit && (
+                    <div className="border-t border-emerald-500/20 bg-emerald-500/[0.06] px-4 py-3 sm:px-5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">AI Recommended Main Target</span>
+                        <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-300">TP {rec.preferredTakeProfit} · Use this</span>
+                      </div>
+                      <p className="mt-1 text-sm leading-relaxed text-slate-200">{rec.preferredTakeProfitReason || 'Selected by the model as the preferred target for this setup.'}</p>
+                    </div>
+                  )}
 
                   {/* Bottom Action & Inspection Bar */}
                   <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800/80 px-4 py-2.5 sm:px-5">
