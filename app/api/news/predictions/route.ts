@@ -52,14 +52,26 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const eventId = typeof body?.eventId === 'string' ? body.eventId.trim() : '';
     const selectedPair = typeof body?.pair === 'string' ? body.pair.trim() : '';
-    if (!eventId || eventId.length > 180) {
-      return NextResponse.json({ error: 'A valid calendar event ID is required.' }, { status: 400 });
+    const requestedCurrency = typeof body?.currency === 'string' ? body.currency.trim().toUpperCase() : '';
+    const requestedTitle = typeof body?.title === 'string' ? body.title.trim() : '';
+    const requestedTimestamp = Number(body?.timestampUtcMs);
+    if ((!eventId || eventId.length > 180) && (!requestedCurrency || !requestedTitle || !Number.isFinite(requestedTimestamp))) {
+      return NextResponse.json({ error: 'A valid calendar event reference is required.' }, { status: 400 });
     }
 
     const calendar = await fetchNormalizedMacroCalendar({ forceRefresh: true });
-    const event = calendar.events.find((candidate) => candidate.eventId === eventId);
-    if (!event || !/^[A-Z]{3}$/.test(event.currency.toUpperCase()) || event.impact !== 'High' || event.isAllDayOrTentative) {
-      return NextResponse.json({ error: 'This is not a supported high-impact currency event.' }, { status: 400 });
+    const normalizeTitle = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const event = calendar.events.find((candidate) => candidate.eventId === eventId)
+      || calendar.events.find((candidate) =>
+        requestedCurrency &&
+        candidate.currency.trim().toUpperCase() === requestedCurrency &&
+        requestedTitle &&
+        normalizeTitle(candidate.title) === normalizeTitle(requestedTitle) &&
+        Number.isFinite(requestedTimestamp) &&
+        Math.abs(candidate.timestampUtcMs - requestedTimestamp) <= 30 * 60_000
+      );
+    if (!event || !/^[A-Z]{3}$/.test(event.currency.trim().toUpperCase()) || event.impact !== 'High' || event.isAllDayOrTentative) {
+      return NextResponse.json({ error: 'The selected event could not be matched to an eligible high-impact calendar release. Refresh the calendar and try again.' }, { status: 400 });
     }
 
     if (body?.action === 'evaluate') {
