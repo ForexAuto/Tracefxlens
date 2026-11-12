@@ -182,7 +182,7 @@ export function AppHeaderWithSidebar({
                   : 'border-transparent text-slate-400 hover:text-slate-200'
               }`}
             >
-              TradingView Engine
+              Live Chart
             </Link>
             {!isInstalled && (
               <button
