@@ -57,7 +57,13 @@ export interface NewsPredictionV1 {
   };
   generatedAt: string;
   modelVersion: string;
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
+  selectedInstrument?: string;
+  signal?: 'BUY' | 'SELL' | 'NO_TRADE';
+  confidencePercent?: number;
+  signalReason?: string;
+  confirmation?: string;
+  invalidation?: string;
   status: 'PREDICTED' | 'RELEASED' | 'EVALUATED';
 }
 
