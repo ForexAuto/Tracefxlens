@@ -5,6 +5,7 @@ import {
   buildNewsEvidenceSnapshot,
   getNewsEventFingerprint,
   isSupportedNewsHighImpactEvent,
+  type NewsMarketBias,
   type NewsOutcomeDirection,
 } from '@/lib/news-prediction';
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
@@ -139,7 +140,7 @@ export async function POST(req: NextRequest) {
     const signal = signalValue;
     const shortText = (value: unknown, fallback: string) =>
       typeof value === 'string' && value.trim() ? value.trim().slice(0, 240) : fallback;
-    const bias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
+    const bias: NewsMarketBias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
     const reason = shortText(raw.reason, 'No clear directional advantage identified.');
     const confirmation = shortText(raw.confirmation, 'Wait for price action to confirm after release.');
     const invalidation = shortText(raw.invalidation, 'Reassess if price action contradicts the expected direction.');
