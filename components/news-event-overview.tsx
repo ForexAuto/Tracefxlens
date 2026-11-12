@@ -85,8 +85,15 @@ export function NewsEventOverview({
     const fingerprint = getNewsEventFingerprint(event);
     fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}&pair=${encodeURIComponent(selectedPair)}`, { cache: 'no-store' })
       .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Unable to load saved prediction.');
+        const responseText = await response.text();
+        let payload: { error?: string; predictions?: NewsPredictionRecord[] };
+        try {
+          payload = responseText ? JSON.parse(responseText) : {};
+        } catch {
+          const detail = responseText.trim().slice(0, 180);
+          throw new Error(detail || `Prediction history request failed (HTTP ${response.status}).`);
+        }
+        if (!response.ok) throw new Error(payload.error || `Unable to load saved prediction (HTTP ${response.status}).`);
         return payload;
       })
       .then((payload) => {
@@ -117,9 +124,17 @@ export function NewsEventOverview({
           timestampUtcMs: event.timestampUtcMs,
         }),
       });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || 'Unable to generate prediction.');
-      setNewsPrediction(payload.prediction as NewsPredictionRecord);
+      const responseText = await response.text();
+      let payload: { error?: string; prediction?: NewsPredictionRecord };
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch {
+        const detail = responseText.trim().slice(0, 180);
+        throw new Error(detail || `Prediction request failed (HTTP ${response.status}).`);
+      }
+      if (!response.ok) throw new Error(payload.error || `Unable to generate prediction (HTTP ${response.status}).`);
+      if (!payload.prediction) throw new Error('The prediction service returned an empty response. Please try again.');
+      setNewsPrediction(payload.prediction);
     } catch (error) {
       setPredictionError(error instanceof Error ? error.message : 'Unable to generate prediction.');
     } finally {
