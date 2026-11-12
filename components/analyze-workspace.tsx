@@ -1363,11 +1363,6 @@ Trigger & Tight Stop
                   </span>
                 </button>
               )}
-              <p className="mt-2 text-center text-[11px] text-slate-500">
-                {isTopDownCrt
-                  ? `${macroTf} CRT validates bias & TP1–TP3 · ${executionTf} refines entry & tight SL`
-                  : 'Generates BUY, SELL & HOLD signals with visual chart markup'}
-              </p>
             </div>
           </section>
 
