@@ -1,6 +1,8 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchNormalizedMacroCalendar } from '@/lib/forex-factory-adapter';
+import { fetchMacroCorrelationFeed } from '@/lib/macro-correlation';
+import { fetchHybridOhlcContext } from '@/lib/live-ohlc';
 import {
   buildNewsEvidenceSnapshot,
   getNewsEventFingerprint,
@@ -108,12 +110,42 @@ export async function POST(req: NextRequest) {
     }
 
     const fingerprint = `${getNewsEventFingerprint(event)}:${selectedPair}`;
-    const evidence = buildNewsEvidenceSnapshot(event);
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: 'GEMINI_API_KEY is not configured.' }, { status: 503 });
     }
 
+    // Reuse the app's existing live macro and instrument OHLC feeds. All fetches
+    // are bounded and run in parallel so manual prediction remains responsive.
+    const [macroFeed, h1Market, m5Market] = await Promise.all([
+      fetchMacroCorrelationFeed(selectedPair, req.signal),
+      fetchHybridOhlcContext(selectedPair, 'H1', req.signal),
+      fetchHybridOhlcContext(selectedPair, 'M5', req.signal),
+    ]);
+    const evidenceBase = buildNewsEvidenceSnapshot(event);
+    const marketContextBlocks = [
+      macroFeed?.promptBlock,
+      h1Market?.promptBlock,
+      m5Market?.promptBlock,
+    ].filter((value): value is string => Boolean(value));
+    const missingMarketData = [
+      !macroFeed ? 'Live DXY / US10Y context was unavailable for this request.' : '',
+      !h1Market ? 'Selected-instrument H1 OHLC context was unavailable.' : '',
+      !m5Market ? 'Selected-instrument M5 OHLC context was unavailable.' : '',
+    ].filter(Boolean);
+    const evidence = {
+      ...evidenceBase,
+      relevantData: [...evidenceBase.relevantData, ...marketContextBlocks],
+      missingData: [
+        ...evidenceBase.missingData.filter((item) => !item.includes('Live DXY')),
+        ...missingMarketData,
+      ],
+      quality: marketContextBlocks.length >= 2 && evidenceBase.quality !== 'LOW'
+        ? 'HIGH' as const
+        : marketContextBlocks.length > 0
+          ? 'MEDIUM' as const
+          : evidenceBase.quality,
+    };
     const ai = new GoogleGenAI({ apiKey });
     const systemInstruction = `You are TraceFX Lens. Analyse ONLY the selected instrument for the supplied high-impact news event. Return ONLY compact JSON with these keys: signal, confidence, reason, confirmation, invalidation. signal must be BUY, SELL or NO_TRADE. confidence must be an integer from 0 to 100 representing your subjective confidence in this directional assessment, not a statistical win probability. reason, confirmation and invalidation should each be one short sentence. Do not include other instruments, probabilities, long explanations, markdown or extra keys. If evidence is mixed or insufficient, choose NO_TRADE and a low confidence score.`;
     const prompt = [
@@ -127,6 +159,10 @@ export async function POST(req: NextRequest) {
       `If the event currency strengthens, the instrument price direction is: ${selectedMapping.bullishCurrencyEffect}`,
       `Indicator context: ${event.officialOverview}`,
       `Usual effect: ${event.usualEffect}`,
+      'ADDITIONAL LIVE MARKET EVIDENCE (use the data as context, not as rigid filters):',
+      ...marketContextBlocks,
+      marketContextBlocks.length ? '' : 'Live market telemetry was unavailable; do not invent market prices, trends or levels.',
+      'Weigh the economic event, recent macro context and selected-instrument H1/M5 price behaviour together. Explain material agreement or disagreement. Do not treat a technical snapshot as proof of the future reaction.',
       'Assess the likely directional reaction for this instrument only. Avoid certainty when evidence is weak.',
     ].join('\\n');
 
@@ -211,7 +247,37 @@ export async function POST(req: NextRequest) {
         generatedAt: new Date().toISOString(),
         schemaVersion: 3,
       },
-      evidenceSnapshot: { ...evidence, selectedInstrument: selectedPair },
+      evidenceSnapshot: {
+        ...evidence,
+        selectedInstrument: selectedPair,
+        marketContext: {
+          macro: macroFeed?.rawSnapshots ?? null,
+          h1: h1Market ? {
+            source: h1Market.source,
+            lastBarAgeSeconds: h1Market.lastBarAgeSeconds,
+            spotAgeSeconds: h1Market.spotAgeSeconds ?? null,
+            basisFiltered: h1Market.basisFiltered,
+            latestClose: h1Market.latestClose,
+            atr14: h1Market.atr14,
+            recentRangeHigh: h1Market.recentRangeHigh,
+            recentRangeLow: h1Market.recentRangeLow,
+            swingHighs: h1Market.swingHighs,
+            swingLows: h1Market.swingLows,
+          } : null,
+          m5: m5Market ? {
+            source: m5Market.source,
+            lastBarAgeSeconds: m5Market.lastBarAgeSeconds,
+            spotAgeSeconds: m5Market.spotAgeSeconds ?? null,
+            basisFiltered: m5Market.basisFiltered,
+            latestClose: m5Market.latestClose,
+            atr14: m5Market.atr14,
+            recentRangeHigh: m5Market.recentRangeHigh,
+            recentRangeLow: m5Market.recentRangeLow,
+            swingHighs: m5Market.swingHighs,
+            swingLows: m5Market.swingLows,
+          } : null,
+        },
+      },
     });
 
     return NextResponse.json({ prediction: saved });
