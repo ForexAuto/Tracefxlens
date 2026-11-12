@@ -418,7 +418,7 @@ export function NewsEventOverview({
             <RotateCcw className={`h-3.5 w-3.5 ${predictionLoading ? 'animate-spin' : ''}`} />
             {predictionLoading ? 'Generating forecast...' : newsPrediction ? 'Refresh prediction · save new version' : 'Generate AI prediction'}
           </button>
-          {!isSupportedUsdHighImpactEvent(event) && !newsPrediction && (
+          {!isSupportedNewsHighImpactEvent(event) && !newsPrediction && (
             <p className="text-[10px] text-slate-500">Available for upcoming high-impact releases across supported major currencies.</p>
           )}
           {newsPrediction && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
