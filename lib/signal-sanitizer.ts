@@ -341,7 +341,21 @@ export function sanitizeChartMarkup(
     : (rawTopY + resolvedBottomY) / 2;
 
   const zones: ChartMarkupZone[] = Array.isArray(m.zones)
-    ? m.zones.slice(0, 12).map((z) => {
+    ? m.zones
+        .slice(0, 12)
+        .filter((z) => {
+          const zr = (z && typeof z === 'object' ? z : {}) as Record<string, unknown>;
+          const hasPriceBounds =
+            parseNumPrice(zr.topPrice) !== null && parseNumPrice(zr.bottomPrice) !== null;
+          const hasPixelBounds =
+            Number.isFinite(Number(zr.topY)) &&
+            Number.isFinite(Number(zr.bottomY)) &&
+            zr.topY !== null && zr.topY !== '' && zr.bottomY !== null && zr.bottomY !== '';
+          const hasOriginX = Number.isFinite(Number(zr.startX)) && zr.startX !== null && zr.startX !== '';
+          const hasOriginAnchor = Boolean(cleanAnchorId(zr.pivotId) && pivotMap.has(cleanAnchorId(zr.pivotId)!));
+          return (hasPriceBounds || hasPixelBounds) && (hasOriginX || hasOriginAnchor);
+        })
+        .map((z) => {
         const zr = (z && typeof z === 'object' ? z : {}) as Record<
           string,
           unknown
@@ -375,7 +389,21 @@ export function sanitizeChartMarkup(
     : [];
 
   const fairValueGaps: ChartMarkupFvg[] = Array.isArray(m.fairValueGaps)
-    ? m.fairValueGaps.slice(0, 8).map((f) => {
+    ? m.fairValueGaps
+        .slice(0, 8)
+        .filter((f) => {
+          const fr = (f && typeof f === 'object' ? f : {}) as Record<string, unknown>;
+          const hasPriceBounds =
+            parseNumPrice(fr.topPrice) !== null && parseNumPrice(fr.bottomPrice) !== null;
+          const hasPixelBounds =
+            Number.isFinite(Number(fr.topY)) &&
+            Number.isFinite(Number(fr.bottomY)) &&
+            fr.topY !== null && fr.topY !== '' && fr.bottomY !== null && fr.bottomY !== '';
+          const gapId = cleanAnchorId(fr.gapId);
+          const hasOriginX = Number.isFinite(Number(fr.startX)) && fr.startX !== null && fr.startX !== '';
+          return (hasPriceBounds || hasPixelBounds) && (hasOriginX || Boolean(gapId && gapMap.has(gapId)));
+        })
+        .map((f) => {
         const fr = (f && typeof f === 'object' ? f : {}) as Record<
           string,
           unknown
