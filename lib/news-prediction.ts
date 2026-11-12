@@ -126,14 +126,27 @@ export function validateNewsPredictionPayload(
   const allowedOutcomes = isPolicyEvent
     ? ['HAWKISH', 'DOVISH', 'HOLD', 'HIKE', 'CUT', 'INSUFFICIENT_DATA']
     : ['ABOVE_EXPECTATIONS', 'IN_LINE', 'BELOW_EXPECTATIONS', 'STRONGER', 'WEAKER', 'INSUFFICIENT_DATA'];
-  const pairBiases = reaction?.pairBiases;
-  const expectedSymbols = event.affectedPairs.map((pair) => pair.symbol);
-  const validPairBiases = Array.isArray(pairBiases) &&
-    pairBiases.length === expectedSymbols.length &&
-    pairBiases.every((item: any) =>
-      item && expectedSymbols.includes(item.symbol) && isBias(item.bias)
-    ) &&
-    expectedSymbols.every((symbol) => pairBiases.some((item: any) => item.symbol === symbol));
+  const suppliedPairBiases = Array.isArray(reaction?.pairBiases) ? reaction.pairBiases : [];
+  const expectedPairs = event.affectedPairs;
+  const expectedSymbols = expectedPairs.map((pair) => pair.symbol);
+  // Gemini may omit symbols when an event affects a large instrument universe.
+  const validSuppliedPairBiases = suppliedPairBiases.every((item: any) =>
+    item && expectedSymbols.includes(item.symbol) && isBias(item.bias)
+  );
+  const derivePairBias = (pair: (typeof expectedPairs)[number]): NewsMarketBias => {
+    if (!isBias(reaction?.currencyBias) || reaction.currencyBias === 'UNCONFIRMED' || reaction.currencyBias === 'NEUTRAL') {
+      return reaction?.currencyBias === 'NEUTRAL' ? 'NEUTRAL' : 'UNCONFIRMED';
+    }
+    const currencyIsBase = pair.symbol.split('/')[0] === event.currency.toUpperCase();
+    if (pair.bullishCurrencyEffect === 'UP') {
+      return currencyIsBase ? reaction.currencyBias : (reaction.currencyBias === 'BULLISH' ? 'BEARISH' : 'BULLISH');
+    }
+    return 'UNCONFIRMED';
+  };
+  const normalizedPairBiases = expectedPairs.map((pair) => {
+    const supplied = suppliedPairBiases.find((item: any) => item?.symbol === pair.symbol && isBias(item?.bias));
+    return { symbol: pair.symbol, bias: supplied?.bias || derivePairBias(pair) };
+  });
   if (
     !outcome ||
     !allowedOutcomes.includes(outcome.primary) ||
@@ -143,7 +156,7 @@ export function validateNewsPredictionPayload(
     !isString(outcome.explanation) ||
     !reaction ||
     !isBias(reaction.currencyBias) ||
-    !validPairBiases ||
+    !validSuppliedPairBiases ||
     !isString(reaction.explanation) ||
     !isStringArray(reaction.invalidationConditions) ||
     !plan ||
@@ -165,10 +178,7 @@ export function validateNewsPredictionPayload(
     },
     marketReaction: {
       currencyBias: reaction.currencyBias,
-      pairBiases: pairBiases.map((item: { symbol: string; bias: NewsMarketBias }) => ({
-        symbol: item.symbol,
-        bias: item.bias,
-      })),
+      pairBiases: normalizedPairBiases,
       explanation: reaction.explanation.trim(),
       invalidationConditions: reaction.invalidationConditions,
     },
