@@ -532,10 +532,6 @@ export function AnalyzeWorkspace() {
       .then((persisted) => {
         if (cancelled) return;
         try {
-          const savedSelfCheck = window.localStorage.getItem(SELF_CHECK_PREF_KEY);
-          if (savedSelfCheck === '0' || savedSelfCheck === '1') {
-            const enabled = savedSelfCheck === '1';
-          }
           const savedOhlcAssist = window.localStorage.getItem(OHLC_ASSIST_PREF_KEY);
           if (savedOhlcAssist === '0' || savedOhlcAssist === '1') {
             const ohlcEnabled = savedOhlcAssist === '1';
@@ -1208,9 +1204,7 @@ export function AnalyzeWorkspace() {
                         1. {macroTf} Macro · CRT
                       </div>
                       <div className="mt-0.5 truncate text-[11px] text-slate-400">
-                        {signal?.macroChartMarkup
-                          ? `Inspect ${macroTf} CRT Markup`
-                          : 'Bias, Range & Targets'}
+Bias, Range & Targets
                       </div>
                     </div>
                     {macroImageDataUrl && (
@@ -1239,9 +1233,7 @@ export function AnalyzeWorkspace() {
                         2. {executionTf} Execution
                       </div>
                       <div className="mt-0.5 truncate text-[11px] text-slate-400">
-                        {signal?.chartMarkup
-                          ? `Inspect ${executionTf} Entry Markup`
-                          : 'Trigger & Tight Stop'}
+Trigger & Tight Stop
                       </div>
                     </div>
                     {imageDataUrl && (
@@ -1257,7 +1249,7 @@ export function AnalyzeWorkspace() {
               </div>
             )}
 
-            {/* Chart Screenshot Uploader + Live AI Chart Markup */}
+            {/* Original chart screenshot for analysis context */}
             <ChartUploader
               imageDataUrl={displayedImageDataUrl}
               signal={displayedSignal}
