@@ -396,6 +396,8 @@ export interface SignalHistoryRecord {
   takeProfit1: string;
   takeProfit2: string;
   takeProfit3: string;
+  preferredTakeProfit?: 1 | 2 | 3;
+  preferredTakeProfitReason?: string;
   riskRewardRatio: string;
   marketStructure: string;
   confidenceSummary: string;
