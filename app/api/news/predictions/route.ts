@@ -128,13 +128,14 @@ export async function POST(req: NextRequest) {
       },
     });
     const raw = extractJson(response.text || '');
-    const signal = raw?.signal;
+    const signalValue = raw?.signal;
     const confidence = Number(raw?.confidence);
-    if (!raw || !['BUY', 'SELL', 'NO_TRADE'].includes(String(signal)) ||
+    if (!raw || (signalValue !== 'BUY' && signalValue !== 'SELL' && signalValue !== 'NO_TRADE') ||
         !Number.isInteger(confidence) || confidence < 0 || confidence > 100) {
       return NextResponse.json({ error: 'The AI returned an invalid signal. Please try again.' }, { status: 502 });
     }
 
+    const signal = signalValue;
     const shortText = (value: unknown, fallback: string) =>
       typeof value === 'string' && value.trim() ? value.trim().slice(0, 240) : fallback;
     const bias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
