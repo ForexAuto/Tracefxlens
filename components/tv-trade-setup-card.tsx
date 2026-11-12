@@ -159,6 +159,7 @@ export function TvTradeSetupCard({
       `Take Profit 1: ${signal.takeProfit1}`,
       `Take Profit 2: ${signal.takeProfit2}`,
       `Take Profit 3: ${signal.takeProfit3}`,
+      ...(signal.preferredTakeProfit ? [`AI Recommended Main Target: TP${signal.preferredTakeProfit}`, `Reason: ${signal.preferredTakeProfitReason || 'Selected by model'}`] : []),
       `Risk / Reward: ${signal.riskRewardRatio}`,
       `Trigger: ${signal.entryTriggerNote}`,
       `Invalidation: ${signal.invalidationCondition}`,
