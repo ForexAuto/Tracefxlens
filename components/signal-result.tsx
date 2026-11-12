@@ -124,23 +124,6 @@ export function SignalResult({
     }
   };
 
-  const ladderPoints = useMemo(() => {
-    if (!signal || !signal.isValidChart) return [];
-    const items = [
-      { id: 'tp3', label: 'TP3', priceStr: signal.takeProfit3, kind: 'tp' as const },
-      { id: 'tp2', label: 'TP2', priceStr: signal.takeProfit2, kind: 'tp' as const },
-      { id: 'tp1', label: 'TP1', priceStr: signal.takeProfit1, kind: 'tp' as const },
-      { id: 'entry', label: 'Entry', priceStr: signal.entryPrice, kind: 'entry' as const },
-      { id: 'now', label: 'Current', priceStr: signal.currentMarketPrice, kind: 'now' as const },
-      { id: 'sl', label: 'Stop Loss', priceStr: signal.stopLoss, kind: 'sl' as const },
-    ]
-      .map((item) => ({ ...item, num: parseNumericPrice(item.priceStr) }))
-      .filter((item): item is typeof item & { num: number } => item.num !== null);
-
-    if (items.length < 3) return [];
-    return [...items].sort((a, b) => b.num - a.num);
-  }, [signal]);
-
   // 1. Live Model-Driven Progress Pipeline (including Step 1 Rejection or User Stop)
   if (isLoading || isCompleting || isRejected || isStopped) {
     return (
