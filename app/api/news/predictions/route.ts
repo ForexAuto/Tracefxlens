@@ -31,7 +31,9 @@ export async function GET(req: NextRequest) {
   try {
     const predictions = await listNewsPredictions();
     const fingerprint = req.nextUrl.searchParams.get('eventFingerprint');
-    const filtered = fingerprint ? predictions.filter((item) => item.eventFingerprint === fingerprint) : predictions;
+    const pair = req.nextUrl.searchParams.get('pair');
+    const scopedFingerprint = fingerprint && pair ? `${fingerprint}:${pair}` : fingerprint;
+    const filtered = scopedFingerprint ? predictions.filter((item) => item.eventFingerprint === scopedFingerprint) : predictions;
     const evaluations = await listNewsPredictionEvaluations(filtered.map((item) => item.id));
     return NextResponse.json({ predictions: filtered, evaluations });
   } catch (error) {
@@ -46,6 +48,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const eventId = typeof body?.eventId === 'string' ? body.eventId.trim() : '';
+    const selectedPair = typeof body?.pair === 'string' ? body.pair.trim() : '';
     if (!eventId || eventId.length > 180) {
       return NextResponse.json({ error: 'A valid calendar event ID is required.' }, { status: 400 });
     }
@@ -60,32 +63,12 @@ export async function POST(req: NextRequest) {
       if (!event.actual?.trim() || !event.forecast?.trim()) {
         return NextResponse.json({ error: 'The calendar feed does not yet contain both the actual release and consensus forecast.' }, { status: 409 });
       }
-      const fingerprint = getNewsEventFingerprint(event);
-      const records = (await listNewsPredictions(100)).filter((item) => item.eventFingerprint === fingerprint);
-      if (!records.length) {
-        return NextResponse.json({ error: 'No saved AI prediction exists for this event.' }, { status: 404 });
-      }
-      const evaluations = [];
-      for (const record of records) {
-        const evaluation = evaluateNewsPrediction(record, event);
-        if (!evaluation) continue;
-        const saved = await saveNewsPredictionEvaluation(evaluation);
-        evaluations.push(saved);
-      }
-      if (!evaluations.length) {
-        return NextResponse.json({ error: 'The actual and forecast values could not be compared safely. Check that their units and numeric formats match.' }, { status: 422 });
-      }
-      return NextResponse.json({ evaluations, evaluatedCount: evaluations.length });
+      const selectedMapping = event.affectedPairs.find((pair) => pair.symbol === selectedPair);
+    if (!selectedMapping) {
+      return NextResponse.json({ error: 'Choose an instrument from this event’s affected-pair list.' }, { status: 400 });
     }
 
-    if (!isSupportedNewsHighImpactEvent(event)) {
-      return NextResponse.json(
-        { error: 'This event is not an eligible upcoming high-impact release for a supported currency, or it has already been released.' },
-        { status: 400 }
-      );
-    }
-
-    const fingerprint = getNewsEventFingerprint(event);
+    const fingerprint = `${getNewsEventFingerprint(event)}:${selectedPair}`;
     const evidence = buildNewsEvidenceSnapshot(event);
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -93,14 +76,20 @@ export async function POST(req: NextRequest) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const systemInstruction = `You are TraceFX Lens. Return ONLY compact JSON with exactly two keys: currencySignal and pairSignals. currencySignal must be BULLISH, BEARISH, NEUTRAL or UNCONFIRMED from the perspective of the event currency. pairSignals must contain objects with symbol and signal; signal must be BULLISH, BEARISH, NEUTRAL or UNCONFIRMED from the perspective of the quoted instrument price. Use only supplied event and consensus data. No explanations, probabilities, trading plans, markdown or extra keys. If direction is unclear, use UNCONFIRMED.`;
+    const systemInstruction = `You are TraceFX Lens. Analyse ONLY the selected instrument for the supplied high-impact news event. Return ONLY compact JSON with these keys: signal, confidence, reason, confirmation, invalidation. signal must be BUY, SELL or NO_TRADE. confidence must be an integer from 0 to 100 representing your subjective confidence in this directional assessment, not a statistical win probability. reason, confirmation and invalidation should each be one short sentence. Do not include other instruments, probabilities, long explanations, markdown or extra keys. If evidence is mixed or insufficient, choose NO_TRADE and a low confidence score.`;
     const prompt = [
       `Currency: ${event.currency}`,
       `Event: ${event.title}`,
-      `Forecast: ${event.forecast || 'Unavailable'}`,
+      `Scheduled release: ${new Date(event.timestampUtcMs).toISOString()}`,
+      `Consensus forecast: ${event.forecast || 'Unavailable'}`,
       `Previous: ${event.previous || 'Unavailable'}`,
-      `Pairs: ${event.affectedPairs.slice(0, 5).map((pair) => pair.symbol + ' (currency effect: ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
-    ].join('\n');
+      `Selected instrument: ${selectedMapping.symbol}`,
+      `Instrument relationship: ${selectedMapping.relationship}`,
+      `If the event currency strengthens, the instrument price direction is: ${selectedMapping.bullishCurrencyEffect}`,
+      `Indicator context: ${event.officialOverview}`,
+      `Usual effect: ${event.usualEffect}`,
+      'Assess the likely directional reaction for this instrument only. Avoid certainty when evidence is weak.',
+    ].join('\\n');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
@@ -114,14 +103,41 @@ export async function POST(req: NextRequest) {
       },
     });
     const raw = extractJson(response.text || '');
-    const validated = validateNewsPredictionPayload(raw, event);
-    if (!validated) {
-      return NextResponse.json({ error: 'The AI returned an invalid prediction. Please refresh and try again.' }, { status: 502 });
+    const signal = raw?.signal;
+    const confidence = Number(raw?.confidence);
+    if (!raw || !['BUY', 'SELL', 'NO_TRADE'].includes(String(signal)) ||
+        !Number.isInteger(confidence) || confidence < 0 || confidence > 100) {
+      return NextResponse.json({ error: 'The AI returned an invalid signal. Please try again.' }, { status: 502 });
     }
 
+    const bias = signal === 'BUY' ? 'BULLISH' : signal === 'SELL' ? 'BEARISH' : 'UNCONFIRMED';
+    const shortText = (value: unknown, fallback: string) =>
+      typeof value === 'string' && value.trim() ? value.trim().slice(0, 240) : fallback;
     const missingData = evidence.missingData;
     const prediction = {
-      ...validated,
+      outcome: {
+        primary: signal === 'BUY' ? 'ABOVE_EXPECTATIONS' : signal === 'SELL' ? 'BELOW_EXPECTATIONS' : 'INSUFFICIENT_DATA',
+        probabilities: { positive: 34, inline: 33, negative: 33 },
+        explanation: shortText(raw.reason, 'No clear directional advantage identified.'),
+      },
+      marketReaction: {
+        currencyBias: 'UNCONFIRMED' as const,
+        pairBiases: [{ symbol: selectedPair, bias }],
+        explanation: shortText(raw.reason, 'AI assessment for the selected instrument.'),
+        invalidationConditions: [shortText(raw.invalidation, 'Reassess if price action contradicts the expected reaction.')],
+      },
+      tradingPlan: {
+        preferredInstruments: signal === 'NO_TRADE' ? [] : [selectedPair],
+        confirmationConditions: [shortText(raw.confirmation, 'Wait for price action to confirm the direction after release.')],
+        entryApproach: 'Wait for confirmation; do not trade the forecast alone.',
+        risks: ['News volatility and spread expansion can cause slippage.'],
+      },
+      selectedInstrument: selectedPair,
+      signal,
+      confidencePercent: confidence,
+      signalReason: shortText(raw.reason, 'AI directional assessment for the selected instrument.'),
+      confirmation: shortText(raw.confirmation, 'Wait for price action to confirm after the release.'),
+      invalidation: shortText(raw.invalidation, 'Reassess if price action contradicts the expected direction.'),
       evidence: {
         forecast: event.forecast || null,
         previous: event.previous || null,
@@ -130,7 +146,7 @@ export async function POST(req: NextRequest) {
         missingData,
         quality: evidence.quality,
       },
-      modelVersion: 'gemini-3.1-flash-lite-compact',
+      modelVersion: 'gemini-3.1-flash-lite-single-instrument',
       status: 'PREDICTED' as const,
     };
     const saved = await createNewsPredictionVersion({
@@ -148,11 +164,10 @@ export async function POST(req: NextRequest) {
         currency: event.currency.toUpperCase(),
         version: 0,
         generatedAt: new Date().toISOString(),
-        schemaVersion: 2,
+        schemaVersion: 3,
       },
-      evidenceSnapshot: evidence,
+      evidenceSnapshot: { ...evidence, selectedInstrument: selectedPair },
     });
-
     return NextResponse.json({ prediction: saved });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unable to generate news prediction.';
