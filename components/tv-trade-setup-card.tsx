@@ -128,23 +128,6 @@ export function TvTradeSetupCard({
     }
   };
 
-  const ladderPoints = useMemo(() => {
-    if (!signal || !signal.isValidChart) return [];
-    const items = [
-      { id: 'tp3', label: 'TP 3', priceStr: signal.takeProfit3, kind: 'tp' as const },
-      { id: 'tp2', label: 'TP 2', priceStr: signal.takeProfit2, kind: 'tp' as const },
-      { id: 'tp1', label: 'TP 1', priceStr: signal.takeProfit1, kind: 'tp' as const },
-      { id: 'entry', label: 'Entry', priceStr: signal.entryPrice, kind: 'entry' as const },
-      { id: 'now', label: 'Current', priceStr: signal.currentMarketPrice, kind: 'now' as const },
-      { id: 'sl', label: 'Stop Loss', priceStr: signal.stopLoss, kind: 'sl' as const },
-    ]
-      .map((item) => ({ ...item, num: parseNumericPrice(item.priceStr) }))
-      .filter((item): item is typeof item & { num: number } => item.num !== null);
-
-    if (items.length < 3) return [];
-    return [...items].sort((a, b) => b.num - a.num);
-  }, [signal]);
-
   const entryNum = signal ? parseNumericPrice(signal.entryPrice) : null;
   const slNum = signal ? parseNumericPrice(signal.stopLoss) : null;
 
@@ -579,51 +562,7 @@ export function TvTradeSetupCard({
         </div>
       </div>
 
-      {/* Visual Price Axis Geometry Ladder (High to Low) */}
-      {ladderPoints.length >= 4 && (
-        <div className="border-t border-slate-800/80 px-4 py-3 sm:px-5">
-          <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
-            <span className="font-semibold text-slate-300">
-              Price Axis Geometry
-            </span>
-            <span className="text-[11px] text-slate-500">High to Low Scale</span>
-          </div>
 
-          <div className="space-y-1">
-            {ladderPoints.map((pt) => {
-              const textStyle =
-                pt.kind === 'tp'
-                  ? 'text-emerald-300 font-medium'
-                  : pt.kind === 'sl'
-                  ? 'text-rose-300 font-medium'
-                  : pt.kind === 'entry'
-                  ? 'text-sky-300 font-semibold'
-                  : 'text-slate-400';
-
-              const lineStyle =
-                pt.kind === 'tp'
-                  ? 'border-emerald-500/25'
-                  : pt.kind === 'sl'
-                  ? 'border-rose-500/30'
-                  : pt.kind === 'entry'
-                  ? 'border-sky-400/40'
-                  : 'border-slate-800 border-dashed';
-
-              return (
-                <div key={pt.id} className="flex items-center gap-3 text-xs py-0.5">
-                  <span className={`w-20 shrink-0 ${textStyle}`}>{pt.label}</span>
-                  <div className={`flex-1 border-b ${lineStyle}`} />
-                  <span
-                    className={`font-[family-name:var(--font-mono)] tabular-nums shrink-0 ${textStyle}`}
-                  >
-                    {pt.priceStr}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
 
       {/* Technical Confluence & SMC Structure */}
       <div className="border-t border-slate-800/80 bg-[linear-gradient(180deg,rgba(15,23,42,0.48),rgba(8,13,24,0.72))] p-4 sm:p-5 space-y-4">
