@@ -362,6 +362,8 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
           type: Type.STRING,
           description: 'Take profit 3 (extended runner objective).',
         },
+        preferredTakeProfit: { type: Type.INTEGER, description: 'Choose 1, 2, or 3 as the single recommended primary take-profit target.' },
+        preferredTakeProfitReason: { type: Type.STRING, description: 'One concise reason this target best balances realistic reach and reward versus risk.' },
         riskRewardRatio: {
           type: Type.STRING,
           description: 'Calculated risk-to-reward ratio (e.g. "1:2.8").',
@@ -413,6 +415,8 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
         'takeProfit1',
         'takeProfit2',
         'takeProfit3',
+        'preferredTakeProfit',
+        'preferredTakeProfitReason',
         'riskRewardRatio',
         'technicalRationale',
       ],
@@ -421,6 +425,12 @@ const TV_AGENT_TOOLS: FunctionDeclaration[] = [
 ];
 
 const SYSTEM_INSTRUCTION = `You are the TraceFX TradingView Autonomous Control Engine.
+
+TAKE-PROFIT PRIORITY:
+- Every BUY/SELL setup must keep TP1 (conservative), TP2 (structural), and TP3 (extended runner), and independently choose preferredTakeProfit as exactly 1, 2, or 3.
+- Choose the one target most realistically supported by visible market structure, opposing liquidity/support-resistance, momentum, and available price room. Do not automatically select TP2.
+- Explain the choice briefly in preferredTakeProfitReason. Calculate riskRewardRatio against the preferred target, not automatically TP2.
+- If none of the targets is justified, return HOLD rather than inventing a target.
 You have full visual and interactive control over a live 1440x900 desktop TradingView Supercharts browser session via Playwright tools.
 
 COORDINATE SYSTEM:
