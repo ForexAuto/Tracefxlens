@@ -164,7 +164,7 @@ export async function POST(req: NextRequest) {
       marketContextBlocks.length ? '' : 'Live market telemetry was unavailable; do not invent market prices, trends or levels.',
       'Weigh the economic event, recent macro context and selected-instrument H1/M5 price behaviour together. Explain material agreement or disagreement. Do not treat a technical snapshot as proof of the future reaction.',
       'Assess the likely directional reaction for this instrument only. Avoid certainty when evidence is weak.',
-    ].join('\\n');
+    ].join('\n');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
