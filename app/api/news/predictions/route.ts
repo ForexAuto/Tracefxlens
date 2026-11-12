@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       `Indicator definition: ${event.officialOverview}`,
       `Usual effect: ${event.usualEffect}`,
       `Why traders care: ${event.whyTradersCare}`,
-      `Affected pairs (provide a separate directional bias for every symbol): ${event.affectedPairs.map((pair) => pair.symbol + ' (' + pair.relationship + '; stronger ${event.currency} effect points ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
+      `Affected pairs (provide a separate directional bias for every symbol): ${event.affectedPairs.map((pair) => pair.symbol + ' (' + pair.relationship + '; stronger ' + event.currency + ' effect points ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
       `Evidence quality: ${evidence.quality}`,
       `Missing evidence: ${evidence.missingData.join(' ')}`,
       `Available evidence: ${evidence.relevantData.join(' ')}`,
