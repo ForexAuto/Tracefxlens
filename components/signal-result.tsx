@@ -446,6 +446,76 @@ export function SignalResult({
       </div>
 
 
+      {/* Primary Execution Coordinates: Current Price · Entry · Stop Loss */}
+      <div className="grid grid-cols-1 divide-y divide-slate-800/80 border-t border-slate-800/80 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
+        {/* Current Price */}
+        <div className="flex items-center justify-between p-4 sm:block sm:p-5">
+          <div className="text-xs text-slate-400">Current Market</div>
+          <div className="mt-0.5 font-[family-name:var(--font-mono)] text-base sm:text-lg font-semibold text-slate-200 tabular-nums">
+            {signal.currentMarketPrice}
+          </div>
+        </div>
+
+        {/* Entry Point */}
+        <div className="flex items-center justify-between p-4 sm:p-5">
+          <div>
+            <div className="text-xs font-medium text-sky-400">
+              {signal.signalType === 'HOLD'
+                ? 'Watch Trigger'
+                : isTopDownCrt
+                ? `${execTfLabel} Entry Price`
+                : 'Entry Price'}
+            </div>
+            <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-white tabular-nums">
+              {signal.entryPrice}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleCopyValue('entry', signal.entryPrice)}
+            aria-label="Copy entry price"
+            className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100"
+          >
+            {copiedKey === 'entry' ? (
+              <Check className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+
+        {/* Stop Loss Exit */}
+        <div className="flex items-center justify-between p-4 sm:p-5">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-medium text-rose-400">
+              <span>{isTopDownCrt ? `${execTfLabel} Tight Stop` : 'Stop Loss'}</span>
+              {formatPctDelta(entryNum, slNum) && (
+                <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">
+                  {formatPctDelta(entryNum, slNum)}
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-rose-300 tabular-nums">
+              {signal.stopLoss}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleCopyValue('sl', signal.stopLoss)}
+            aria-label="Copy stop loss price"
+            className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100"
+          >
+            {copiedKey === 'sl' ? (
+              <Check className="h-4 w-4 text-emerald-400" />
+            ) : (
+              <Copy className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+      </div>
+
+
+
       {signal.visionVerification && (() => {
         const vv = signal.visionVerification;
         const items: Array<{ key: string; label: string; className?: string }> = [];
@@ -672,125 +742,6 @@ export function SignalResult({
           <p className="mt-3 text-xs leading-relaxed text-slate-300">
             {signal.macroContext.summary}
           </p>
-        </div>
-      )}
-
-      {/* Primary Execution Coordinates: Current Price · Entry · Stop Loss */}
-      <div className="grid grid-cols-1 divide-y divide-slate-800/80 border-t border-slate-800/80 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-        {/* Current Price */}
-        <div className="flex items-center justify-between p-4 sm:block sm:p-5">
-          <div className="text-xs text-slate-400">Current Market</div>
-          <div className="mt-0.5 font-[family-name:var(--font-mono)] text-base sm:text-lg font-semibold text-slate-200 tabular-nums">
-            {signal.currentMarketPrice}
-          </div>
-        </div>
-
-        {/* Entry Point */}
-        <div className="flex items-center justify-between p-4 sm:p-5">
-          <div>
-            <div className="text-xs font-medium text-sky-400">
-              {signal.signalType === 'HOLD'
-                ? 'Watch Trigger'
-                : isTopDownCrt
-                ? `${execTfLabel} Entry Price`
-                : 'Entry Price'}
-            </div>
-            <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-white tabular-nums">
-              {signal.entryPrice}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleCopyValue('entry', signal.entryPrice)}
-            aria-label="Copy entry price"
-            className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100"
-          >
-            {copiedKey === 'entry' ? (
-              <Check className="h-4 w-4 text-emerald-400" />
-            ) : (
-              <Copy className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-
-        {/* Stop Loss Exit */}
-        <div className="flex items-center justify-between p-4 sm:p-5">
-          <div>
-            <div className="flex items-center gap-2 text-xs font-medium text-rose-400">
-              <span>{isTopDownCrt ? `${execTfLabel} Tight Stop` : 'Stop Loss'}</span>
-              {formatPctDelta(entryNum, slNum) && (
-                <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">
-                  {formatPctDelta(entryNum, slNum)}
-                </span>
-              )}
-            </div>
-            <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-rose-300 tabular-nums">
-              {signal.stopLoss}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => handleCopyValue('sl', signal.stopLoss)}
-            aria-label="Copy stop loss price"
-            className="flex min-h-[44px] min-w-[44px] -mr-2 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-800/60 hover:text-slate-100"
-          >
-            {copiedKey === 'sl' ? (
-              <Check className="h-4 w-4 text-emerald-400" />
-            ) : (
-              <Copy className="h-4 w-4" />
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Visual Order Price Axis Ladder */}
-      {ladderPoints.length >= 4 && (
-        <div className="border-t border-slate-800/80 p-5 sm:p-6">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-300">
-              Price Axis Geometry
-            </h3>
-            <span className="text-xs text-slate-500">High to Low Scale</span>
-          </div>
-
-          <div className="space-y-1.5">
-            {ladderPoints.map((pt) => {
-              const textStyle =
-                pt.kind === 'tp'
-                  ? 'text-emerald-300'
-                  : pt.kind === 'sl'
-                  ? 'text-rose-300'
-                  : pt.kind === 'entry'
-                  ? 'text-sky-300 font-semibold'
-                  : 'text-slate-400';
-
-              const lineStyle =
-                pt.kind === 'tp'
-                  ? 'border-emerald-500/30'
-                  : pt.kind === 'sl'
-                  ? 'border-rose-500/35'
-                  : pt.kind === 'entry'
-                  ? 'border-sky-400/50'
-                  : 'border-slate-700 border-dashed';
-
-              return (
-                <div
-                  key={pt.id}
-                  className="flex items-center gap-3 text-xs py-0.5"
-                >
-                  <span className={`w-20 shrink-0 ${textStyle}`}>
-                    {pt.label}
-                  </span>
-                  <div className={`flex-1 border-b ${lineStyle}`} />
-                  <span
-                    className={`font-[family-name:var(--font-mono)] tabular-nums shrink-0 ${textStyle}`}
-                  >
-                    {pt.priceStr}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
         </div>
       )}
 
