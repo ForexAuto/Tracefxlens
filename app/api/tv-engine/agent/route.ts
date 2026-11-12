@@ -624,24 +624,24 @@ export async function POST(req: NextRequest) {
           let response;
           try {
             response = await ai.models.generateContent({
-              model: 'gemini-3.1-flash-lite',
+              model: 'gemini-3.8-flash',
               contents,
               config: {
                 systemInstruction: SYSTEM_INSTRUCTION,
                 tools: [{ functionDeclarations: TV_AGENT_TOOLS }],
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
               },
             });
           } catch {
-            // Transient retry on gemini-3.1-flash-lite
+            // Transient retry on gemini-3.8-flash
             await new Promise((resolve) => setTimeout(resolve, 350));
             response = await ai.models.generateContent({
-              model: 'gemini-3.1-flash-lite',
+              model: 'gemini-3.8-flash',
               contents,
               config: {
                 systemInstruction: SYSTEM_INSTRUCTION,
                 tools: [{ functionDeclarations: TV_AGENT_TOOLS }],
-                thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+                thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
               },
             });
           }

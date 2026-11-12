@@ -130,7 +130,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: 'gemini-3.8-flash',
       contents: [
         {
           role: 'user',
@@ -147,7 +147,7 @@ export async function POST(req: NextRequest) {
       ],
       config: {
         systemInstruction: SYSTEM_INSTRUCTION,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,

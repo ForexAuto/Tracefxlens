@@ -201,13 +201,13 @@ export async function POST(req: NextRequest) {
     ].join('\n');
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.1-flash-lite',
+      model: 'gemini-3.8-flash',
       contents: prompt,
       config: {
         systemInstruction,
         temperature: 0.2,
         responseMimeType: 'application/json',
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
         abortSignal: req.signal,
       },
     });
@@ -262,7 +262,7 @@ export async function POST(req: NextRequest) {
         quality: evidence.quality,
         historicalReleaseCount: historicalReleases?.count ?? 0,
       },
-      modelVersion: 'gemini-3.1-flash-lite-single-instrument',
+      modelVersion: 'gemini-3.8-flash-single-instrument',
       status: 'PREDICTED' as const,
     };
     const saved = await createNewsPredictionVersion({

@@ -43,17 +43,17 @@ interface ModelCandidate {
 
 const MODEL_CANDIDATES: ModelCandidate[] = [
   {
-    model: 'gemini-3.1-flash-lite',
-    label: 'gemini-3.1-flash-lite',
-    firstChunkTimeoutMs: 12000,
-    stallTimeoutMs: 25000,
-    thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+    model: 'gemini-3.8-flash',
+    label: 'gemini-3.8-flash',
+    firstChunkTimeoutMs: 18000,
+    stallTimeoutMs: 30000,
+    thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
   },
   {
-    model: 'gemini-3.1-flash-lite',
-    label: 'gemini-3.1-flash-lite (retry)',
-    firstChunkTimeoutMs: 16000,
-    stallTimeoutMs: 25000,
+    model: 'gemini-3.8-flash',
+    label: 'gemini-3.8-flash (retry)',
+    firstChunkTimeoutMs: 22000,
+    stallTimeoutMs: 30000,
   },
 ];
 

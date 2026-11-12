@@ -246,13 +246,13 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
     thinkingConfig?: { thinkingLevel?: ThinkingLevel; thinkingBudget?: number };
   }> = [
     {
-      model: 'gemini-3.1-flash-lite',
-      timeoutMs: 11000,
-      thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+      model: 'gemini-3.8-flash',
+      timeoutMs: 15000,
+      thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
     },
     {
-      model: 'gemini-3.1-flash-lite',
-      timeoutMs: 12000,
+      model: 'gemini-3.8-flash',
+      timeoutMs: 18000,
     },
   ];
 
