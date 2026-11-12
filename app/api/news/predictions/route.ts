@@ -62,16 +62,42 @@ export async function POST(req: NextRequest) {
     }
 
     const calendar = await fetchNormalizedMacroCalendar({ forceRefresh: true });
-    const normalizeTitle = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-    const event = calendar.events.find((candidate) => candidate.eventId === eventId)
-      || calendar.events.find((candidate) =>
-        requestedCurrency &&
-        candidate.currency.trim().toUpperCase() === requestedCurrency &&
-        requestedTitle &&
-        normalizeTitle(candidate.title) === normalizeTitle(requestedTitle) &&
-        Number.isFinite(requestedTimestamp) &&
-        Math.abs(candidate.timestampUtcMs - requestedTimestamp) <= 30 * 60_000
-      );
+
+    // Calendar providers often describe the same release differently
+    // (for example, "Core PPI m/m" vs "Core PPI MoM"). Normalize common
+    // economic-calendar aliases before matching the stable event details.
+    const normalizeEventTitle = (value: string) => value
+      .toLowerCase()
+      .replace(/\\bmonth\\s*[- ]?over\\s*[- ]?month\\b/g, ' mom ')
+      .replace(/\\bm\\s*\\/\\s*m\\b/g, ' mom ')
+      .replace(/\\byear\\s*[- ]?over\\s*[- ]?year\\b/g, ' yoy ')
+      .replace(/\\by\\s*\\/\\s*y\\b/g, ' yoy ')
+      .replace(/\\bquarter\\s*[- ]?over\\s*[- ]?quarter\\b/g, ' qoq ')
+      .replace(/\\bq\\s*\\/\\s*q\\b/g, ' qoq ')
+      .replace(/\\bproducer\\s+price\\s+index\\b/g, ' ppi ')
+      .replace(/\\bconsumer\\s+price\\s+index\\b/g, ' cpi ')
+      .replace(/\\bpersonal\\s+consumption\\s+expenditures?\\b/g, ' pce ')
+      .replace(/\\bnon[ -]?farm\\s+payrolls?\\b/g, ' nonfarm payrolls ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim()
+      .replace(/\\s+/g, ' ');
+
+    const hasStableReference = Boolean(
+      requestedCurrency && requestedTitle && Number.isFinite(requestedTimestamp)
+    );
+    const matchedByDetails = hasStableReference
+      ? calendar.events.find((candidate) =>
+          candidate.currency.trim().toUpperCase() === requestedCurrency &&
+          normalizeEventTitle(candidate.title) === normalizeEventTitle(requestedTitle) &&
+          Math.abs(candidate.timestampUtcMs - requestedTimestamp) <= 30 * 60_000
+        )
+      : undefined;
+    // Prefer the stable currency/title/time match. Event IDs can be regenerated
+    // when feed ordering changes, so use an ID only for older clients that do
+    // not send the stable event details.
+    const event = matchedByDetails || (!hasStableReference
+      ? calendar.events.find((candidate) => candidate.eventId === eventId)
+      : undefined);
     if (!event || !/^[A-Z]{3}$/.test(event.currency.trim().toUpperCase()) || event.impact !== 'High' || event.isAllDayOrTentative) {
       return NextResponse.json({ error: 'The selected event could not be matched to an eligible high-impact calendar release. Refresh the calendar and try again.' }, { status: 400 });
     }
