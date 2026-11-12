@@ -27,6 +27,8 @@ interface SupabaseHistoryRow {
   take_profit_1: string;
   take_profit_2: string;
   take_profit_3: string;
+  preferred_take_profit?: number | null;
+  preferred_take_profit_reason?: string | null;
   risk_reward_ratio: string;
   market_structure: string;
   confidence_summary: string;
@@ -108,6 +110,10 @@ function rowToRecord(row: SupabaseHistoryRow): SignalHistoryRecord {
     takeProfit1: String(row.take_profit_1 || '—'),
     takeProfit2: String(row.take_profit_2 || '—'),
     takeProfit3: String(row.take_profit_3 || '—'),
+    preferredTakeProfit: [1, 2, 3].includes(Number(row.preferred_take_profit))
+      ? (Number(row.preferred_take_profit) as 1 | 2 | 3)
+      : undefined,
+    preferredTakeProfitReason: row.preferred_take_profit_reason ? String(row.preferred_take_profit_reason) : undefined,
     riskRewardRatio: String(row.risk_reward_ratio || '1 : 2.0'),
     marketStructure: String(row.market_structure || ''),
     confidenceSummary: String(row.confidence_summary || ''),
@@ -146,6 +152,8 @@ function recordToRow(rec: SignalHistoryRecord): SupabaseHistoryRow {
     take_profit_1: rec.takeProfit1,
     take_profit_2: rec.takeProfit2,
     take_profit_3: rec.takeProfit3,
+    preferred_take_profit: rec.preferredTakeProfit ?? null,
+    preferred_take_profit_reason: rec.preferredTakeProfitReason ?? null,
     risk_reward_ratio: rec.riskRewardRatio,
     market_structure: rec.marketStructure,
     confidence_summary: rec.confidenceSummary,
@@ -205,6 +213,8 @@ export function mergeImmutableRecord(
     ...existing,
     chartImageUrl: existing.chartImageUrl || incoming.chartImageUrl,
     chartMarkup: existing.chartMarkup || incoming.chartMarkup,
+    preferredTakeProfit: existing.preferredTakeProfit || incoming.preferredTakeProfit,
+    preferredTakeProfitReason: existing.preferredTakeProfitReason || incoming.preferredTakeProfitReason,
     outcome: lockedOutcome,
     outcomeLockedAt: lockedAt,
   };
