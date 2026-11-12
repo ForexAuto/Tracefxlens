@@ -63,7 +63,9 @@ RULES:
    - takeProfit1: Conservative 1:1.5 to 1:2.0 partial target (prior swing or equilibrium).
    - takeProfit2: Primary structural target (prior major swing high/low or opposing liquidity pool).
    - takeProfit3: Extended runner target (external liquidity draw).
-   - riskRewardRatio: Must reflect entry vs stopLoss vs takeProfit2 (e.g. "1:2.8").
+   - preferredTakeProfit: Choose exactly 1, 2, or 3 as the ONE target the trader should prioritize. Base this on visible structure, nearby opposing liquidity/support-resistance, momentum, and realistic room to target. Do not automatically choose TP2.
+   - preferredTakeProfitReason: One concise sentence explaining why that target is the most realistic balance of reach and reward/risk. If no target is justified, return HOLD rather than inventing one.
+   - riskRewardRatio: Must reflect entry vs stopLoss vs the preferredTakeProfit target.
 4. If HOLD:
    - Provide the key breakout watch levels for entryPrice and invalidation.
 5. Provide 3-4 concise, professional technical rationale points using SMC terminology.
@@ -165,6 +167,8 @@ export async function POST(req: NextRequest) {
             takeProfit1: { type: Type.STRING },
             takeProfit2: { type: Type.STRING },
             takeProfit3: { type: Type.STRING },
+            preferredTakeProfit: { type: Type.INTEGER, description: 'Choose 1, 2, or 3 as the single recommended primary take-profit target.' },
+            preferredTakeProfitReason: { type: Type.STRING, description: 'One concise reason this target best balances realistic reach and reward versus risk.' },
             riskRewardRatio: { type: Type.STRING },
             marketStructure: { type: Type.STRING },
             confidenceSummary: { type: Type.STRING },
@@ -199,6 +203,8 @@ export async function POST(req: NextRequest) {
             'takeProfit1',
             'takeProfit2',
             'takeProfit3',
+            'preferredTakeProfit',
+            'preferredTakeProfitReason',
             'riskRewardRatio',
             'technicalRationale',
           ],
@@ -247,6 +253,8 @@ export async function POST(req: NextRequest) {
       takeProfit1: String(parsed.takeProfit1 || '—'),
       takeProfit2: String(parsed.takeProfit2 || '—'),
       takeProfit3: String(parsed.takeProfit3 || '—'),
+      preferredTakeProfit: [1, 2, 3].includes(Number(parsed.preferredTakeProfit)) ? Number(parsed.preferredTakeProfit) as 1 | 2 | 3 : undefined,
+      preferredTakeProfitReason: String(parsed.preferredTakeProfitReason || ''),
       riskRewardRatio: String(parsed.riskRewardRatio || '1:2.0'),
       marketStructure: String(
         parsed.marketStructure || 'Market Structure Confirmed'
