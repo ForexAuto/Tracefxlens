@@ -68,19 +68,19 @@ export async function POST(req: NextRequest) {
     // economic-calendar aliases before matching the stable event details.
     const normalizeEventTitle = (value: string) => value
       .toLowerCase()
-      .replace(/\\bmonth\\s*[- ]?over\\s*[- ]?month\\b/g, ' mom ')
-      .replace(/\\bm\\s*\\/\\s*m\\b/g, ' mom ')
-      .replace(/\\byear\\s*[- ]?over\\s*[- ]?year\\b/g, ' yoy ')
-      .replace(/\\by\\s*\\/\\s*y\\b/g, ' yoy ')
-      .replace(/\\bquarter\\s*[- ]?over\\s*[- ]?quarter\\b/g, ' qoq ')
-      .replace(/\\bq\\s*\\/\\s*q\\b/g, ' qoq ')
-      .replace(/\\bproducer\\s+price\\s+index\\b/g, ' ppi ')
-      .replace(/\\bconsumer\\s+price\\s+index\\b/g, ' cpi ')
-      .replace(/\\bpersonal\\s+consumption\\s+expenditures?\\b/g, ' pce ')
-      .replace(/\\bnon[ -]?farm\\s+payrolls?\\b/g, ' nonfarm payrolls ')
+      .replace(/\bmonth\s*[- ]?over\s*[- ]?month\b/g, ' mom ')
+      .replace(/\bm\s*\/\s*m\b/g, ' mom ')
+      .replace(/\byear\s*[- ]?over\s*[- ]?year\b/g, ' yoy ')
+      .replace(/\by\s*\/\s*y\b/g, ' yoy ')
+      .replace(/\bquarter\s*[- ]?over\s*[- ]?quarter\b/g, ' qoq ')
+      .replace(/\bq\s*\/\s*q\b/g, ' qoq ')
+      .replace(/\bproducer\s+price\s+index\b/g, ' ppi ')
+      .replace(/\bconsumer\s+price\s+index\b/g, ' cpi ')
+      .replace(/\bpersonal\s+consumption\s+expenditures?\b/g, ' pce ')
+      .replace(/\bnon[ -]?farm\s+payrolls?\b/g, ' nonfarm payrolls ')
       .replace(/[^a-z0-9]+/g, ' ')
       .trim()
-      .replace(/\\s+/g, ' ');
+      .replace(/\s+/g, ' ');
 
     const hasStableReference = Boolean(
       requestedCurrency && requestedTitle && Number.isFinite(requestedTimestamp)
