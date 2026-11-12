@@ -4,7 +4,6 @@ import type { TvConnectPayload } from '@/lib/tv-engine-types';
 
 export interface PersistedTvWorkspaceState {
   activeSignal: TradingSignalResponse | null;
-  orderLock: boolean;
   manualMode: boolean;
   updatedAt: number;
 }
@@ -79,7 +78,6 @@ export function loadTvWorkspaceState(): PersistedTvWorkspaceState | null {
     const parsed = JSON.parse(raw) as Partial<PersistedTvWorkspaceState>;
     return {
       activeSignal: parsed.activeSignal || null,
-      orderLock: true,
       manualMode: Boolean(parsed.manualMode),
       updatedAt: parsed.updatedAt || Date.now(),
     };
