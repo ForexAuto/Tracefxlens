@@ -38,7 +38,6 @@ import {
   syncHistoryWithServer,
 } from '@/lib/history-storage';
 
-const SELF_CHECK_PREF_KEY = 'tracefx_self_check_v1';
 const OHLC_ASSIST_PREF_KEY = 'tracefx_ohlc_assist_v1';
 
 export function AnalyzeWorkspace() {
@@ -346,7 +345,7 @@ export function AnalyzeWorkspace() {
 
           if (evt.event === 'result') {
             finalSignal = evt.data;
-            setProgressPct(selfCheckEnabledRef.current ? 92 : 100);
+            setProgressPct(100);
             setStages((prev) =>
               prev.map((item) =>
                 item.status === 'active' || item.status === 'locked'
@@ -536,8 +535,6 @@ export function AnalyzeWorkspace() {
           const savedSelfCheck = window.localStorage.getItem(SELF_CHECK_PREF_KEY);
           if (savedSelfCheck === '0' || savedSelfCheck === '1') {
             const enabled = savedSelfCheck === '1';
-            selfCheckEnabledRef.current = enabled;
-            setSelfCheckEnabled(enabled);
           }
           const savedOhlcAssist = window.localStorage.getItem(OHLC_ASSIST_PREF_KEY);
           if (savedOhlcAssist === '0' || savedOhlcAssist === '1') {
@@ -737,30 +734,11 @@ export function AnalyzeWorkspace() {
   const isBusy = isAnalyzing || isCompletingScan;
   const isTopDownCrt = analysisMode === 'top_down_crt';
 
-  // Memoize Macro HTF signal projection so ChartUploader's reference check preserves layer filter toggles
-  const h1MacroSignalView = useMemo<TradingSignalResponse | null>(() => {
-    if (!signal || !signal.isValidChart || !signal.macroChartMarkup) {
-      return null;
-    }
-    const resolvedMacroLabel = signal.crtContext?.macroTimeframe || macroTf;
-    return {
-      ...signal,
-      detectedTimeframe: `${resolvedMacroLabel} Macro · CRT`,
-      chartMarkup: signal.macroChartMarkup,
-    };
-  }, [signal, macroTf]);
-
   const displayedImageDataUrl = isTopDownCrt
     ? activeCrtSlot === 'h1'
       ? macroImageDataUrl
       : imageDataUrl
     : imageDataUrl;
-
-  const displayedSignal = isTopDownCrt
-    ? activeCrtSlot === 'h1'
-      ? h1MacroSignalView
-      : signal
-    : signal;
 
   const displayedTimeframe = isTopDownCrt
     ? activeCrtSlot === 'h1'
@@ -1294,13 +1272,6 @@ export function AnalyzeWorkspace() {
                   ? activeCrtSlot === 'h1'
                     ? `${macroTf} Macro Chart · CRT Bias & Targets`
                     : `${executionTf} Execution Chart · Entry & Tight Stop`
-                  : undefined
-              }
-              customMarkedPrefix={
-                isTopDownCrt
-                  ? activeCrtSlot === 'h1'
-                    ? `AI Marked ${macroTf} Macro`
-                    : `AI Marked ${executionTf} Execution`
                   : undefined
               }
               uploadTitle={
