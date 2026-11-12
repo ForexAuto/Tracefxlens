@@ -100,34 +100,6 @@ export function NewsEventOverview({
     return () => { active = false; };
   }, [event?.eventId]);
 
-  useEffect(() => {
-    if (!event || !newsPrediction || newsPrediction.eventFingerprint !== getNewsEventFingerprint(event) || newsEvaluation || !event.actual?.trim() || !event.forecast?.trim()) return;
-    let active = true;
-    setEvaluationLoading(true);
-    fetch('/api/news/predictions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'evaluate', eventId: event.eventId }),
-    })
-      .then(async (response) => {
-        const payload = await response.json();
-        if (!response.ok) throw new Error(payload.error || 'Unable to evaluate released event.');
-        return payload;
-      })
-      .then((payload) => {
-        if (!active) return;
-        const current = (payload.evaluations || []).find((item: NewsPredictionEvaluation) => item.predictionId === newsPrediction.id);
-        if (current) setNewsEvaluation(current);
-      })
-      .catch((error) => {
-        if (active) setPredictionError(error instanceof Error ? error.message : 'Unable to evaluate released event.');
-      })
-      .finally(() => {
-        if (active) setEvaluationLoading(false);
-      });
-    return () => { active = false; };
-  }, [event?.eventId, event?.actual, event?.forecast, newsPrediction?.id, newsEvaluation?.id]);
-
   const generateNewsPrediction = async () => {
     if (!event) return;
     setPredictionLoading(true);
@@ -316,7 +288,7 @@ export function NewsEventOverview({
           <div className="flex items-center justify-between gap-2">
             <div>
               <h3 className="text-xs font-semibold text-slate-100">AI News Prediction</h3>
-              <p className="mt-1 text-[11px] text-slate-500">Pre-release economic forecast and market scenarios</p>
+              <p className="mt-1 text-[11px] text-slate-500">Manual, on-demand pair direction signals</p>
             </div>
             <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-300">{event.currency} · GLOBAL V2</span>
           </div>
@@ -354,7 +326,7 @@ export function NewsEventOverview({
                     {newsPrediction.prediction.marketReaction.currencyBias || (event.currency === 'USD' ? newsPrediction.prediction.marketReaction.usd : 'UNCONFIRMED')}
                   </span>
                 </div>
-                {event.affectedPairs.map((pair) => {
+                {event.affectedPairs.slice(0, 5).map((pair) => {
                   const bias = newsPrediction.prediction.marketReaction.pairBiases?.find((item) => item.symbol === pair.symbol)?.bias || 'UNCONFIRMED';
                   return (
                     <div key={pair.symbol} className="flex items-center justify-between text-xs">
@@ -404,7 +376,7 @@ export function NewsEventOverview({
             </div>
           ) : (
             <div className="rounded-xl border border-dashed border-slate-700 bg-[#0D1320] p-4">
-              <p className="text-xs leading-relaxed text-slate-400">Generate a forecast from the current calendar evidence. The AI will not invent unavailable market data.</p>
+              <p className="text-xs leading-relaxed text-slate-400">Tap Generate AI prediction when you want a fresh signal. Nothing is generated automatically.</p>
             </div>
           )}
 
@@ -431,7 +403,7 @@ export function NewsEventOverview({
               {predictionLoading || evaluationLoading ? 'Evaluating release...' : 'Evaluate prediction against actual'}
             </button>
           )}
-          <p className="text-[10px] leading-relaxed text-slate-500">AI-generated scenario analysis, not a verified win probability or guaranteed trading signal. Forecast versions are stored separately.</p>
+          <p className="text-[10px] leading-relaxed text-slate-500">AI direction signals are not guaranteed trading signals. Generate and evaluate only when you choose.</p>
         </section>
 
 
