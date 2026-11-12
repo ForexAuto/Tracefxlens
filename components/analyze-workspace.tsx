@@ -37,10 +37,6 @@ import {
   recordSignalToHistory,
   syncHistoryWithServer,
 } from '@/lib/history-storage';
-import {
-  buildVisionEnhancementPayload,
-  renderDraftMarkupPreviewDataUrl,
-} from '@/lib/chart-vision-enhancer';
 
 const SELF_CHECK_PREF_KEY = 'tracefx_self_check_v1';
 const OHLC_ASSIST_PREF_KEY = 'tracefx_ohlc_assist_v1';
@@ -67,7 +63,6 @@ export function AnalyzeWorkspace() {
   const [stopConfirmOpen, setStopConfirmOpen] = useState<boolean>(false);
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [selfCheckEnabled, setSelfCheckEnabled] = useState<boolean>(true);
   const [ohlcAssistEnabled, setOhlcAssistEnabled] = useState<boolean>(true);
 
   const activeTopDownPair = useMemo(
@@ -80,7 +75,6 @@ export function AnalyzeWorkspace() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const selfCheckEnabledRef = useRef<boolean>(true);
   const ohlcAssistEnabledRef = useRef<boolean>(true);
   const latestStateRef = useRef({
     selectedPair: 'XAU/USD',
@@ -207,27 +201,19 @@ export function AnalyzeWorkspace() {
       if (controller.signal.aborted) return;
 
       try {
-        // Pre-AI Pixel Scan: Sub-Pane Splitter + Hidden 0..1000 Ruler Grid + 2x Right-Edge Axis Crop
+        // Analyze focuses on market interpretation and signal quality; no drawing-coordinate calibration.
         setStages((prev) =>
           prev.map((item) =>
             item.step === 1
               ? {
                   ...item,
                   waitingText: isCrtMode
-                    ? `Calibrating ${crtMacroTf} Macro & ${crtExecTf} Execution 0..1000 ruler grids & 2× price-axis crops...`
-                    : 'Calibrating 0..1000 coordinate ruler grid, sub-panes & 2× price-axis crop...',
+                    ? `Reading ${crtMacroTf} macro context and ${crtExecTf} execution structure...`
+                    : 'Reading price action, market structure and trade context...',
                 }
               : item
           )
         );
-
-        const [visionEnhancement, macroVisionEnhancement] = await Promise.all([
-          buildVisionEnhancementPayload(chartUrl),
-          isCrtMode && macroChartUrl
-            ? buildVisionEnhancementPayload(macroChartUrl)
-            : Promise.resolve(undefined),
-        ]);
-        if (controller.signal.aborted) return;
 
         const response = await fetch('/api/analyze', {
           method: 'POST',
@@ -242,8 +228,6 @@ export function AnalyzeWorkspace() {
             pair,
             timeframe: effectiveTimeframe,
             ohlcAssistEnabled: ohlcAssistEnabledRef.current,
-            visionEnhancement,
-            macroVisionEnhancement,
           }),
           signal: controller.signal,
         });
@@ -462,94 +446,18 @@ export function AnalyzeWorkspace() {
         if (finalSignal) {
           let verifiedSignal: TradingSignalResponse = finalSignal;
 
-          // Optional Pass 2 — Two-Pass "Visual Self-Check" Mode (Draw -> Inspect -> Correct)
-          // Guaranteed non-breaking: if Pass 2 times out or fails, `verifiedSignal` seamlessly stays Draft 1!
-          if (
-            selfCheckEnabledRef.current &&
-            verifiedSignal.isValidChart &&
-            !controller.signal.aborted
-          ) {
-            try {
-              setStages((prev) =>
-                prev.map((item) =>
-                  item.step === 5
-                    ? {
-                        ...item,
-                        status: 'active',
-                        waitingText: isCrtMode
-                          ? `Pass 2 Self-Check: auditing ${crtExecTf} tight risk & ${crtMacroTf} dominance lock on canvas...`
-                          : 'Pass 2 Self-Check: inspecting drawn zones, wicks & stop-loss placement on canvas...',
-                      }
-                    : item
-                )
-              );
-
-              const markedDraftDataUrl = await renderDraftMarkupPreviewDataUrl(
-                chartUrl,
-                verifiedSignal
-              );
-
-              if (markedDraftDataUrl && !controller.signal.aborted) {
-                const verifyRes = await fetch('/api/analyze/verify', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    draftSignal: verifiedSignal,
-                    rulerOrCleanDataUrl:
-                      visionEnhancement?.rulerGridDataUrl || chartUrl,
-                    markedDraftDataUrl,
-                    rightEdgeZoomDataUrl: visionEnhancement?.rightEdgeZoomDataUrl,
-                    detectedPlotBox: visionEnhancement?.detectedPlotBox,
-                    subPaneCount: visionEnhancement?.subPaneCount ?? 0,
-                    visionEnhancement: visionEnhancement
-                      ? {
-                          detectedPlotBox: visionEnhancement.detectedPlotBox,
-                          subPaneCount: visionEnhancement.subPaneCount,
-                          detectedAxisTicks: visionEnhancement.detectedAxisTicks,
-                          liveBadgeY: visionEnhancement.liveBadgeY,
-                          detectedPivots: visionEnhancement.detectedPivots,
-                          detectedFvgCandidates:
-                            visionEnhancement.detectedFvgCandidates,
-                          candleEnvelope: visionEnhancement.candleEnvelope,
-                        }
-                      : undefined,
-                  }),
-                  signal: controller.signal,
-                });
-
-                if (verifyRes.ok) {
-                  const verifyJson = (await verifyRes.json()) as {
-                    signal?: TradingSignalResponse;
-                  };
-                  if (verifyJson?.signal && verifyJson.signal.isValidChart) {
-                    verifiedSignal = verifyJson.signal;
+          setProgressPct(100);
+          setStages((prev) =>
+            prev.map((item) =>
+              item.step === 5
+                ? {
+                    ...item,
+                    status: 'completed',
+                    finding: 'Analysis complete.',
                   }
-                }
-              }
-            } catch {
-              // Non-breaking fallback: retain Pass 1 `verifiedSignal` if Pass 2 is interrupted or rate-limited
-            }
-
-            if (controller.signal.aborted) return;
-
-            setProgressPct(100);
-            const finalStepFinding =
-              verifiedSignal.auditTrail?.find((a) => a.step === 5)?.finding;
-            setStages((prev) =>
-              prev.map((item) =>
-                item.step === 5
-                  ? {
-                      ...item,
-                      status: 'completed',
-                      finding:
-                        finalStepFinding ||
-                        item.finding ||
-                        'Verified by Pass 2 self-check.',
-                    }
-                  : item
-              )
-            );
-          }
+                : item
+            )
+          );
 
           await saveWorkspaceState({
             selectedPair: pair,
@@ -1146,18 +1054,6 @@ export function AnalyzeWorkspace() {
     }, 0);
   };
 
-  const handleToggleSelfCheck = () => {
-    if (isBusy) return;
-    const next = !selfCheckEnabled;
-    selfCheckEnabledRef.current = next;
-    setSelfCheckEnabled(next);
-    try {
-      window.localStorage.setItem(SELF_CHECK_PREF_KEY, next ? '1' : '0');
-    } catch {
-      // Ignore storage restrictions
-    }
-  };
-
   const handleToggleOhlcAssist = () => {
     if (isBusy) return;
     const next = !ohlcAssistEnabled;
@@ -1423,42 +1319,8 @@ export function AnalyzeWorkspace() {
               }
             />
 
-            {/* Precision Calibration Switches: 2-Pass Self-Check + Live OHLC Feed Assist */}
+            {/* Live OHLC & Macro Assist */}
             <div className="divide-y divide-slate-800/80 rounded-xl border border-slate-800/80 bg-[#0D1320]">
-              <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
-                <div className="min-w-0">
-                  <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
-                    Two-Pass Visual Self-Check
-                  </div>
-                  <p className="truncate text-[11px] text-slate-500">
-                    {isTopDownCrt
-                      ? `Dual ${macroTf}/${executionTf} rulers · Pass 2 wick audit · ${macroTf} veto lock`
-                      : 'Ruler grid · 2× axis zoom · Pass 2 wick & SL audit'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={selfCheckEnabled}
-                  aria-label="Toggle Two-Pass Visual Self-Check"
-                  disabled={isBusy}
-                  onClick={handleToggleSelfCheck}
-                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:opacity-50 ${
-                    selfCheckEnabled
-                      ? 'border-sky-400/50 bg-sky-500/25'
-                      : 'border-slate-700 bg-slate-800/80'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-4 w-4 rounded-full transition-transform duration-150 ${
-                      selfCheckEnabled
-                        ? 'translate-x-5 bg-sky-400'
-                        : 'translate-x-1 bg-slate-400'
-                    }`}
-                  />
-                </button>
-              </div>
-
               <div className="flex items-center justify-between gap-3 px-3.5 py-2.5">
                 <div className="min-w-0">
                   <div className="text-xs font-medium text-slate-200 whitespace-nowrap">
