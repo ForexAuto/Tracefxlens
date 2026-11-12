@@ -67,10 +67,18 @@ export function NewsEventOverview({
   onCloseMobile,
 }: NewsEventOverviewProps) {
   const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
+  const [selectedPair, setSelectedPair] = useState('');
   const [newsEvaluation, setNewsEvaluation] = useState<NewsPredictionEvaluation | null>(null);
   const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!event) { setSelectedPair(''); return; }
+    const preferred = event.affectedPairs.find((pair) => pair.symbol.replace('/', '').toUpperCase() === 'XAUUSD')
+      || event.affectedPairs[0];
+    setSelectedPair(preferred?.symbol || '');
+  }, [event?.eventId, selectedPair]);
 
   useEffect(() => {
     let active = true;
@@ -78,9 +86,9 @@ export function NewsEventOverview({
     setNewsEvaluation(null);
     setEvaluationLoading(false);
     setPredictionError(null);
-    if (!event) return () => { active = false; };
+    if (!event || !selectedPair) return () => { active = false; };
     const fingerprint = getNewsEventFingerprint(event);
-    fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}`, { cache: 'no-store' })
+    fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}&pair=${encodeURIComponent(selectedPair)}`, { cache: 'no-store' })
       .then(async (response) => {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || 'Unable to load saved prediction.');
@@ -108,7 +116,7 @@ export function NewsEventOverview({
       const response = await fetch('/api/news/predictions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventId: event.eventId }),
+        body: JSON.stringify({ eventId: event.eventId, pair: selectedPair }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to generate prediction.');
@@ -283,116 +291,93 @@ export function NewsEventOverview({
         </div>
       )}
 
-      {/* 5. Assisted AI News Prediction */}
-      <section className="p-5 sm:p-6 space-y-3" aria-label="AI news prediction">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h3 className="text-xs font-semibold text-slate-100">AI News Prediction</h3>
-              <p className="mt-1 text-[11px] text-slate-500">Manual, on-demand pair direction signals</p>
-            </div>
-            <span className="rounded-full border border-sky-500/20 bg-sky-500/10 px-2 py-1 text-[10px] font-semibold text-sky-300">{event.currency} · GLOBAL V2</span>
+      {/* Single-instrument AI News Prediction */}
+      <section className="px-5 py-5 sm:px-6 space-y-4" aria-label="AI news prediction">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white">AI News Prediction</h3>
+            <p className="mt-1 text-xs text-slate-500">Choose one affected instrument. Generate only when you are ready.</p>
           </div>
+          <span className="text-[10px] font-semibold tracking-wide text-sky-300">{event.currency} NEWS</span>
+        </div>
 
-          {newsPrediction ? (
-            <div className="rounded-xl border border-slate-800 bg-[#0D1320] p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-semibold text-white">{newsPrediction.prediction.outcome.primary.replace(/_/g, ' ')}</span>
-                <span className="text-[10px] text-slate-400">Version {newsPrediction.version} · {new Date(newsPrediction.generatedAt).toLocaleString()}</span>
-              </div>
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-slate-400">Evidence quality</span>
-                <span className={newsPrediction.prediction.evidence.quality === 'HIGH' ? 'text-emerald-400' : newsPrediction.prediction.evidence.quality === 'MEDIUM' ? 'text-amber-300' : 'text-rose-300'}>
-                  {newsPrediction.prediction.evidence.quality}
-                </span>
-              </div>
-              <p className="text-xs leading-relaxed text-slate-300">{newsPrediction.prediction.outcome.explanation}</p>
-              <div className="border-t border-slate-800 pt-3 space-y-2">
-                <div className="text-[11px] font-semibold text-slate-200">Expected market reaction</div>
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-400">{event.currency} outlook</span>
-                  <span className={newsPrediction.prediction.marketReaction.currencyBias === 'BULLISH' ? 'text-emerald-400' : newsPrediction.prediction.marketReaction.currencyBias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>
-                    {newsPrediction.prediction.marketReaction.currencyBias || (event.currency === 'USD' ? newsPrediction.prediction.marketReaction.usd : 'UNCONFIRMED')}
-                  </span>
-                </div>
-                {event.affectedPairs.slice(0, 5).map((pair) => {
-                  const bias = newsPrediction.prediction.marketReaction.pairBiases?.find((item) => item.symbol === pair.symbol)?.bias || 'UNCONFIRMED';
-                  return (
-                    <div key={pair.symbol} className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400">{pair.symbol}</span>
-                      <span className={bias === 'BULLISH' ? 'text-emerald-400' : bias === 'BEARISH' ? 'text-rose-400' : 'text-slate-300'}>{bias}</span>
-                    </div>
-                  );
-                })}
-                <p className="text-xs leading-relaxed text-slate-400">{newsPrediction.prediction.marketReaction.explanation}</p>
-              </div>
-              <div className="border-t border-slate-800 pt-3 space-y-2">
-                <div className="text-[11px] font-semibold text-slate-200">Trading plan</div>
-                <p className="text-xs leading-relaxed text-slate-300">{newsPrediction.prediction.tradingPlan.entryApproach}</p>
-                <ul className="list-disc space-y-1 pl-4 text-xs text-slate-400">
-                  {newsPrediction.prediction.tradingPlan.confirmationConditions.map((item, index) => <li key={index}>{item}</li>)}
-                </ul>
-                <div className="text-[11px] font-semibold text-slate-200">Invalidation</div>
-                <ul className="list-disc space-y-1 pl-4 text-xs text-slate-400">
-                  {newsPrediction.prediction.marketReaction.invalidationConditions.map((item, index) => <li key={index}>{item}</li>)}
-                </ul>
-              </div>
-              {newsPrediction.prediction.evidence.missingData.length > 0 && (
-                <p className="text-[11px] leading-relaxed text-amber-300/90">Data limitations: {newsPrediction.prediction.evidence.missingData.join(' ')}</p>
-              )}
-              {newsEvaluation && newsPrediction?.prediction.schemaVersion === 1 && (
-                <div className="border-t border-slate-800 pt-3 space-y-2">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-slate-200">Post-release evaluation</span>
-                    <span className="text-[10px] text-emerald-300">Evaluated</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="rounded-lg bg-slate-800/60 p-2">
-                      <div className="text-[10px] text-slate-400">Actual vs consensus</div>
-                      <div className="mt-1 text-xs font-semibold text-white">{newsEvaluation.actualCategory.replace(/_/g, ' ')}</div>
-                      <div className="mt-0.5 text-[10px] text-slate-400">{newsEvaluation.actual} actual · {newsEvaluation.forecast} forecast</div>
-                    </div>
-                    <div className="rounded-lg bg-slate-800/60 p-2">
-                      <div className="text-[10px] text-slate-400">Brier score</div>
-                      <div className="mt-1 font-mono text-lg font-semibold text-white">{newsEvaluation.brierScore.toFixed(3)}</div>
-                      <div className="mt-0.5 text-[10px] text-slate-500">Lower is better · 0 is perfect</div>
-                    </div>
-                  </div>
-                  <p className="text-[10px] leading-relaxed text-slate-400">Model call: <span className="font-semibold text-slate-200">{newsEvaluation.predictedCategory.replace(/_/g, ' ')}</span></p>
-                  <p className="text-[10px] leading-relaxed text-slate-500">This scores the economic release versus consensus, not the resulting price move. Market-reaction accuracy is not yet scored.</p>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="rounded-xl border border-dashed border-slate-700 bg-[#0D1320] p-4">
-              <p className="text-xs leading-relaxed text-slate-400">Tap Generate AI prediction when you want a fresh signal. Nothing is generated automatically.</p>
-            </div>
-          )}
-
-          {predictionError && <p role="alert" className="text-xs leading-relaxed text-rose-300">{predictionError}</p>}
-          <button
-            type="button"
-            disabled={predictionLoading || !isSupportedNewsHighImpactEvent(event)}
-            onClick={() => void generateNewsPrediction()}
-            className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+        <label className="block space-y-1.5">
+          <span className="text-xs font-medium text-slate-300">Instrument to analyse</span>
+          <select
+            value={selectedPair}
+            onChange={(e) => setSelectedPair(e.target.value)}
+            disabled={predictionLoading || event.affectedPairs.length === 0}
+            className="min-h-[42px] w-full rounded-lg border border-slate-700 bg-[#0D1320] px-3 text-sm font-semibold text-white outline-none focus:border-sky-500"
           >
-            <RotateCcw className={`h-3.5 w-3.5 ${predictionLoading ? 'animate-spin' : ''}`} />
-            {predictionLoading ? 'Generating forecast...' : newsPrediction ? 'Refresh prediction · save new version' : 'Generate AI prediction'}
-          </button>
-          {!isSupportedNewsHighImpactEvent(event) && !newsPrediction && (
-            <p className="text-[10px] text-slate-500">Available for upcoming high-impact releases across supported major currencies.</p>
-          )}
-          {newsPrediction && newsPrediction.prediction.schemaVersion === 1 && event.actual?.trim() && event.forecast?.trim() && !newsEvaluation && (
-            <button
-              type="button"
-              disabled={predictionLoading || evaluationLoading}
-              onClick={() => void evaluateNewsPredictionNow()}
-              className="inline-flex min-h-[38px] w-full items-center justify-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs font-semibold text-emerald-200 transition-colors hover:bg-emerald-500/15 disabled:opacity-40"
-            >
-              {predictionLoading || evaluationLoading ? 'Evaluating release...' : 'Evaluate prediction against actual'}
-            </button>
-          )}
-          <p className="text-[10px] leading-relaxed text-slate-500">AI direction signals are not guaranteed trading signals. Generate and evaluate only when you choose.</p>
-        </section>
+            {event.affectedPairs.map((pair) => (
+              <option key={pair.symbol} value={pair.symbol}>{pair.symbol.replace('/', '')}</option>
+            ))}
+          </select>
+        </label>
+
+        {newsPrediction ? (
+          <div className="border-y border-slate-800 py-4 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Selected instrument</div>
+                <h4 className="mt-1 font-[family-name:var(--font-mono)] text-xl font-bold text-white">
+                  {(newsPrediction.prediction.selectedInstrument || selectedPair).replace('/', '')}
+                </h4>
+              </div>
+              <span className={`rounded-md px-3 py-1.5 text-sm font-bold ${newsPrediction.prediction.signal === 'BUY' ? 'bg-emerald-500/15 text-emerald-300' : newsPrediction.prediction.signal === 'SELL' ? 'bg-rose-500/15 text-rose-300' : 'bg-slate-700/70 text-slate-200'}`}>
+                {newsPrediction.prediction.signal || (newsPrediction.prediction.marketReaction.pairBiases?.[0]?.bias === 'BULLISH' ? 'BUY' : newsPrediction.prediction.marketReaction.pairBiases?.[0]?.bias === 'BEARISH' ? 'SELL' : 'NO TRADE')}
+              </span>
+            </div>
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <div className="text-[11px] text-slate-500">AI-estimated confidence</div>
+                <div className="mt-1 font-[family-name:var(--font-mono)] text-3xl font-bold tabular-nums text-white">
+                  {typeof newsPrediction.prediction.confidencePercent === 'number' ? `${newsPrediction.prediction.confidencePercent}%` : '—'}
+                </div>
+              </div>
+              <div className="text-right text-[10px] text-slate-500">
+                Version {newsPrediction.version}<br />
+                {new Date(newsPrediction.generatedAt).toLocaleString()}
+              </div>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+              <div className="h-full rounded-full bg-sky-400" style={{ width: `${Math.max(0, Math.min(100, newsPrediction.prediction.confidencePercent || 0))}%` }} />
+            </div>
+            <div className="space-y-3 text-xs leading-relaxed">
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">News impact</div>
+                <p className="text-slate-200">{newsPrediction.prediction.signalReason || newsPrediction.prediction.outcome.explanation}</p>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Confirmation</div>
+                <p className="text-slate-300">{newsPrediction.prediction.confirmation || newsPrediction.prediction.tradingPlan.confirmationConditions?.[0] || 'Wait for price action to confirm after release.'}</p>
+              </div>
+              <div>
+                <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Invalidation</div>
+                <p className="text-slate-300">{newsPrediction.prediction.invalidation || newsPrediction.prediction.marketReaction.invalidationConditions?.[0] || 'Reassess if price action contradicts the expected direction.'}</p>
+              </div>
+            </div>
+            <p className="text-[10px] text-slate-500">AI-estimated confidence is a subjective model score, not a verified probability of winning.</p>
+          </div>
+        ) : (
+          <p className="py-2 text-xs text-slate-500">No saved prediction for {selectedPair.replace('/', '')}. Generate one when ready.</p>
+        )}
+
+        {predictionError && <p role="alert" className="text-xs leading-relaxed text-rose-300">{predictionError}</p>}
+        <button
+          type="button"
+          disabled={predictionLoading || !selectedPair || !isSupportedNewsHighImpactEvent(event)}
+          onClick={() => void generateNewsPrediction()}
+          className="inline-flex min-h-[42px] w-full items-center justify-center gap-2 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs font-semibold text-sky-200 transition-colors hover:bg-sky-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <RotateCcw className={`h-3.5 w-3.5 ${predictionLoading ? 'animate-spin' : ''}`} />
+          {predictionLoading ? 'Analysing selected instrument...' : newsPrediction ? 'Generate new prediction' : 'Generate AI Prediction'}
+        </button>
+        {!isSupportedNewsHighImpactEvent(event) && !newsPrediction && (
+          <p className="text-[10px] text-slate-500">Manual predictions are available for upcoming high-impact releases across supported currencies.</p>
+        )}
+        <p className="text-[10px] leading-relaxed text-slate-500">No AI request runs when you change instruments. Each instrument has its own saved prediction history.</p>
+      </section>
 
 
       {/* 3. Official Macroeconomic Overview & Specifications */}
