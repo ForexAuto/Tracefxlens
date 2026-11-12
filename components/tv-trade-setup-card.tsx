@@ -536,69 +536,43 @@ export function TvTradeSetupCard({
       {/* Take-Profit Targets Grid */}
       <div className="border-t border-slate-800/80 bg-[#0D1423]/80 p-4 sm:p-5">
         <div className="mb-2.5 flex items-center justify-between text-xs">
-          <span className="font-semibold text-slate-200">
-            Take-Profit Liquidity Targets
-          </span>
-          <span className="text-[11px] text-slate-500">Tap to copy price</span>
+          <span className="font-semibold text-slate-200">Take-Profit Targets</span>
+          <span className="text-[11px] text-slate-500">Tap a target to copy</span>
         </div>
-
+        {signal.preferredTakeProfit && (
+        <div className="mb-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.08] p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300">AI Recommended Main Target</span>
+            <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[10px] font-bold text-emerald-300">TP {signal.preferredTakeProfit}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-slate-200">{signal.preferredTakeProfitReason || 'Selected by the model as the preferred target for this setup.'}</p>
+        </div>
+      )}
         <div className="grid grid-cols-1 gap-px overflow-hidden rounded-xl border border-slate-800/80 bg-slate-800/80 sm:grid-cols-3">
           {[
-            {
-              key: 'tp1',
-              label: 'TP 1',
-              role: 'Conservative Exit',
-              price: signal.takeProfit1,
-            },
-            {
-              key: 'tp2',
-              label: 'TP 2',
-              role: 'Primary Structural',
-              price: signal.takeProfit2,
-            },
-            {
-              key: 'tp3',
-              label: 'TP 3',
-              role: 'Extended Runner',
-              price: signal.takeProfit3,
-            },
+            { key: 'tp1', label: 'TP 1', role: 'Conservative · Partial exit', price: signal.takeProfit1, number: 1 },
+            { key: 'tp2', label: 'TP 2', role: 'Structural target', price: signal.takeProfit2, number: 2 },
+            { key: 'tp3', label: 'TP 3', role: 'Extended runner', price: signal.takeProfit3, number: 3 },
           ].map((tp) => {
             const tpNum = parseNumericPrice(tp.price);
             const delta = formatPctDelta(entryNum, tpNum);
+            const isPreferred = signal.preferredTakeProfit === tp.number;
             return (
-              <div
-                key={tp.key}
-                onClick={() => handleCopyValue(tp.key, tp.price)}
-                className="flex items-center justify-between bg-[#0B1220] p-3.5 cursor-pointer transition-colors hover:bg-[#111D30]"
-              >
+              <button key={tp.key} type="button" onClick={() => handleCopyValue(tp.key, tp.price)} aria-label={`Copy ${tp.label} price${isPreferred ? ', AI recommended main target' : ''}`} className={`flex min-h-[76px] items-center justify-between text-left bg-[#0B1220] p-3.5 transition-colors hover:bg-[#111D30] ${isPreferred ? 'ring-1 ring-inset ring-emerald-400/60 bg-emerald-500/[0.07]' : ''}`}>
                 <div>
-                  <div className="flex items-center gap-1.5 text-xs">
-                    <span className="font-[family-name:var(--font-mono)] font-bold text-emerald-400">
-                      {tp.label}
-                    </span>
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="font-[family-name:var(--font-mono)] font-bold text-emerald-400">{tp.label}</span>
                     <span className="text-slate-600">·</span>
-                    <span className="text-[11px] text-slate-400 truncate max-w-[120px]">
-                      {tp.role}
-                    </span>
+                    <span className="text-[11px] text-slate-400">{tp.role}</span>
+                    {isPreferred && <span className="rounded-full bg-emerald-400/15 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-300">Use this</span>}
                   </div>
-                  <div className="mt-0.5 font-[family-name:var(--font-mono)] text-base font-semibold text-emerald-300 tabular-nums">
-                    {tp.price}
-                  </div>
+                  <div className="mt-1 font-[family-name:var(--font-mono)] text-base font-semibold text-emerald-300 tabular-nums">{tp.price}</div>
                 </div>
-
                 <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                  {delta && (
-                    <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">
-                      {delta}
-                    </span>
-                  )}
-                  {copiedKey === tp.key ? (
-                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                  ) : (
-                    <Copy className="h-3.5 w-3.5 text-slate-500" />
-                  )}
+                  {delta && <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums">{delta}</span>}
+                  {copiedKey === tp.key ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5 text-slate-500" />}
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
