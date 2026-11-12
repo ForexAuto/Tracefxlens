@@ -108,7 +108,6 @@ export function TvEngineWorkspace() {
     if (!isHydrated) return;
     saveTvWorkspaceState({
       activeSignal,
-      orderLock,
       manualMode,
     });
   }, [isHydrated, activeSignal, manualMode]);
@@ -119,7 +118,6 @@ export function TvEngineWorkspace() {
     const handleFlush = () => {
       saveTvWorkspaceState({
         activeSignal,
-        orderLock,
         manualMode,
       });
     };
