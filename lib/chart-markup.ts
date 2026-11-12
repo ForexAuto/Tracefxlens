@@ -907,7 +907,7 @@ export function computeResolvedChartMarkup(
 
       const rawHeight = fBot - fTop;
       if (rawHeight < 3 || rawHeight > maxAllowedFvgHeight) {
-        return null as unknown as ResolvedFvgRect;
+        return [];
       }
       const height = rawHeight;
       const clampedTop = clamp(fTop, topY + 5, bottomY - height - 5);
