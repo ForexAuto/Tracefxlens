@@ -1,23 +1,10 @@
 import type { TradingSignalResponse } from '@/lib/trading-data';
-import type { TvConnectPayload, TvPendingOrderApproval, TvAgentStep } from '@/lib/tv-engine-types';
+import type { TvConnectPayload } from '@/lib/tv-engine-types';
 
-export interface CommandTurnPersisted {
-  id: string;
-  prompt: string;
-  steps: TvAgentStep[];
-  summary: string | null;
-  error: string | null;
-  pendingOrder: TvPendingOrderApproval | null;
-  statusMessage: string | null;
-  isRunning: boolean;
-  createdAt: number;
-}
 
 export interface PersistedTvWorkspaceState {
   activeSignal: TradingSignalResponse | null;
-  turns: CommandTurnPersisted[];
   orderLock: boolean;
-  promptInput: string;
   manualMode: boolean;
   updatedAt: number;
 }
@@ -73,12 +60,6 @@ export function saveTvWorkspaceState(state: Omit<PersistedTvWorkspaceState, 'upd
   try {
     const payload: PersistedTvWorkspaceState = {
       ...state,
-      // Cap turns to last 12 items so localStorage doesn't bloat
-      turns: (state.turns || []).slice(-12).map((t) => ({
-        ...t,
-        isRunning: false,
-        statusMessage: null,
-      })),
       updatedAt: Date.now(),
     };
     window.localStorage.setItem(
@@ -98,11 +79,7 @@ export function loadTvWorkspaceState(): PersistedTvWorkspaceState | null {
     const parsed = JSON.parse(raw) as Partial<PersistedTvWorkspaceState>;
     return {
       activeSignal: parsed.activeSignal || null,
-      turns: Array.isArray(parsed.turns)
-        ? parsed.turns.map((t) => ({ ...t, isRunning: false, statusMessage: null }))
-        : [],
-      orderLock: parsed.orderLock !== false,
-      promptInput: parsed.promptInput || '',
+      orderLock: true,
       manualMode: Boolean(parsed.manualMode),
       updatedAt: parsed.updatedAt || Date.now(),
     };
