@@ -726,6 +726,7 @@ export function computeResolvedChartMarkup(
           : rightX;
 
       // Lock zone startX (and Order Block wick/body bounds) onto the real origin candle on the chart!
+      let originCandleMatched = !pixelGeo || pixelGeo.candles.length === 0;
       if (pixelGeo && pixelGeo.candles.length > 0) {
         const originCandle = pixelGeo.findOriginCandleForBand(
           startX,
@@ -736,6 +737,7 @@ export function computeResolvedChartMarkup(
         );
 
         if (originCandle) {
+          originCandleMatched = true;
           startX = clamp(
             originCandle.x - originCandle.width * 0.5,
             leftX + 4,
@@ -782,6 +784,7 @@ export function computeResolvedChartMarkup(
           }
         }
       }
+      if (!originCandleMatched) return;
 
       const rawHeight = zBot - zTop;
       if (rawHeight < 4 || rawHeight > maxAllowedZoneHeight) return;
@@ -819,7 +822,7 @@ export function computeResolvedChartMarkup(
       return Number.isFinite(topY) && Number.isFinite(bottomY) &&
         !((topY < minPlotY && bottomY < minPlotY) || (topY > maxPlotY && bottomY > maxPlotY));
     })
-    .map((f, idx): ResolvedFvgRect => {
+    .flatMap((f, idx): ResolvedFvgRect[] => {
       const fTone: 'bullish' | 'bearish' = f.tone === 'bearish' ? 'bearish' : 'bullish';
       const topP = parseChartPrice(f.topPrice);
       const botP = parseChartPrice(f.bottomPrice);
@@ -899,7 +902,7 @@ export function computeResolvedChartMarkup(
         }
       } else if (pixelGeo && pixelGeo.candles.length > 0) {
         // No optical three-candle gap match: do not draw an unverified floating FVG.
-        return null as unknown as ResolvedFvgRect;
+        return [];
       }
 
       const rawHeight = fBot - fTop;
@@ -908,7 +911,7 @@ export function computeResolvedChartMarkup(
       }
       const height = rawHeight;
       const clampedTop = clamp(fTop, topY + 5, bottomY - height - 5);
-      return {
+      return [{
         id: `fvg-${idx}`,
         label: f.label || (fTone === 'bearish' ? 'Bearish FVG' : 'Bullish FVG'),
         tone: fTone,
@@ -920,9 +923,8 @@ export function computeResolvedChartMarkup(
         height,
         midY: clampedTop + height / 2,
         priceText: f.topPrice || f.bottomPrice || '',
-      };
-    })
-    .filter((gap): gap is ResolvedFvgRect => gap !== null);
+      }];
+    });
 
   // Resolve Horizontal BOS & CHoCH Market Structure Breaks (locked to true swing wick + breakout candle)
   const rawBreaks = rawMarkup?.structureBreaks ?? [];
