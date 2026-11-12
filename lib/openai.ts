@@ -25,10 +25,56 @@ async function upstreamError(response: Response): Promise<Error> {
   return new Error(message);
 }
 
+function ensureJsonInstruction(input: unknown): unknown {
+  const instruction = 'Return a valid json object. Do not wrap it in markdown.';
+
+  if (typeof input === 'string') {
+    return `${input}\n\n${instruction}`;
+  }
+
+  if (!Array.isArray(input)) {
+    return [{ role: 'user', content: [{ type: 'input_text', text: instruction }] }];
+  }
+
+  const messages = input.map((item) => (
+    item && typeof item === 'object' ? { ...(item as Record<string, unknown>) } : item
+  ));
+  let userIndex = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index] && typeof messages[index] === 'object' &&
+        (messages[index] as Record<string, unknown>).role === 'user') {
+      userIndex = index;
+      break;
+    }
+  }
+
+  if (userIndex < 0) {
+    messages.push({ role: 'user', content: [{ type: 'input_text', text: instruction }] });
+    return messages;
+  }
+
+  const userMessage = messages[userIndex] as Record<string, unknown>;
+  if (typeof userMessage.content === 'string') {
+    userMessage.content = `${userMessage.content}\n\n${instruction}`;
+  } else if (Array.isArray(userMessage.content)) {
+    userMessage.content = [
+      ...userMessage.content,
+      { type: 'input_text', text: instruction },
+    ];
+  } else {
+    userMessage.content = [{ type: 'input_text', text: instruction }];
+  }
+
+  messages[userIndex] = userMessage;
+  return messages;
+}
+
 function requestBody(options: OpenAIRequestOptions) {
   return {
     model: OPENAI_TRADING_MODEL,
-    input: options.input,
+    input: options.responseFormat === 'json_object'
+      ? ensureJsonInstruction(options.input)
+      : options.input,
     ...(options.instructions ? { instructions: options.instructions } : {}),
     reasoning: { effort: options.reasoningEffort || 'medium' },
     max_output_tokens: options.maxOutputTokens || 6000,
