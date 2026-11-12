@@ -109,7 +109,13 @@ export function NewsEventOverview({
       const response = await fetch('/api/news/predictions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventId: event.eventId, pair: selectedPair }),
+        body: JSON.stringify({
+          eventId: event.eventId,
+          pair: selectedPair,
+          currency: event.currency,
+          title: event.title,
+          timestampUtcMs: event.timestampUtcMs,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || 'Unable to generate prediction.');
