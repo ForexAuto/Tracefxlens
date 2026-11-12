@@ -1252,7 +1252,6 @@ Trigger & Tight Stop
             {/* Original chart screenshot for analysis context */}
             <ChartUploader
               imageDataUrl={displayedImageDataUrl}
-              signal={displayedSignal}
               onImageChange={handleImageChange}
               disabled={isBusy}
               isAnalyzing={isBusy}
