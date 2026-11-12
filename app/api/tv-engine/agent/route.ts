@@ -707,6 +707,10 @@ export async function POST(req: NextRequest) {
                 takeProfit1: String(callArgs.takeProfit1 || '—'),
                 takeProfit2: String(callArgs.takeProfit2 || '—'),
                 takeProfit3: String(callArgs.takeProfit3 || '—'),
+                preferredTakeProfit: [1, 2, 3].includes(Number(callArgs.preferredTakeProfit))
+                  ? (Number(callArgs.preferredTakeProfit) as 1 | 2 | 3)
+                  : undefined,
+                preferredTakeProfitReason: String(callArgs.preferredTakeProfitReason || '').slice(0, 300) || undefined,
                 riskRewardRatio: String(callArgs.riskRewardRatio || '1:2.0'),
                 entryTriggerNote: String(
                   callArgs.entryTriggerNote ||
