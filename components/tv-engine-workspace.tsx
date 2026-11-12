@@ -2,15 +2,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Send,
-  Square,
   RefreshCw,
   Maximize2,
   X,
   Download,
   MousePointerClick,
-  ShieldCheck,
-  ShieldOff,
   Plug,
   Power,
   Loader2,
@@ -51,14 +47,6 @@ interface CommandTurn {
   createdAt: number;
 }
 
-const STARTER_COMMANDS = [
-  'Analyze current chart for an institutional trade setup',
-  'Switch symbol to OANDA:XAUUSD on 15m and reset chart view',
-  'Open Indicators and add Moving Average Exponential and RSI',
-  'Mark the main visible resistance and support swing levels with horizontal lines',
-  'Open the Paper Trading / Order Ticket panel so we can set up a trade',
-];
-
 export function TvEngineWorkspace() {
   const [session, setSession] = useState<TvSessionInfo>({
     status: 'disconnected',
@@ -84,8 +72,7 @@ export function TvEngineWorkspace() {
   const [fullscreenOpen, setFullscreenOpen] = useState(false);
   const [isRefreshingFrame, setIsRefreshingFrame] = useState(false);
 
-  const [orderLock, setOrderLock] = useState<boolean>(true);
-  const [promptInput, setPromptInput] = useState<string>('');
+  const orderLock = true;
   const [turns, setTurns] = useState<CommandTurn[]>([]);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
 
@@ -98,7 +85,6 @@ export function TvEngineWorkspace() {
   const [layoutSaveSuccess, setLayoutSaveSuccess] = useState(false);
 
   const abortControllerRef = useRef<AbortController | null>(null);
-  const feedEndRef = useRef<HTMLDivElement | null>(null);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const isConnected =
@@ -109,15 +95,6 @@ export function TvEngineWorkspace() {
     const persisted = loadTvWorkspaceState();
     if (persisted) {
       if (persisted.activeSignal) setActiveSignal(persisted.activeSignal);
-      if (Array.isArray(persisted.turns) && persisted.turns.length > 0) {
-        setTurns(persisted.turns);
-      }
-      if (typeof persisted.orderLock === 'boolean') {
-        setOrderLock(persisted.orderLock);
-      }
-      if (persisted.promptInput) {
-        setPromptInput(persisted.promptInput);
-      }
       if (typeof persisted.manualMode === 'boolean') {
         setManualMode(persisted.manualMode);
       }
@@ -130,9 +107,7 @@ export function TvEngineWorkspace() {
     if (!isHydrated) return;
     saveTvWorkspaceState({
       activeSignal,
-      turns,
       orderLock,
-      promptInput,
       manualMode,
     });
   }, [isHydrated, activeSignal, turns, orderLock, promptInput, manualMode]);
@@ -143,9 +118,7 @@ export function TvEngineWorkspace() {
     const handleFlush = () => {
       saveTvWorkspaceState({
         activeSignal,
-        turns,
         orderLock,
-        promptInput,
         manualMode,
       });
     };
@@ -398,15 +371,6 @@ export function TvEngineWorkspace() {
     if (!trimmed || isAgentRunning) return;
 
     const turnId = `turn-${Date.now()}`;
-    const historyPayload = turns.slice(-4).flatMap((t) => {
-      const items: Array<{ role: 'user' | 'assistant'; text: string }> = [
-        { role: 'user', text: t.prompt },
-      ];
-      if (t.summary) {
-        items.push({ role: 'assistant', text: t.summary });
-      }
-      return items;
-    });
 
     setTurns((prev) => [
       ...prev,
@@ -423,9 +387,6 @@ export function TvEngineWorkspace() {
       },
     ]);
 
-    if (!allowOrderExecution) {
-      setPromptInput('');
-    }
     setIsAgentRunning(true);
 
     const controller = new AbortController();
@@ -439,7 +400,7 @@ export function TvEngineWorkspace() {
           prompt: trimmed,
           orderLock,
           allowOrderExecution,
-          history: historyPayload,
+          history: [],
         }),
         signal: controller.signal,
       });
@@ -615,31 +576,6 @@ export function TvEngineWorkspace() {
       }
       setActiveSignal(data.signal);
 
-      const sig = data.signal;
-      const turnId = `turn-${Date.now()}`;
-      setTurns((prev) => [
-        ...prev,
-        {
-          id: turnId,
-          prompt: customPrompt || 'Analyze Live Chart',
-          steps: [
-            {
-              id: `step-${Date.now()}-1`,
-              stepNumber: 1,
-              toolName: 'generate_trade_setup',
-              description: `Generated ready-to-trade ${sig.signalType} setup for ${sig.detectedPair} (Entry ${sig.entryPrice}, SL ${sig.stopLoss}, TP1 ${sig.takeProfit1})`,
-              status: 'done',
-              timestamp: Date.now(),
-            },
-          ],
-          summary: `Published ready-to-trade ${sig.signalType} setup card below chart terminal for ${sig.detectedPair}. Entry: ${sig.entryPrice} | Stop Loss: ${sig.stopLoss} | TP1: ${sig.takeProfit1} (R:R ${sig.riskRewardRatio}).`,
-          error: null,
-          pendingOrder: null,
-          statusMessage: null,
-          isRunning: false,
-          createdAt: Date.now(),
-        },
-      ]);
     } catch (err) {
       setAnalyzeError(
         err instanceof Error ? err.message : 'Analysis could not be completed.'
@@ -699,6 +635,9 @@ export function TvEngineWorkspace() {
     );
   };
 
+  const pendingOrderTurn = turns.find((turn) => turn.pendingOrder);
+  const latestAgentTurn = turns[turns.length - 1];
+
   const headerRightAction = isConnected ? (
     <button
       type="button"
@@ -737,7 +676,7 @@ export function TvEngineWorkspace() {
               TradingView Autonomous Control Engine
             </h1>
             <p className="mt-1 text-xs sm:text-sm text-slate-400 max-w-2xl">
-              Direct cloud Playwright session connected to your TradingView workspace—control symbols, timeframes, private indicators, drawings, alerts, and orders with natural language.
+              Live TradingView chart connection, AI technical analysis, trade setups, and essential chart actions in one focused workspace.
             </p>
           </div>
 
@@ -755,7 +694,7 @@ export function TvEngineWorkspace() {
         {/* Balanced 12-Column Stretched Workspace */}
         <div className="grid grid-cols-1 lg:grid-cols-12 items-start gap-5">
           {/* Left 8 Columns: Live TradingView Browser Stage + Setup Card Below */}
-          <div className="lg:col-span-8 flex flex-col gap-4">
+          <div className="lg:col-span-12 flex flex-col gap-4">
             <section
               aria-label="Live TradingView Browser Viewport"
               className="flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] overflow-hidden"
@@ -823,6 +762,17 @@ export function TvEngineWorkspace() {
                         <span className="hidden sm:inline">Analyze Chart</span>
                       </span>
                     </button>
+
+                    {isAgentRunning && (
+                      <button
+                        type="button"
+                        onClick={handleStopAgent}
+                        className="flex min-h-[34px] items-center gap-1.5 rounded-lg border border-rose-500/35 bg-rose-500/10 px-2.5 py-1 text-xs font-semibold text-rose-300 whitespace-nowrap shrink-0"
+                      >
+                        <Square className="h-3.5 w-3.5 fill-current" />
+                        <span>Stop AI</span>
+                      </button>
+                    )}
 
                     <button
                       type="button"
@@ -1071,260 +1021,52 @@ export function TvEngineWorkspace() {
             onOpenOrderTicket={handleOpenOrderTicket}
             onDismiss={() => setActiveSignal(null)}
           />
-        </div>
 
-        {/* Right 4 Columns: AI Command & Step Feed */}
-        <section
-          aria-label="AI TradingView Operator"
-          className="lg:col-span-4 flex flex-col rounded-xl border border-slate-800/80 bg-[#0E1422] min-h-[500px] lg:max-h-[calc(100vh-170px)]"
-        >
-            {/* Panel Header */}
-            <div className="flex items-center justify-between gap-2 border-b border-slate-800/80 px-4 py-2.5">
-              <div className="flex items-center gap-2">
-                <h2 className="font-[family-name:var(--font-display)] text-sm font-semibold text-white whitespace-nowrap">
-                  AI Control Thread
-                </h2>
-                {turns.length > 0 && !isAgentRunning && (
-                  <button
-                    type="button"
-                    onClick={() => setTurns([])}
-                    className="text-xs text-slate-500 hover:text-slate-300 whitespace-nowrap"
-                  >
-                    · Clear
-                  </button>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setOrderLock((v) => !v)}
-                title="When enabled, the AI pauses for your confirmation before clicking any final trade order submission button."
-                className={`flex min-h-[32px] items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
-                  orderLock
-                    ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300'
-                    : 'border-amber-500/35 bg-amber-500/10 text-amber-300'
-                }`}
-              >
-                {orderLock ? (
-                  <>
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    <span>Order Lock: On</span>
-                  </>
-                ) : (
-                  <>
-                    <ShieldOff className="h-3.5 w-3.5" />
-                    <span>Order Lock: Off</span>
-                  </>
-                )}
-              </button>
+          {isAgentRunning && (
+            <div className="flex items-center gap-2 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] px-4 py-3 text-xs text-sky-200">
+              <Loader2 className="h-4 w-4 animate-spin text-sky-400" />
+              <span>{latestAgentTurn?.statusMessage || 'AI is carrying out the requested chart action...'}</span>
             </div>
+          )}
 
-            {/* Action Log / Starter Prompts */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
-              {turns.length === 0 ? (
-                <div className="space-y-4">
-                  <p className="text-xs leading-relaxed text-slate-400">
-                    {isConnected
-                      ? 'Describe any action or multi-step workflow. The model inspects the live TradingView screen after each step until complete.'
-                      : 'Connect your TradingView cookies (or launch a Guest Chart) first, then choose a starter task or type any command below.'}
-                  </p>
-
-                  <div className="space-y-2">
-                    <p className="text-xs font-medium text-slate-300">
-                      Quick Starter Commands
-                    </p>
-                    <div className="divide-y divide-slate-800/70 border-y border-slate-800/70">
-                      {STARTER_COMMANDS.map((cmd) => (
-                        <button
-                          key={cmd}
-                          type="button"
-                          disabled={!isConnected || isAgentRunning}
-                          onClick={() => void runAgentCommand(cmd)}
-                          className="w-full py-2.5 text-left text-xs text-slate-300 hover:text-sky-300 transition-colors disabled:opacity-45"
-                        >
-                          {cmd}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="divide-y divide-slate-800/70">
-                  {turns.map((turn) => (
-                    <div key={turn.id} className="py-4 first:pt-0 last:pb-0 space-y-3">
-                      <div className="text-xs font-semibold text-white">
-                        {turn.prompt}
-                      </div>
-
-                      {turn.steps.length > 0 && (
-                        <div className="space-y-1.5">
-                          {turn.steps.map((s) => (
-                            <div
-                              key={s.id}
-                              className="flex items-baseline justify-between gap-2 text-xs"
-                            >
-                              <div className="flex items-baseline gap-2 min-w-0">
-                                <span className="font-[family-name:var(--font-mono)] text-[11px] text-slate-500 tabular-nums shrink-0">
-                                  {String(s.stepNumber).padStart(2, '0')}.
-                                </span>
-                                <span className="text-slate-300 break-words">
-                                  {s.description}
-                                </span>
-                              </div>
-                              <span
-                                className={`font-[family-name:var(--font-mono)] text-[11px] shrink-0 whitespace-nowrap ${
-                                  s.status === 'done'
-                                    ? 'text-emerald-400'
-                                    : s.status === 'running'
-                                    ? 'text-sky-400'
-                                    : s.status === 'blocked_order'
-                                    ? 'text-amber-400'
-                                    : 'text-rose-400'
-                                }`}
-                              >
-                                {s.status === 'done'
-                                  ? 'Done'
-                                  : s.status === 'running'
-                                  ? 'Running'
-                                  : s.status === 'blocked_order'
-                                  ? 'Locked'
-                                  : 'Check'}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {turn.isRunning && turn.statusMessage && (
-                        <div className="flex items-center gap-2 text-xs text-sky-400">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                          <span>{turn.statusMessage}</span>
-                        </div>
-                      )}
-
-                      {turn.pendingOrder && !isAgentRunning && (
-                        <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
-                          <div className="text-xs font-medium text-amber-300">
-                            Confirm Order: {turn.pendingOrder.summary}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const resume = turn.pendingOrder?.resumePrompt;
-                                if (!resume) return;
-                                setTurns((prev) =>
-                                  prev.map((item) =>
-                                    item.id === turn.id
-                                      ? { ...item, pendingOrder: null }
-                                      : item
-                                  )
-                                );
-                                void runAgentCommand(resume, true);
-                              }}
-                              className="min-h-[36px] rounded-lg bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400 whitespace-nowrap"
-                            >
-                              Approve &amp; Place Order
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setTurns((prev) =>
-                                  prev.map((item) =>
-                                    item.id === turn.id
-                                      ? {
-                                          ...item,
-                                          pendingOrder: null,
-                                          summary: 'Order placement canceled.',
-                                        }
-                                      : item
-                                  )
-                                )
-                              }
-                              className="min-h-[36px] rounded-lg border border-slate-800 bg-[#111726] px-3 py-1.5 text-xs text-slate-300 hover:text-white whitespace-nowrap"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {turn.summary && !turn.pendingOrder && (
-                        <p className="text-xs leading-relaxed text-slate-300 whitespace-pre-line">
-                          {turn.summary}
-                        </p>
-                      )}
-
-                      {turn.error && (
-                        <p className="text-xs text-rose-400">{turn.error}</p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div ref={feedEndRef} />
+          {latestAgentTurn?.error && (
+            <div className="rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-4 py-3 text-xs text-rose-300">
+              {latestAgentTurn.error}
             </div>
+          )}
 
-            {/* Command Input Composer */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!isConnected) {
-                  setConnectModalOpen(true);
-                  return;
-                }
-                void runAgentCommand(promptInput);
-              }}
-              className="border-t border-slate-800/80 p-3"
-            >
-              <div className="flex items-end gap-2">
-                <textarea
-                  rows={2}
-                  value={promptInput}
-                  onChange={(e) => setPromptInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      if (!isConnected) {
-                        setConnectModalOpen(true);
-                        return;
-                      }
-                      void runAgentCommand(promptInput);
-                    }
+          {pendingOrderTurn?.pendingOrder && !isAgentRunning && (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4">
+              <div className="text-sm font-semibold text-amber-200">Order approval required</div>
+              <p className="mt-1 text-xs leading-relaxed text-slate-300">
+                {pendingOrderTurn.pendingOrder.summary}. Review the order ticket in TradingView before approving submission.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const resume = pendingOrderTurn.pendingOrder?.resumePrompt;
+                    if (!resume) return;
+                    setTurns((prev) => prev.map((item) => item.id === pendingOrderTurn.id ? { ...item, pendingOrder: null } : item));
+                    void runAgentCommand(resume, true);
                   }}
-                  placeholder={
-                    isConnected
-                      ? 'Command TradingView (e.g. Switch to EURUSD 1H and draw support)...'
-                      : 'Connect session first, then enter any TradingView command...'
-                  }
-                  disabled={isAgentRunning}
-                  className="flex-1 resize-none rounded-lg border border-slate-800 bg-[#090D16] px-3 py-2 text-xs sm:text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none disabled:opacity-50"
-                />
-
-                {isAgentRunning ? (
-                  <button
-                    type="button"
-                    onClick={handleStopAgent}
-                    aria-label="Stop AI execution"
-                    className="flex min-h-[42px] items-center gap-1.5 rounded-lg bg-rose-500 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-400 transition-colors whitespace-nowrap shrink-0"
-                  >
-                    <Square className="h-3.5 w-3.5 fill-current" />
-                    <span>Stop</span>
-                  </button>
-                ) : (
-                  <button
-                    type="submit"
-                    disabled={isConnected && !promptInput.trim()}
-                    className="flex min-h-[42px] items-center gap-1.5 rounded-lg bg-sky-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-sky-400 transition-colors disabled:opacity-45 whitespace-nowrap shrink-0"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                    <span>{isConnected ? 'Run' : 'Connect'}</span>
-                  </button>
-                )}
+                  className="min-h-[38px] rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+                >
+                  Approve &amp; Place Order
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTurns((prev) => prev.map((item) => item.id === pendingOrderTurn.id ? { ...item, pendingOrder: null, summary: 'Order placement canceled.' } : item))}
+                  className="min-h-[38px] rounded-lg border border-slate-700 bg-[#111726] px-4 py-2 text-xs text-slate-300 hover:text-white"
+                >
+                  Cancel Order
+                </button>
               </div>
-            </form>
-          </section>
+            </div>
+          )}
         </div>
+
+
       </main>
 
       {/* Connect Session Modal */}
