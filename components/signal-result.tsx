@@ -412,18 +412,20 @@ export function SignalResult({
         <div className="flex flex-col justify-center gap-3 p-4 sm:col-span-1 sm:p-5">
           <div className="text-lg font-semibold text-slate-200">Current Market</div>
           {liveQuote ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-rose-300">Bid</div>
-                <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.bid}</div>
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-rose-300">Bid</div>
+                  <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.bid}</div>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-wider text-sky-300">Ask</div>
+                  <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.ask}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-xs font-semibold uppercase tracking-wider text-sky-300">Ask</div>
-                <div className="mt-1 break-all font-[family-name:var(--font-mono)] text-2xl sm:text-3xl font-bold text-slate-100 tabular-nums">{liveQuote.ask}</div>
+              <div className={`mt-2 text-[10px] ${liveQuote.stale ? 'text-amber-300' : 'text-slate-500'}`}>
+                {liveQuote.stale ? 'Quote may be delayed' : 'Live quote'} · {liveQuote.source}
               </div>
-            </div>
-            <div className={`mt-2 text-[10px] ${liveQuote.stale ? 'text-amber-300' : 'text-slate-500'}`}>
-              {liveQuote.stale ? 'Quote may be delayed' : 'Live quote'} · {liveQuote.source}
             </div>
           ) : (
             <div>
