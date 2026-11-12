@@ -100,7 +100,7 @@ export async function POST(req: NextRequest) {
       `Forecast: ${event.forecast || 'Unavailable'}`,
       `Previous: ${event.previous || 'Unavailable'}`,
       `Pairs: ${event.affectedPairs.slice(0, 5).map((pair) => pair.symbol + ' (currency effect: ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
-    ].join('\\n');
+    ].join('\n');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
