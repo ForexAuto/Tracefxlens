@@ -137,11 +137,8 @@ export function validateNewsPredictionPayload(
     if (!isBias(reaction?.currencyBias) || reaction.currencyBias === 'UNCONFIRMED' || reaction.currencyBias === 'NEUTRAL') {
       return reaction?.currencyBias === 'NEUTRAL' ? 'NEUTRAL' : 'UNCONFIRMED';
     }
-    const currencyIsBase = pair.symbol.split('/')[0] === event.currency.toUpperCase();
-    if (pair.bullishCurrencyEffect === 'UP') {
-      return currencyIsBase ? reaction.currencyBias : (reaction.currencyBias === 'BULLISH' ? 'BEARISH' : 'BULLISH');
-    }
-    return 'UNCONFIRMED';
+    if (pair.bullishCurrencyEffect === 'UP') return reaction.currencyBias;
+    return reaction.currencyBias === 'BULLISH' ? 'BEARISH' : 'BULLISH';
   };
   const normalizedPairBiases = expectedPairs.map((pair) => {
     const supplied = suppliedPairBiases.find((item: any) => item?.symbol === pair.symbol && isBias(item?.bias));
