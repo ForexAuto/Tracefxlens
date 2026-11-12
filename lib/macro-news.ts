@@ -73,6 +73,7 @@ export const MAJOR_NEWS_CURRENCIES = [
   'CAD',
   'CHF',
   'NZD',
+  'CNY',
 ] as const;
 
 export const CURRENCY_COUNTRY_NAME: Record<string, string> = {
