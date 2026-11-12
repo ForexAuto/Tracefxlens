@@ -93,22 +93,14 @@ export async function POST(req: NextRequest) {
     }
 
     const ai = new GoogleGenAI({ apiKey });
-    const systemInstruction = `You are TraceFX Lens Global News Prediction Engine v2. Produce a rigorous pre-release forecast for any supplied major-currency high-impact event using ONLY the supplied evidence. Do not browse or invent data. Identify the event currency and explain the likely currency-supportive, neutral and currency-negative outcomes. Estimate the economic release relative to consensus separately from the direction of every affected trading pair. For ordinary numeric indicators use ABOVE_EXPECTATIONS, IN_LINE or BELOW_EXPECTATIONS; for policy decisions and central-bank communication use HIKE, HOLD, CUT, HAWKISH or DOVISH as appropriate. Interpret positive/inline/negative probabilities as the chance of a currency-supportive, neutral or currency-negative outcome, adjusted for inverse indicators such as unemployment and jobless claims. Probabilities must sum to exactly 100 and are subjective model estimates, not calibrated win probabilities. If evidence is inadequate, use INSUFFICIENT_DATA and UNCONFIRMED biases; do not invent certainty. Return JSON only with keys outcome {primary, probabilities {positive, inline, negative}, explanation}, marketReaction {currencyBias, pairBiases:[{symbol,bias}], explanation, invalidationConditions}, tradingPlan {preferredInstruments, confirmationConditions, entryApproach, risks}. Include exactly one pairBiases item for every supplied affected pair symbol and no other symbols. Biases are relative to the quoted pair price (BULLISH means the pair is expected to rise).`;
+    const systemInstruction = `You are TraceFX Lens. Return ONLY compact JSON with exactly two keys: currencySignal and pairSignals. currencySignal must be BULLISH, BEARISH, NEUTRAL or UNCONFIRMED from the perspective of the event currency. pairSignals must contain objects with symbol and signal; signal must be BULLISH, BEARISH, NEUTRAL or UNCONFIRMED from the perspective of the quoted instrument price. Use only supplied event and consensus data. No explanations, probabilities, trading plans, markdown or extra keys. If direction is unclear, use UNCONFIRMED.`;
     const prompt = [
-      `Event currency: ${event.currency}`,
+      `Currency: ${event.currency}`,
       `Event: ${event.title}`,
-      `Release time UTC: ${new Date(event.timestampUtcMs).toISOString()}`,
-      `Consensus: ${event.forecast || 'Unavailable'}`,
+      `Forecast: ${event.forecast || 'Unavailable'}`,
       `Previous: ${event.previous || 'Unavailable'}`,
-      `Unit / period: ${event.unit || 'Not supplied'} / ${event.period || 'Not supplied'}`,
-      `Indicator definition: ${event.officialOverview}`,
-      `Usual effect: ${event.usualEffect}`,
-      `Why traders care: ${event.whyTradersCare}`,
-      `Affected pairs (provide a separate directional bias for every symbol): ${event.affectedPairs.map((pair) => pair.symbol + ' (' + pair.relationship + '; stronger ' + event.currency + ' effect points ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
-      `Evidence quality: ${evidence.quality}`,
-      `Missing evidence: ${evidence.missingData.join(' ')}`,
-      `Available evidence: ${evidence.relevantData.join(' ')}`,
-    ].join('\n');
+      `Pairs: ${event.affectedPairs.slice(0, 5).map((pair) => pair.symbol + ' (currency effect: ' + pair.bullishCurrencyEffect + ')').join(', ')}`,
+    ].join('\\n');
 
     const response = await ai.models.generateContent({
       model: 'gemini-3.1-flash-lite',
@@ -138,7 +130,7 @@ export async function POST(req: NextRequest) {
         missingData,
         quality: evidence.quality,
       },
-      modelVersion: 'gemini-3.1-flash-lite',
+      modelVersion: 'gemini-3.1-flash-lite-compact',
       status: 'PREDICTED' as const,
     };
     const saved = await createNewsPredictionVersion({
