@@ -1104,64 +1104,6 @@ TOP-DOWN MARKET ANALYSIS:
             );
           }
 
-          if (sanitizedMacroMarkup) {
-            for (const z of sanitizedMacroMarkup.zones.slice(0, 4)) {
-              const p =
-                z.topPrice && z.bottomPrice && z.topPrice !== z.bottomPrice
-                  ? `${z.bottomPrice} – ${z.topPrice}`
-                  : z.topPrice || z.bottomPrice;
-              tryPushLevel(
-                z.label.toUpperCase().startsWith(macroTf)
-                  ? z.label
-                  : `${macroTf} ${z.label}`,
-                p,
-                z.role
-              );
-            }
-          }
-
-          if (sanitizedMarkup) {
-            const prefix = isTopDownCrt ? `${executionTf} ` : '';
-            for (const z of sanitizedMarkup.zones) {
-              const p =
-                z.topPrice && z.bottomPrice && z.topPrice !== z.bottomPrice
-                  ? `${z.bottomPrice} – ${z.topPrice}`
-                  : z.topPrice || z.bottomPrice;
-              const upperLbl = z.label.toUpperCase();
-              const lbl =
-                prefix &&
-                !upperLbl.startsWith(executionTf) &&
-                !upperLbl.startsWith(macroTf)
-                  ? `${prefix}${z.label}`
-                  : z.label;
-              tryPushLevel(lbl, p, z.role);
-            }
-            for (const f of sanitizedMarkup.fairValueGaps || []) {
-              const p =
-                f.topPrice && f.bottomPrice && f.topPrice !== f.bottomPrice
-                  ? `${f.bottomPrice} – ${f.topPrice}`
-                  : f.topPrice || f.bottomPrice;
-              const upperLbl = f.label.toUpperCase();
-              const lbl =
-                prefix &&
-                !upperLbl.startsWith(executionTf) &&
-                !upperLbl.startsWith(macroTf)
-                  ? `${prefix}${f.label}`
-                  : f.label;
-              tryPushLevel(lbl, p, 'Fair Value Gap');
-            }
-            for (const lq of sanitizedMarkup.liquidityLevels || []) {
-              tryPushLevel(lq.label, lq.price, 'Liquidity');
-            }
-            for (const sb of sanitizedMarkup.structureBreaks || []) {
-              tryPushLevel(
-                `${prefix}${sb.tone === 'bullish' ? 'Bullish' : 'Bearish'} ${sb.kind}`,
-                sb.price,
-                'Structure Break'
-              );
-            }
-          }
-
           // Determine if Live OHLC matched the chart's detected symbol & price regime
           let ohlcSynced = false;
           let resolvedOhlcMode: OhlcVerificationMode | undefined =
