@@ -13,6 +13,7 @@ import {
 import { createNewsPredictionVersion, listNewsPredictions } from '@/lib/news-prediction-store';
 import { evaluateNewsPrediction } from '@/lib/news-prediction-evaluation';
 import { listNewsPredictionEvaluations, saveNewsPredictionEvaluation } from '@/lib/news-prediction-evaluation-store';
+import { getHistoricalNewsReleaseContext, recordHistoricalNewsRelease } from '@/lib/historical-news-releases';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -111,6 +112,7 @@ export async function POST(req: NextRequest) {
       if (!records.length) {
         return NextResponse.json({ error: 'No saved AI prediction exists for this event.' }, { status: 404 });
       }
+      await recordHistoricalNewsRelease(event);
       const evaluations = [];
       for (const record of records) {
         const evaluation = evaluateNewsPrediction(record, event);
@@ -143,11 +145,13 @@ export async function POST(req: NextRequest) {
 
     // Reuse the app's existing live macro and instrument OHLC feeds. All fetches
     // are bounded and run in parallel so manual prediction remains responsive.
-    const [macroFeed, h1Market, m5Market] = await Promise.all([
+    const [macroFeed, h1Market, m5Market, historicalReleases] = await Promise.all([
       fetchMacroCorrelationFeed(selectedPair, req.signal),
       fetchHybridOhlcContext(selectedPair, 'H1', req.signal),
       fetchHybridOhlcContext(selectedPair, 'M5', req.signal),
+      getHistoricalNewsReleaseContext(event.currency, event.title, event.timestampUtcMs),
     ]);
+    const historicalBlock = historicalReleases?.promptBlock || '';
     const evidenceBase = buildNewsEvidenceSnapshot(event);
     const marketContextBlocks = [
       macroFeed?.promptBlock,
@@ -161,7 +165,7 @@ export async function POST(req: NextRequest) {
     ].filter(Boolean);
     const evidence = {
       ...evidenceBase,
-      relevantData: [...evidenceBase.relevantData, ...marketContextBlocks],
+      relevantData: [...evidenceBase.relevantData, ...marketContextBlocks, ...(historicalBlock ? [historicalBlock] : [])],
       missingData: [
         ...evidenceBase.missingData.filter((item) => !item.includes('Live DXY')),
         ...missingMarketData,
@@ -187,6 +191,8 @@ export async function POST(req: NextRequest) {
       `Usual effect: ${event.usualEffect}`,
       'ADDITIONAL LIVE MARKET EVIDENCE (use the data as context, not as rigid filters):',
       ...marketContextBlocks,
+      historicalBlock ? 'HISTORICAL ECONOMIC RELEASE EVIDENCE (descriptive context, not a trading rule):' : 'No matching historical release observations are archived yet; do not invent historical statistics.',
+      ...(historicalBlock ? [historicalBlock] : []),
       marketContextBlocks.length ? '' : 'Live market telemetry was unavailable; do not invent market prices, trends or levels.',
       'Weigh the economic event, recent macro context and selected-instrument H1/M5 price behaviour together. Explain material agreement or disagreement. Do not treat a technical snapshot as proof of the future reaction.',
       'Assess the likely directional reaction for this instrument only. Avoid certainty when evidence is weak.',
@@ -252,6 +258,7 @@ export async function POST(req: NextRequest) {
         relevantData: evidence.relevantData,
         missingData: evidence.missingData,
         quality: evidence.quality,
+        historicalReleaseCount: historicalReleases?.count ?? 0,
       },
       modelVersion: 'gemini-3.1-flash-lite-single-instrument',
       status: 'PREDICTED' as const,
