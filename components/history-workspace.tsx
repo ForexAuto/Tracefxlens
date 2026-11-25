@@ -20,6 +20,7 @@ import {
   EyeOff,
   History,
   Trash2,
+  CheckSquare,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
@@ -34,6 +35,7 @@ import {
 } from '@/lib/chart-markup';
 import {
   deleteSingleHistoryRecord,
+  deleteHistoryRecords,
   loadLocalHistory,
   lockSignalOutcomePermanent,
   recordSignalToHistory,
@@ -120,7 +122,8 @@ export function HistoryWorkspace() {
   const [records, setRecords] = useState<SignalHistoryRecord[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>('ALL');
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('ALL');
+  const [isSelectionMode, setIsSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -132,7 +135,7 @@ export function HistoryWorkspace() {
   } | null>(null);
   const [isLocking, setIsLocking] = useState(false);
 
-  // Single-record delete confirmation modal state (no bulk/multiple deletion)
+  // Single-record delete confirmation modal state
   const [deleteTarget, setDeleteTarget] =
     useState<SignalHistoryRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -216,9 +219,6 @@ export function HistoryWorkspace() {
       if (outcomeFilter === 'PENDING' && rec.outcome !== null) return false;
       if (outcomeFilter === 'WON' && rec.outcome !== 'WON') return false;
       if (outcomeFilter === 'LOST' && rec.outcome !== 'LOST') return false;
-      if (directionFilter !== 'ALL' && rec.signalType !== directionFilter) {
-        return false;
-      }
       if (q) {
         const orderDisplay = resolveOrderTypeDisplay(
           rec.signalType,
@@ -230,7 +230,7 @@ export function HistoryWorkspace() {
       }
       return true;
     });
-  }, [records, outcomeFilter, directionFilter, searchQuery]);
+  }, [records, outcomeFilter, searchQuery]);
 
   const requestOutcomeLock = useCallback(
     (record: SignalHistoryRecord, outcome: TradeOutcome) => {
@@ -468,27 +468,6 @@ export function HistoryWorkspace() {
                 ))}
               </div>
 
-              {/* Signal Direction Segmented Control */}
-              <div
-                role="group"
-                aria-label="Filter by direction"
-                className="flex items-center gap-0.5 rounded-xl border border-slate-800 bg-[#0D1320] p-1"
-              >
-                {(['ALL', 'BUY', 'SELL', 'HOLD'] as const).map((dir) => (
-                  <button
-                    key={dir}
-                    type="button"
-                    onClick={() => setDirectionFilter(dir)}
-                    className={`min-h-[36px] rounded-lg px-2.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                      directionFilter === dir
-                        ? 'bg-[#172033] text-white'
-                        : 'text-slate-400 hover:text-slate-200'
-                    }`}
-                  >
-                    {dir === 'ALL' ? 'All Signals' : dir}
-                  </button>
-                ))}
-              </div>
             </div>
 
             {/* Pair Search Input */}
@@ -502,6 +481,65 @@ export function HistoryWorkspace() {
                 aria-label="Search signal history"
                 className="min-h-[42px] w-full rounded-xl border border-slate-800 bg-[#0D1320] py-2 pr-3 pl-9 text-xs text-slate-100 placeholder:text-slate-500 focus:border-sky-500/60 focus:outline-none"
               />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsSelectionMode((value) => !value);
+                  setSelectedIds([]);
+                }}
+                className={`min-h-[42px] rounded-xl border px-3 text-xs font-semibold transition-colors ${
+                  isSelectionMode
+                    ? 'border-sky-500/50 bg-sky-500/10 text-sky-300'
+                    : 'border-slate-800 bg-[#0D1320] text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                {isSelectionMode ? 'Cancel selection' : 'Select'}
+              </button>
+              {isSelectionMode && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds(
+                      selectedIds.length === filteredRecords.length
+                        ? []
+                        : filteredRecords.map((record) => record.id)
+                    )}
+                    className="min-h-[42px] rounded-xl border border-slate-800 bg-[#0D1320] px-3 text-xs font-semibold text-slate-300 hover:border-slate-700"
+                  >
+                    {selectedIds.length === filteredRecords.length ? 'Deselect all' : 'Select all'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedIds.length === 0 || isDeleting}
+                    onClick={async () => {
+                      if (!selectedIds.length || isDeleting) return;
+                      const count = selectedIds.length;
+                      if (!window.confirm(`Permanently delete ${count} selected signal ${count === 1 ? 'record' : 'records'}? This cannot be undone.`)) return;
+                      setIsDeleting(true);
+                      try {
+                        const updated = await deleteHistoryRecords(selectedIds);
+                        setRecords(updated);
+                        setExpandedIds((prev) => {
+                          const next = { ...prev };
+                          selectedIds.forEach((id) => delete next[id]);
+                          return next;
+                        });
+                        setInspectedRecord((prev) => prev && selectedIds.includes(prev.id) ? null : prev);
+                        setSelectedIds([]);
+                        setIsSelectionMode(false);
+                      } finally {
+                        setIsDeleting(false);
+                      }
+                    }}
+                    className="inline-flex min-h-[42px] items-center gap-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 text-xs font-semibold text-rose-300 transition-colors hover:bg-rose-500/15 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete selected ({selectedIds.length})
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -544,7 +582,6 @@ export function HistoryWorkspace() {
               type="button"
               onClick={() => {
                 setOutcomeFilter('ALL');
-                setDirectionFilter('ALL');
                 setSearchQuery('');
               }}
               className="mt-3 inline-flex min-h-[40px] items-center justify-center rounded-xl border border-slate-700 bg-[#0D1320] px-4 text-xs font-medium text-slate-200 transition-colors hover:border-slate-600 hover:text-white"
@@ -568,12 +605,25 @@ export function HistoryWorkspace() {
               return (
                 <article
                   key={rec.id}
-                  className="rounded-2xl border border-slate-800/90 bg-[#111726] transition-colors"
+                  className={`rounded-2xl border bg-[#111726] transition-colors ${selectedIds.includes(rec.id) ? 'border-sky-500/60' : 'border-slate-800/90'}`}
                 >
                   {/* Top Row: Signal Identity + Permanent One-Time WON / LOST Toggle */}
                   <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
                     {/* Left: Direction + Unboxed Metadata */}
                     <div className="flex items-start gap-3.5 min-w-0">
+                      {isSelectionMode && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(rec.id)}
+                          onChange={(event) => setSelectedIds((prev) =>
+                            event.target.checked
+                              ? [...prev, rec.id]
+                              : prev.filter((id) => id !== rec.id)
+                          )}
+                          aria-label={`Select ${rec.pair} ${rec.timeframe} history record`}
+                          className="mt-3 h-4 w-4 shrink-0 accent-sky-500"
+                        />
+                      )}
                       <div
                         className={`mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border ${dirMeta.boxClass}`}
                       >
