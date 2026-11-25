@@ -15,9 +15,6 @@ import {
   Copy,
   ClipboardCheck,
   Maximize2,
-  Download,
-  Eye,
-  EyeOff,
   History,
   Trash2,
 } from 'lucide-react';
@@ -25,13 +22,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
 import { OutcomeLockDialog } from '@/components/outcome-lock-dialog';
 import { DeleteHistoryDialog } from '@/components/delete-history-dialog';
-import { AnnotatedChartOverlay } from '@/components/annotated-chart-overlay';
-import {
-  exportMarkedChartPng,
-  getStructureLayerCounts,
-  MarkupLayerFilter,
-  StructureSubLayer,
-} from '@/lib/chart-markup';
 import {
   deleteSingleHistoryRecord,
   deleteHistoryRecords,
@@ -46,7 +36,6 @@ import {
   type SignalHistoryRecord,
   type SignalType,
   type TradeOutcome,
-  type TradingSignalResponse,
 } from '@/lib/trading-data';
 
 type OutcomeFilter = 'ALL' | 'PENDING' | 'WON' | 'LOST';
@@ -85,37 +74,6 @@ function getDirectionVisual(signalType: SignalType) {
   };
 }
 
-function toSignalResponse(rec: SignalHistoryRecord): TradingSignalResponse {
-  return {
-    isValidChart: true,
-    analysisMode: rec.analysisMode,
-    crtContext: rec.crtContext,
-    macroContext: rec.macroContext,
-    signalType: rec.signalType,
-    orderType: rec.orderType,
-    signalConfidence: rec.signalConfidence,
-    executionCategory: rec.executionCategory,
-    detectedPair: rec.pair,
-    detectedTimeframe: rec.timeframe,
-    currentMarketPrice: rec.currentMarketPrice,
-    entryPrice: rec.entryPrice,
-    entryTriggerNote: rec.entryTriggerNote,
-    stopLoss: rec.stopLoss,
-    takeProfit1: rec.takeProfit1,
-    takeProfit2: rec.takeProfit2,
-    takeProfit3: rec.takeProfit3,
-    preferredTakeProfit: rec.preferredTakeProfit,
-    preferredTakeProfitReason: rec.preferredTakeProfitReason,
-    riskRewardRatio: rec.riskRewardRatio,
-    marketStructure: rec.marketStructure,
-    confidenceSummary: rec.confidenceSummary,
-    technicalRationale: rec.technicalRationale,
-    keyLevels: rec.keyLevels,
-    invalidationCondition: rec.invalidationCondition,
-    chartMarkup: rec.chartMarkup,
-  };
-}
-
 export function HistoryWorkspace() {
   const [records, setRecords] = useState<SignalHistoryRecord[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
@@ -138,13 +96,9 @@ export function HistoryWorkspace() {
     useState<SignalHistoryRecord | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
-  // Fullscreen marked chart lightbox state
+  // Plain chart inspection lightbox state
   const [inspectedRecord, setInspectedRecord] =
     useState<SignalHistoryRecord | null>(null);
-  const [showMarkup, setShowMarkup] = useState(true);
-  const [layerFilter, setLayerFilter] = useState<MarkupLayerFilter>('primary');
-  const [subLayer, setSubLayer] = useState<StructureSubLayer>('all');
-  const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,42 +278,6 @@ export function HistoryWorkspace() {
     }
   };
 
-  const handleExportInspectedPng = async () => {
-    if (!inspectedRecord?.chartImageUrl || isExporting) return;
-    setIsExporting(true);
-    try {
-      await exportMarkedChartPng(
-        inspectedRecord.chartImageUrl,
-        toSignalResponse(inspectedRecord),
-        layerFilter,
-        subLayer
-      );
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const inspectedSignal = useMemo(
-    () => (inspectedRecord ? toSignalResponse(inspectedRecord) : null),
-    [inspectedRecord]
-  );
-
-  const inspectedCounts = useMemo(
-    () => getStructureLayerCounts(inspectedSignal),
-    [inspectedSignal]
-  );
-
-  const inspectedSubLayers = useMemo(() => {
-    const items: Array<{ id: StructureSubLayer; label: string; count: number }> = [
-      { id: 'all', label: 'All Layers', count: inspectedCounts.total },
-      { id: 'zones', label: 'Zones & OB', count: inspectedCounts.zones },
-      { id: 'fvg', label: 'FVG', count: inspectedCounts.fvg },
-      { id: 'bos_swings', label: 'BOS & Swings', count: inspectedCounts.bosSwings },
-      { id: 'liquidity', label: 'Liquidity', count: inspectedCounts.liquidity },
-      { id: 'trendlines', label: 'Trendlines', count: inspectedCounts.trendlines },
-    ];
-    return items.filter((item) => item.id === 'all' || item.count > 0);
-  }, [inspectedCounts]);
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -561,7 +479,7 @@ export function HistoryWorkspace() {
               No Archived Signals Yet
             </h2>
             <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-slate-400">
-              Every chart scan you run is automatically saved here with its exact entry, stop-loss, take-profit targets, marked chart, and a one-time permanent WON / LOST outcome toggle.
+              Every chart scan you run is automatically saved here with its exact entry, stop-loss, take-profit targets, original chart screenshot, and a one-time permanent WON / LOST outcome toggle.
             </p>
             <Link
               href="/"
@@ -794,16 +712,11 @@ export function HistoryWorkspace() {
                       {rec.chartImageUrl && (
                         <button
                           type="button"
-                          onClick={() => {
-                            setShowMarkup(true);
-                            setLayerFilter('primary');
-                            setSubLayer('all');
-                            setInspectedRecord(rec);
-                          }}
+                          onClick={() => setInspectedRecord(rec)}
                           className="flex min-h-[38px] items-center gap-1.5 rounded-lg border border-slate-800 bg-[#0D1320] px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:border-slate-700 hover:text-white whitespace-nowrap"
                         >
                           <Maximize2 className="h-3.5 w-3.5 text-sky-400" />
-                          <span>Inspect Marked Chart</span>
+                          <span>Inspect Chart</span>
                         </button>
                       )}
 
@@ -951,9 +864,9 @@ export function HistoryWorkspace() {
         onCancel={() => !isDeleting && setDeleteTarget(null)}
       />
 
-      {/* Fullscreen Marked Chart Lightbox from History */}
+      {/* Plain Chart Inspection Lightbox */}
       <AnimatePresence>
-        {inspectedRecord && inspectedRecord.chartImageUrl && inspectedSignal && (
+        {inspectedRecord?.chartImageUrl && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -964,10 +877,10 @@ export function HistoryWorkspace() {
           >
             <div
               onClick={(e) => e.stopPropagation()}
-              className="mb-3 flex w-full max-w-6xl flex-wrap items-center justify-between gap-2"
+              className="mb-3 flex w-full max-w-6xl items-center justify-between gap-3"
             >
-              <div className="flex items-center gap-2 text-xs text-slate-300">
-                <span className="font-[family-name:var(--font-mono)] font-semibold text-white tabular-nums">
+              <div className="flex min-w-0 items-center gap-2 text-xs text-slate-300">
+                <span className="truncate font-[family-name:var(--font-mono)] font-semibold text-white tabular-nums">
                   {inspectedRecord.pair}
                 </span>
                 <span aria-hidden="true">·</span>
@@ -982,146 +895,29 @@ export function HistoryWorkspace() {
                     inspectedRecord.executionCategory
                   ).label}
                 </span>
-                {inspectedRecord.outcome && (
-                  <>
-                    <span aria-hidden="true">·</span>
-                    <span
-                      className={`font-semibold ${
-                        inspectedRecord.outcome === 'WON'
-                          ? 'text-emerald-400'
-                          : 'text-rose-400'
-                      }`}
-                    >
-                      {inspectedRecord.outcome} (Locked)
-                    </span>
-                  </>
-                )}
               </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowMarkup((prev) => !prev)}
-                  className={`flex min-h-[42px] items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap ${
-                    showMarkup
-                      ? 'border-sky-500/45 bg-sky-500/15 text-sky-200'
-                      : 'border-slate-700 bg-slate-900 text-slate-300'
-                  }`}
-                >
-                  {showMarkup ? (
-                    <>
-                      <Eye className="h-3.5 w-3.5" />
-                      <span>Markup On</span>
-                    </>
-                  ) : (
-                    <>
-                      <EyeOff className="h-3.5 w-3.5" />
-                      <span>Original</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  type="button"
-                  disabled={isExporting}
-                  onClick={handleExportInspectedPng}
-                  className="flex min-h-[42px] items-center gap-1.5 rounded-xl border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-800 whitespace-nowrap"
-                >
-                  <Download className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Save PNG</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setInspectedRecord(null)}
-                  aria-label="Close chart inspection"
-                  className="flex min-h-[42px] min-w-[42px] items-center justify-center rounded-xl border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setInspectedRecord(null)}
+                aria-label="Close chart inspection"
+                className="flex min-h-[42px] min-w-[42px] shrink-0 items-center justify-center rounded-xl border border-slate-700 bg-slate-900 text-slate-200 hover:bg-slate-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
             </div>
 
             <div
               onClick={(e) => e.stopPropagation()}
-              className="relative mx-auto w-fit max-w-full overflow-hidden rounded-xl border border-slate-800 bg-[#070A12]"
+              className="mx-auto max-h-[82vh] max-w-full overflow-hidden rounded-xl border border-slate-800 bg-[#070A12]"
             >
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={inspectedRecord.chartImageUrl}
-                alt={`Archived ${inspectedRecord.pair} chart`}
+                alt={`Original ${inspectedRecord.pair} chart`}
                 referrerPolicy="no-referrer"
-                className="block max-h-[75vh] w-auto max-w-[95vw] sm:max-w-6xl object-contain"
-              />
-
-              <AnnotatedChartOverlay
-                imageDataUrl={inspectedRecord.chartImageUrl}
-                signal={inspectedSignal}
-                layerFilter={layerFilter}
-                subLayer={subLayer}
-                visible={showMarkup}
+                className="block max-h-[82vh] w-auto max-w-[95vw] object-contain"
               />
             </div>
-
-            {showMarkup && (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="mt-3 flex max-w-full flex-col items-center gap-2"
-              >
-                <div className="grid w-full max-w-[95vw] grid-cols-2 gap-1 rounded-xl border border-slate-800 bg-[#111726] p-1 sm:flex sm:w-auto sm:items-center">
-                  {(
-                    [
-                      { id: 'setup', label: 'Entry · SL · TP' },
-                      { id: 'primary', label: 'Primary Setup' },
-                      {
-                        id: 'all',
-                        label:
-                          inspectedCounts.total > 0
-                            ? `Full Structure (${inspectedCounts.total})`
-                            : 'Full Structure',
-                      },
-                      { id: 'structure', label: 'Structure Only' },
-                    ] as const
-                  ).map((opt) => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => {
-                        setLayerFilter(opt.id);
-                        if (opt.id === 'all') setSubLayer('all');
-                      }}
-                      className={`min-h-[38px] rounded-lg px-3 text-xs font-medium transition-colors whitespace-nowrap tabular-nums ${
-                        layerFilter === opt.id
-                          ? 'bg-sky-500 text-slate-950 font-semibold'
-                          : 'text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-
-                {(layerFilter === 'all' || layerFilter === 'structure') &&
-                  inspectedSubLayers.length > 2 && (
-                    <div className="flex items-center gap-1.5 overflow-x-auto max-w-[95vw] px-1">
-                      {inspectedSubLayers.map((opt) => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          onClick={() => setSubLayer(opt.id)}
-                          className={`min-h-[34px] rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0 tabular-nums ${
-                            subLayer === opt.id
-                              ? 'border-sky-500/50 bg-sky-500/20 text-sky-200'
-                              : 'border-slate-800 bg-slate-900/90 text-slate-400 hover:text-white'
-                          }`}
-                        >
-                          {opt.label} ({opt.count})
-                        </button>
-                      ))}
-                    </div>
-                  )}
-              </div>
-            )}
           </motion.div>
         )}
       </AnimatePresence>
