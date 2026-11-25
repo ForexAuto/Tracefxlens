@@ -20,7 +20,6 @@ import {
   EyeOff,
   History,
   Trash2,
-  CheckSquare,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
@@ -51,7 +50,6 @@ import {
 } from '@/lib/trading-data';
 
 type OutcomeFilter = 'ALL' | 'PENDING' | 'WON' | 'LOST';
-type DirectionFilter = 'ALL' | 'BUY' | 'SELL' | 'HOLD';
 
 function formatShortTimestamp(iso: string | null): string {
   if (!iso) return '';
