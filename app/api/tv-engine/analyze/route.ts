@@ -196,7 +196,7 @@ export async function POST(req: NextRequest) {
 
     const signal: TradingSignalResponse = {
       isValidChart: Boolean(parsed.isValidChart ?? true),
-      modelRoute: 'PR',
+      modelRoute: response.provider === 'gemini' ? 'FB' : 'PR',
       validationMessage: parsed.validationMessage,
       signalType,
       orderType: validatedOrder.orderType,
