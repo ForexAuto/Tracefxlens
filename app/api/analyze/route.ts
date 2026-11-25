@@ -84,6 +84,11 @@ function buildModelCandidates(): ModelCandidate[] {
 function isRetryableModelError(err: unknown): boolean {
   const raw = err instanceof Error ? `${err.name} ${err.message}` : String(err);
   const upper = raw.toUpperCase();
+  // A malformed/truncated OpenAI SSE event is a provider-stream failure, not a
+  // completed analysis. Retry through the explicitly tracked Gemini candidate.
+  if (err instanceof SyntaxError && /JSON|POSITION|UNTERMINATED|UNEXPECTED TOKEN/i.test(raw)) {
+    return true;
+  }
   if (upper.includes('NOT CONFIGURED')) {
     return false;
   }
