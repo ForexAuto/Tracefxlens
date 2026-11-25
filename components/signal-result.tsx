@@ -444,6 +444,7 @@ export function SignalResult({
               {signal.entryTriggerNote && <p className="mt-1 text-xs leading-relaxed text-slate-500">{signal.entryTriggerNote}</p>}
             </div>
             <div className="shrink-0 self-center text-right">
+              {signal.modelRoute && <span title={signal.modelRoute === 'PR' ? 'Primary model route' : 'Fallback model route'} className={`mb-1.5 ml-auto flex h-6 w-6 items-center justify-center rounded-full border text-[9px] font-bold tracking-tight ${signal.modelRoute === 'PR' ? 'border-sky-400/45 bg-sky-400/10 text-sky-300' : 'border-amber-400/45 bg-amber-400/10 text-amber-300'}`}>{signal.modelRoute}</span>}
               <p title="AI-estimated setup quality based on technical confluence; not a win-probability forecast" className={`font-[family-name:var(--font-mono)] text-3xl font-bold leading-none tracking-tight tabular-nums sm:text-4xl ${typeof signal.signalConfidence !== 'number' ? 'text-slate-500' : signal.signalConfidence >= 80 ? 'text-emerald-400' : signal.signalConfidence >= 65 ? 'text-sky-400' : 'text-amber-400'}`}>
                 {typeof signal.signalConfidence === 'number' ? `${signal.signalConfidence}%` : '—'}
               </p>
