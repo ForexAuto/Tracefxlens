@@ -1236,6 +1236,7 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
 
           const signalResult: TradingSignalResponse = {
             isValidChart: true,
+            modelRoute: candidate.provider === 'gemini' ? 'FB' : 'PR',
             validationMessage: '',
             analysisMode,
             crtContext,
