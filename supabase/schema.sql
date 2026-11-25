@@ -14,6 +14,7 @@ create table if not exists public.signal_history (
   fingerprint            text not null,
   pair                   text not null,
   timeframe              text not null,
+  model_route            text check (model_route is null or model_route in ('PR', 'FB')),
   signal_type            text not null,
   order_type             text,
   execution_category     text not null default 'Market Execution',
@@ -291,3 +292,6 @@ grant select on public.signal_pair_breakdown to anon, authenticated, service_rol
 grant execute on function public.lock_signal_outcome(text, text) to anon, authenticated, service_role;
 
 commit;
+
+-- Upgrade existing installations safely.
+alter table public.signal_history add column if not exists model_route text;
