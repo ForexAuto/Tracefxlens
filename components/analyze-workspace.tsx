@@ -1085,7 +1085,7 @@ export function AnalyzeWorkspace() {
       {/* Main Responsive Analyze Canvas */}
       <main
         id="top"
-        className="mx-auto w-full max-w-6xl px-4 pt-4 pb-6 sm:px-6 sm:pt-8 sm:pb-8 lg:px-8"
+        className="mx-auto w-full max-w-6xl px-4 pt-4 pb-0 sm:px-6 sm:pt-8 sm:pb-0 lg:px-8"
       >
         {/* Editorial Intro Header + At-a-Glance Live Trading Session Desk */}
         <TradingSessionHeader selectedPair={selectedPair} />
@@ -1403,7 +1403,7 @@ Trigger & Tight Stop
       />
 
       {/* Analyze page brand footer */}
-      <footer className="relative mt-4 overflow-hidden border-t border-cyan-400/15 bg-gradient-to-b from-slate-900/35 to-slate-950/70 py-8 sm:mt-6 sm:py-10">
+      <footer className="relative mt-0 overflow-hidden border-t border-cyan-400/15 bg-gradient-to-b from-slate-900/35 to-slate-950/70 py-8 sm:mt-0 sm:py-10">
         <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-400/40 to-transparent" />
         <div className="mx-auto flex max-w-6xl flex-col items-center gap-3 px-4 text-center sm:px-6 lg:px-8">
           <div className="flex items-center gap-3">
