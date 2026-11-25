@@ -555,6 +555,19 @@ export function HistoryWorkspace() {
                           <span className="font-[family-name:var(--font-mono)] tabular-nums">
                             {rec.timeframe}
                           </span>
+                          {rec.modelRoute && (
+                            <span
+                              title={rec.modelRoute === 'PR' ? 'Primary model (GPT)' : 'Fallback model (Gemini)'}
+                              aria-label={rec.modelRoute === 'PR' ? 'Primary model' : 'Fallback model'}
+                              className={`inline-flex h-6 w-6 items-center justify-center rounded-full border text-[9px] font-extrabold tracking-tight ${
+                                rec.modelRoute === 'PR'
+                                  ? 'border-sky-400/50 bg-sky-400/10 text-sky-300'
+                                  : 'border-amber-400/50 bg-amber-400/10 text-amber-300'
+                              }`}
+                            >
+                              {rec.modelRoute}
+                            </span>
+                          )}
                           <span aria-hidden="true">·</span>
                           <span className="font-[family-name:var(--font-mono)] text-slate-300 tabular-nums">
                             R:R {rec.riskRewardRatio}
