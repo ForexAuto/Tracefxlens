@@ -1219,7 +1219,6 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
           const validatedOrder = normalizeAndValidateOrderType({
             signalType,
             rawOrderType: rawSignalObj.orderType,
-            rawSignalType: rawSignalObj.signalType,
             currentMarketPrice: rawCurrentMarketPrice,
             entryPrice: rawEntryPrice,
             stopLoss: rawStopLoss,
