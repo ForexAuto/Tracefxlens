@@ -23,6 +23,7 @@ interface SupabaseHistoryRow {
   fingerprint: string;
   pair: string;
   timeframe: string;
+  model_route?: string | null;
   signal_type: string;
   order_type?: string | null;
   execution_category: string;
@@ -111,6 +112,7 @@ function rowToRecord(row: SupabaseHistoryRow): SignalHistoryRecord {
     fingerprint: String(row.fingerprint || ''),
     pair: String(row.pair || 'XAU/USD'),
     timeframe: String(row.timeframe || 'H1'),
+    modelRoute: row.model_route === 'PR' || row.model_route === 'FB' ? row.model_route : undefined,
     signalType,
     orderType,
     executionCategory,
@@ -154,6 +156,7 @@ function recordToRow(rec: SignalHistoryRecord): SupabaseHistoryRow {
     fingerprint: rec.fingerprint,
     pair: rec.pair,
     timeframe: rec.timeframe,
+    model_route: rec.modelRoute ?? null,
     signal_type: rec.signalType,
     order_type: rec.orderType ?? null,
     execution_category: rec.executionCategory,
@@ -223,6 +226,7 @@ export function mergeImmutableRecord(
   return {
     ...existing,
     orderType: existing.orderType || incoming.orderType,
+    modelRoute: existing.modelRoute || incoming.modelRoute,
     chartImageUrl: existing.chartImageUrl || incoming.chartImageUrl,
     chartMarkup: existing.chartMarkup || incoming.chartMarkup,
     preferredTakeProfit: existing.preferredTakeProfit || incoming.preferredTakeProfit,
