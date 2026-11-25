@@ -192,19 +192,11 @@ export function extractOpenAIOutputText(response: any): string {
 }
 
 export async function createOpenAIResponseStream(options: OpenAIRequestOptions): Promise<AsyncIterable<string>> {
-  const canFallbackToGemini = hasGeminiApiKey();
-
   if (!hasOpenAIApiKey()) {
-    if (canFallbackToGemini) {
-      return createGeminiFallbackStream(options);
-    }
-    throw new Error('Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured on the server.');
+    throw new Error('OPENAI_API_KEY is not configured on the server.');
   }
 
-  const connectTimeoutMs = canFallbackToGemini
-    ? (options.gptTimeoutMs ?? 20000)
-    : options.gptTimeoutMs;
-  const linked = createLinkedSignal(options.signal, connectTimeoutMs);
+  const linked = createLinkedSignal(options.signal, options.gptTimeoutMs ?? DEFAULT_GPT_FALLBACK_TIMEOUT_MS);
 
   let response: Response;
   try {
@@ -219,14 +211,11 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
     if (!response.body) throw new Error('OpenAI returned an empty streaming response.');
   } catch (err) {
     linked.cleanup();
-    if (options.signal?.aborted || !canFallbackToGemini) {
-      throw err;
-    }
-    console.warn('[AI Fallback] OpenAI stream connection failed, falling back to gemini-3.1-flash-lite:', err instanceof Error ? err.message : err);
-    return createGeminiFallbackStream(options);
+    throw err;
   }
 
-  // Connection succeeded; clear connect timer once first chunk arrives or stream ends
+  // This helper is deliberately OpenAI-only. The Analyze route owns fallback
+  // selection so the reported PR/FB attribution always matches the provider used.
   return (async function* () {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
@@ -237,12 +226,12 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
         const { value, done } = await reader.read();
         if (done) break;
         linked.cleanup();
-        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-        let split = buffer.indexOf('\n\n');
+        buffer += decoder.decode(value, { stream: true }).replace(/\\r\\n/g, '\\n');
+        let split = buffer.indexOf('\\n\\n');
         while (split >= 0) {
           const block = buffer.slice(0, split);
           buffer = buffer.slice(split + 2);
-          const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
+          const data = block.split('\\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\\n');
           if (data && data !== '[DONE]') {
             const event = JSON.parse(data);
             if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
@@ -256,21 +245,13 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
               throw new Error('OpenAI ended the response before completing the analysis.');
             }
           }
-          split = buffer.indexOf('\n\n');
+          split = buffer.indexOf('\\n\\n');
         }
       }
       if (!yieldedAnyText) {
         throw new Error('OpenAI stream ended without generating text.');
       }
     } catch (streamErr) {
-      if (!yieldedAnyText && !options.signal?.aborted && canFallbackToGemini) {
-        console.warn('[AI Fallback] OpenAI stream produced no output, falling back to gemini-3.1-flash-lite:', streamErr instanceof Error ? streamErr.message : streamErr);
-        const fallbackStream = await createGeminiFallbackStream(options);
-        for await (const chunk of fallbackStream) {
-          yield chunk;
-        }
-        return;
-      }
       throw streamErr;
     } finally {
       linked.cleanup();
