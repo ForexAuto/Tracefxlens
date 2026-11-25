@@ -444,8 +444,66 @@ export async function lockSignalOutcomePermanent(
 }
 
 /**
+ * Deletes multiple history records from local stores and the server.
+ * Tombstones prevent deleted records from being restored during a later sync.
+ */
+export async function deleteHistoryRecords(
+  ids: string[]
+): Promise<SignalHistoryRecord[]> {
+  const cleanIds = Array.from(new Set(ids.map((id) => String(id).trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return loadLocalHistory();
+
+  const current = await loadLocalHistory();
+  const targets = current.filter((item) => cleanIds.includes(item.id));
+  const targetIds = new Set(targets.map((item) => item.id));
+  const remaining = current.filter((item) => !targetIds.has(item.id));
+
+  const tombstones = readDeletedTombstones();
+  writeDeletedTombstones({
+    ids: [...tombstones.ids, ...targetIds],
+    fingerprints: [
+      ...tombstones.fingerprints,
+      ...targets.map((item) => item.fingerprint).filter((value): value is string => Boolean(value)),
+    ],
+  });
+
+  try {
+    const db = await openAppDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(HISTORY_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(HISTORY_STORE_NAME);
+      for (const id of targetIds) store.delete(id);
+      tx.oncomplete = () => { db.close(); resolve(); };
+      tx.onerror = () => { db.close(); reject(tx.error || new Error('Failed to delete history records')); };
+    });
+  } catch {
+    // Local fallback mirror below remains the recovery path.
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const slim = remaining.map((record) => ({ ...record, chartImageUrl: null }));
+      window.localStorage.setItem(FALLBACK_HISTORY_LOCAL_KEY, JSON.stringify(slim));
+    } catch {
+      // Ignore fallback write errors; tombstones still prevent resurrection.
+    }
+  }
+
+  emitHistoryUpdated();
+  await Promise.all(Array.from(targetIds, async (id) => {
+    try {
+      await fetch(`/api/history/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    } catch {
+      // Tombstones retry deletes during the next history sync.
+    }
+  }));
+
+  return remaining;
+}
+
+/**
  * Deletes a single history record by ID from IndexedDB, local fallback storage,
- * and Supabase via DELETE /api/history/[id]. Bulk deletion is never exposed.
+ * and Supabase via DELETE /api/history/[id].
  */
 export async function deleteSingleHistoryRecord(
   id: string
