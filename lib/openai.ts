@@ -167,7 +167,7 @@ export async function createOpenAIResponse(options: OpenAIRequestOptions): Promi
     if (!hasOutputText && !hasToolCalls) {
       throw new Error('OpenAI returned an empty response.');
     }
-    return json;
+    return { ...json, provider: 'openai', model: OPENAI_TRADING_MODEL };
   } catch (err) {
     if (options.signal?.aborted || !canFallbackToGemini) {
       throw err;
