@@ -395,6 +395,7 @@ export function getSignalConfidencePercent(
 
 export interface SignalHistoryRecord {
   id: string;
+  modelRoute?: 'PR' | 'FB';
   fingerprint: string;
   pair: string;
   timeframe: string;
