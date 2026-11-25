@@ -678,7 +678,6 @@ export async function POST(req: NextRequest) {
               const validatedOrder = normalizeAndValidateOrderType({
                 signalType: validSignalType,
                 rawOrderType: callArgs.orderType,
-                rawSignalType: callArgs.signalType,
                 currentMarketPrice: rawCurrentPrice,
                 entryPrice: rawEntryPrice,
                 stopLoss: rawStopLoss,
