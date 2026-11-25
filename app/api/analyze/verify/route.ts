@@ -380,12 +380,18 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
       const validatedOrder = normalizeAndValidateOrderType({
         signalType: finalSignalType,
         rawOrderType: rawObj.orderType ?? draftSignal.orderType,
-        rawSignalType: rawObj.signalType ?? draftSignal.signalType,
         currentMarketPrice: finalCurrent,
         entryPrice: finalEntryRaw,
         stopLoss: finalSl,
         takeProfit1: finalTp1,
+        takeProfit2: orderingValid ? nextTp2 : draftSignal.takeProfit2,
+        takeProfit3: orderingValid ? nextTp3 : draftSignal.takeProfit3,
       });
+
+      if (!validatedOrder.valid) {
+        // Keep the already validated draft recommendation; never publish a repaired execution type.
+        return NextResponse.json({ signal: draftSignal });
+      }
 
       const updatedMacroContext = draftSignal.macroContext
         ? finalSignalType === draftSignal.signalType
