@@ -65,28 +65,25 @@ export function NewsEventOverview({
   onRefreshBrief,
   onCloseMobile,
 }: NewsEventOverviewProps) {
-  const [pairOverride, setPairOverride] = useState<{ eventId: string; pair: string } | null>(null);
-  const [predictionState, setPredictionState] = useState<{ key: string; record: NewsPredictionRecord | null } | null>(null);
+  const [newsPrediction, setNewsPrediction] = useState<NewsPredictionRecord | null>(null);
+  const [selectedPair, setSelectedPair] = useState('');
   const [predictionLoading, setPredictionLoading] = useState(false);
-  const [predictionErrorState, setPredictionErrorState] = useState<{ key: string; error: string } | null>(null);
-
-  const defaultPair = event
-    ? (event.affectedPairs.find((pair) => pair.symbol.replace('/', '').toUpperCase() === 'XAUUSD')
-        || event.affectedPairs[0])?.symbol || ''
-    : '';
-  const selectedPair = event
-    ? (pairOverride?.eventId === event.eventId ? pairOverride.pair : defaultPair)
-    : '';
-
-  const eventFingerprint = event ? getNewsEventFingerprint(event) : '';
-  const predictionKey = eventFingerprint && selectedPair ? `${eventFingerprint}::${selectedPair}` : '';
-  const newsPrediction = predictionKey && predictionState?.key === predictionKey ? predictionState.record : null;
-  const predictionError = predictionKey && predictionErrorState?.key === predictionKey ? predictionErrorState.error : null;
+  const [predictionError, setPredictionError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!eventFingerprint || !selectedPair || !predictionKey) return;
+    if (!event) { setSelectedPair(''); return; }
+    const preferred = event.affectedPairs.find((pair) => pair.symbol.replace('/', '').toUpperCase() === 'XAUUSD')
+      || event.affectedPairs[0];
+    setSelectedPair(preferred?.symbol || '');
+  }, [event?.eventId]);
+
+  useEffect(() => {
     let active = true;
-    fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(eventFingerprint)}&pair=${encodeURIComponent(selectedPair)}`, { cache: 'no-store' })
+    setNewsPrediction(null);
+    setPredictionError(null);
+    if (!event || !selectedPair) return () => { active = false; };
+    const fingerprint = getNewsEventFingerprint(event);
+    fetch(`/api/news/predictions?eventFingerprint=${encodeURIComponent(fingerprint)}&pair=${encodeURIComponent(selectedPair)}`, { cache: 'no-store' })
       .then(async (response) => {
         const responseText = await response.text();
         let payload: { error?: string; predictions?: NewsPredictionRecord[] };
@@ -101,26 +98,20 @@ export function NewsEventOverview({
       })
       .then((payload) => {
         if (active && Array.isArray(payload.predictions) && payload.predictions.length) {
-          const latest = [...payload.predictions].sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0];
-          setPredictionState({ key: predictionKey, record: latest });
-          setPredictionErrorState(null);
+          const latest = payload.predictions.sort((a: NewsPredictionRecord, b: NewsPredictionRecord) => b.version - a.version)[0];
+          setNewsPrediction(latest);
         }
       })
       .catch((error) => {
-        if (active) {
-          setPredictionErrorState({
-            key: predictionKey,
-            error: error instanceof Error ? error.message : 'Unable to load saved prediction.',
-          });
-        }
+        if (active) setPredictionError(error instanceof Error ? error.message : 'Unable to load saved prediction.');
       });
     return () => { active = false; };
-  }, [eventFingerprint, selectedPair, predictionKey]);
+  }, [event?.eventId, selectedPair]);
 
   const generateNewsPrediction = async () => {
-    if (!event || !predictionKey) return;
+    if (!event) return;
     setPredictionLoading(true);
-    setPredictionErrorState(null);
+    setPredictionError(null);
     try {
       const response = await fetch('/api/news/predictions', {
         method: 'POST',
@@ -143,12 +134,9 @@ export function NewsEventOverview({
       }
       if (!response.ok) throw new Error(payload.error || `Unable to generate prediction (HTTP ${response.status}).`);
       if (!payload.prediction) throw new Error('The prediction service returned an empty response. Please try again.');
-      setPredictionState({ key: predictionKey, record: payload.prediction });
+      setNewsPrediction(payload.prediction);
     } catch (error) {
-      setPredictionErrorState({
-        key: predictionKey,
-        error: error instanceof Error ? error.message : 'Unable to generate prediction.',
-      });
+      setPredictionError(error instanceof Error ? error.message : 'Unable to generate prediction.');
     } finally {
       setPredictionLoading(false);
     }
@@ -310,7 +298,7 @@ export function NewsEventOverview({
           <span className="text-xs font-medium text-slate-300">Instrument to analyse</span>
           <select
             value={selectedPair}
-            onChange={(e) => setPairOverride({ eventId: event.eventId, pair: e.target.value })}
+            onChange={(e) => setSelectedPair(e.target.value)}
             disabled={predictionLoading || event.affectedPairs.length === 0}
             className="min-h-[42px] w-full rounded-lg border border-slate-700 bg-[#0D1320] px-3 text-sm font-semibold text-white outline-none focus:border-sky-500"
           >
