@@ -919,6 +919,8 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
         });
       };
 
+      let activeCandidate: ModelCandidate | null = null;
+
       const handleParsedObject = (obj: Record<string, unknown>) => {
         if (isAborted() || rejected || sentResult) return;
 
@@ -1236,7 +1238,7 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
 
           const signalResult: TradingSignalResponse = {
             isValidChart: true,
-            modelRoute: candidate.provider === 'gemini' ? 'FB' : 'PR',
+            modelRoute: activeCandidate?.provider === 'gemini' ? 'FB' : 'PR',
             validationMessage: '',
             analysisMode,
             crtContext,
@@ -1298,6 +1300,7 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
           if (isAborted() || rejected || sentResult) break;
 
           const candidate = MODEL_CANDIDATES[attempt];
+          activeCandidate = candidate;
 
           if (attempt > 0) {
             sendEvent({
