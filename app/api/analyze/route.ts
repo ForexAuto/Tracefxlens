@@ -713,11 +713,12 @@ Line 6 (Final Validated Trading Signal — market analysis and trade levels only
 MARKET ANALYSIS & ORDER TYPE RULES (CRITICAL — DO NOT DEFAULT TO PENDING ORDERS):
 - Do not generate chartMarkup, macroChartMarkup, pixel coordinates, drawing instructions, or visual annotations. Focus the response on interpreting price action, market structure, liquidity, macro context, entry quality, invalidation, and the three take-profit targets.
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
-- Choose "orderType" strictly from price location relative to the trigger:
-  1. "MARKET" (DEFAULT when setup is actionable NOW): Use MARKET whenever price has ALREADY tapped/swept the POI or printed a confirmed CHoCH/BOS/displacement candle, OR when entryPrice is within immediate proximity (~0.15%) of currentMarketPrice. Set entryPrice = currentMarketPrice. NEVER invent a Limit order just to artificially inflate R:R when price is already at the execution trigger!
-  2. "BUY_LIMIT" (entryPrice strictly < currentMarketPrice) or "SELL_LIMIT" (entryPrice strictly > currentMarketPrice): Use ONLY when directional structure is already confirmed AND current price has displaced away from an unmitigated FVG or Order Block (> 0.2% away) such that waiting for the pullback provides the structural invalidation point.
-  3. "BUY_STOP" (entryPrice strictly > currentMarketPrice) or "SELL_STOP" (entryPrice strictly < currentMarketPrice): Use ONLY when price is coiled against a clear swing high/low or range boundary and requires a decisive breakout trigger.
-  4. "HOLD" with "orderType":"NONE": Select HOLD if price is choppy, mid-range, or lacks clean immediate OR pending confluence; set entryPrice to the key breakout/rejection level to watch. Never force a speculative pending order on an unclear chart.
+- You alone choose the execution strategy from the observed market conditions; the server-side validator will only check your choice and will never convert it.
+  1. "MARKET": Use only when the execution trigger is active now. Set entryPrice equal to currentMarketPrice.
+  2. "BUY_LIMIT" / "SELL_LIMIT": Use only for a structurally justified pullback/retest at an unmitigated demand/supply, FVG or Order Block. BUY_LIMIT entry must be strictly below currentMarketPrice; SELL_LIMIT entry strictly above.
+  3. "BUY_STOP" / "SELL_STOP": Use only for a structurally justified breakout trigger. BUY_STOP entry must be strictly above currentMarketPrice; SELL_STOP entry strictly below.
+  4. "HOLD" with "orderType":"NONE": Use when no clean immediate or pending setup exists. Never force a pending order.
+  5. Always provide an explicit orderType for BUY/SELL. If the selected order type does not match the entry geometry, correct your own output; do not rely on the validator to repair it.
 - Price Ordering Invariants:
   - For BUY (MARKET, BUY_LIMIT, or BUY_STOP): stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
   - For SELL (MARKET, SELL_LIMIT, or SELL_STOP): stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
@@ -1223,8 +1224,15 @@ TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
             entryPrice: rawEntryPrice,
             stopLoss: rawStopLoss,
             takeProfit1: rawTakeProfit1,
-            atrRaw: activeRefOhlc?.atr14,
+            takeProfit2: String(rawSignalObj.takeProfit2 || '—'),
+            takeProfit3: String(rawSignalObj.takeProfit3 || '—'),
           });
+
+          if (!validatedOrder.valid) {
+            sentResult = true;
+            sendEvent({ event: 'error', message: `Execution recommendation rejected: ${validatedOrder.error}` });
+            return;
+          }
 
           const signalResult: TradingSignalResponse = {
             isValidChart: true,
