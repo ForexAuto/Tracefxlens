@@ -20,7 +20,10 @@ import { AppHeaderWithSidebar } from '@/components/navigation-sidebar';
 import { TvSessionModal } from '@/components/tv-session-modal';
 import { TvTradeSetupCard } from '@/components/tv-trade-setup-card';
 import { TvConfirmDialog } from '@/components/tv-confirm-dialog';
-import type { TradingSignalResponse } from '@/lib/trading-data';
+import {
+  resolveOrderTypeDisplay,
+  type TradingSignalResponse,
+} from '@/lib/trading-data';
 import {
   loadTvWorkspaceState,
   saveTvWorkspaceState,
@@ -586,12 +589,35 @@ export function TvEngineWorkspace() {
   };
 
   const handleMarkSetupOnChart = (targetSignal: TradingSignalResponse) => {
-    const prompt = `Mark this ${targetSignal.signalType} setup on the chart: draw horizontal line at entry ${targetSignal.entryPrice}, horizontal line at stop loss ${targetSignal.stopLoss}, and horizontal line at take profit ${targetSignal.takeProfit1}.`;
+    const orderDisplay = resolveOrderTypeDisplay(
+      targetSignal.signalType,
+      targetSignal.orderType,
+      targetSignal.executionCategory
+    );
+    const entryKind = orderDisplay.isLimit
+      ? 'limit entry'
+      : orderDisplay.isStop
+      ? 'stop entry'
+      : 'entry';
+    const prompt = `Mark this ${orderDisplay.label} (${targetSignal.executionCategory}) setup on the chart: draw horizontal line at ${entryKind} ${targetSignal.entryPrice}, horizontal line at stop loss ${targetSignal.stopLoss}, and horizontal line at take profit ${targetSignal.takeProfit1}.`;
     void runAgentCommand(prompt);
   };
 
   const handleOpenOrderTicket = (targetSignal: TradingSignalResponse) => {
-    const prompt = `Open the TradingView Order Ticket for a ${targetSignal.signalType} order at entry ${targetSignal.entryPrice} with Stop Loss ${targetSignal.stopLoss} and Take Profit ${targetSignal.takeProfit1}.`;
+    const orderDisplay = resolveOrderTypeDisplay(
+      targetSignal.signalType,
+      targetSignal.orderType,
+      targetSignal.executionCategory
+    );
+    const ticketTab = orderDisplay.isLimit
+      ? 'Limit'
+      : orderDisplay.isStop
+      ? 'Stop'
+      : 'Market';
+    const priceClause = orderDisplay.isPending
+      ? `select the ${ticketTab} order tab, set limit/stop price to ${targetSignal.entryPrice},`
+      : `select the Market order tab at ${targetSignal.entryPrice},`;
+    const prompt = `Open the TradingView Order Ticket for a ${orderDisplay.label} order (side ${targetSignal.signalType}, orderType "${orderDisplay.orderType}"): ${priceClause} set Stop Loss ${targetSignal.stopLoss} and Take Profit ${targetSignal.takeProfit1}.`;
     void runAgentCommand(prompt);
   };
 

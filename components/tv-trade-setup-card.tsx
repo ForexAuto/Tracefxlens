@@ -22,9 +22,12 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import type {
-  SignalType,
-  TradingSignalResponse,
+import {
+  resolveOrderTypeDisplay,
+  type ExecutionCategory,
+  type OrderType,
+  type SignalType,
+  type TradingSignalResponse,
 } from '@/lib/trading-data';
 import { recordSignalToHistory } from '@/lib/history-storage';
 import { TvConfirmDialog } from '@/components/tv-confirm-dialog';
@@ -55,7 +58,42 @@ function formatPctDelta(from: number | null, to: number | null): string | null {
   return `${sign}${pct.toFixed(2)}%`;
 }
 
-function getSignalMeta(signalType: SignalType) {
+function getSignalMeta(
+  signalType: SignalType,
+  orderType?: OrderType,
+  executionCategory?: ExecutionCategory
+) {
+  const resolved = resolveOrderTypeDisplay(signalType, orderType, executionCategory);
+
+  const executionHint = (() => {
+    switch (resolved.orderType) {
+      case 'BUY_LIMIT':
+        return 'Pending Limit · Long on Pullback';
+      case 'SELL_LIMIT':
+        return 'Pending Limit · Short on Rally';
+      case 'BUY_STOP':
+        return 'Pending Stop · Long on Breakout';
+      case 'SELL_STOP':
+        return 'Pending Stop · Short on Breakdown';
+      case 'NONE':
+        return 'Stand Aside · Await Structure Breakout';
+      default:
+        return signalType === 'BUY'
+          ? 'Market Long Execution'
+          : signalType === 'SELL'
+          ? 'Market Short Execution'
+          : 'Stand Aside · Await Structure Breakout';
+    }
+  })();
+
+  const entryFieldLabel = resolved.isLimit
+    ? 'Limit Entry'
+    : resolved.isStop
+    ? 'Stop Entry'
+    : signalType === 'HOLD'
+    ? 'Watch Trigger'
+    : 'Entry Price';
+
   switch (signalType) {
     case 'BUY':
       return {
@@ -64,7 +102,10 @@ function getSignalMeta(signalType: SignalType) {
         badgeBg: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30',
         glowClass: 'shadow-[0_0_24px_rgba(16,185,129,0.12)]',
         Icon: ArrowUpRight,
-        executionHint: 'Market Long Execution',
+        headline: resolved.label,
+        isPending: resolved.isPending,
+        executionHint,
+        entryFieldLabel,
       };
     case 'SELL':
       return {
@@ -73,7 +114,10 @@ function getSignalMeta(signalType: SignalType) {
         badgeBg: 'bg-rose-500/10 text-rose-400 border-rose-500/30',
         glowClass: 'shadow-[0_0_24px_rgba(244,63,94,0.12)]',
         Icon: ArrowDownRight,
-        executionHint: 'Market Short Execution',
+        headline: resolved.label,
+        isPending: resolved.isPending,
+        executionHint,
+        entryFieldLabel,
       };
     default:
       return {
@@ -82,7 +126,10 @@ function getSignalMeta(signalType: SignalType) {
         badgeBg: 'bg-amber-500/10 text-amber-400 border-amber-500/30',
         glowClass: 'shadow-[0_0_24px_rgba(245,158,11,0.10)]',
         Icon: PauseCircle,
-        executionHint: 'Stand Aside · Await Structure Breakout',
+        headline: 'HOLD',
+        isPending: false,
+        executionHint,
+        entryFieldLabel,
       };
   }
 }
@@ -133,11 +180,23 @@ export function TvTradeSetupCard({
 
   const fullTicketText = useMemo(() => {
     if (!signal) return '';
+    const orderDisplay = resolveOrderTypeDisplay(
+      signal.signalType,
+      signal.orderType,
+      signal.executionCategory
+    );
+    const entryLabel = orderDisplay.isLimit
+      ? 'Limit Entry'
+      : orderDisplay.isStop
+      ? 'Stop Entry'
+      : signal.signalType === 'HOLD'
+      ? 'Watch Trigger'
+      : 'Entry Price';
     return [
       `TRACEFX LENS TV SETUP — ${signal.detectedPair} (${signal.detectedTimeframe})`,
-      `Order Type: ${signal.signalType} (${signal.executionCategory})`,
+      `Order Type: ${orderDisplay.label} (${signal.executionCategory})`,
       `Current Market: ${signal.currentMarketPrice}`,
-      `Entry Price: ${signal.entryPrice}`,
+      `${entryLabel}: ${signal.entryPrice}`,
       `Stop Loss: ${signal.stopLoss}`,
       `Take Profit 1: ${signal.takeProfit1}`,
       `Take Profit 2: ${signal.takeProfit2}`,
@@ -298,7 +357,11 @@ export function TvTradeSetupCard({
   }
 
   // 4. Populated Ready-to-Trade Setup Card
-  const meta = getSignalMeta(signal.signalType);
+  const meta = getSignalMeta(
+    signal.signalType,
+    signal.orderType,
+    signal.executionCategory
+  );
   const DirectionIcon = meta.Icon;
 
   return (
@@ -334,8 +397,8 @@ export function TvTradeSetupCard({
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="flex items-center gap-2">
                   <DirectionIcon className={`h-7 w-7 sm:h-9 sm:w-9 ${meta.textClass}`} strokeWidth={2.4} />
-                  <h2 className={`font-[family-name:var(--font-display)] text-4xl font-extrabold leading-none tracking-tight sm:text-5xl ${meta.textClass}`}>
-                    {signal.signalType}
+                  <h2 className={`font-[family-name:var(--font-display)] font-extrabold leading-none tracking-tight ${meta.isPending ? 'text-3xl sm:text-4xl' : 'text-4xl sm:text-5xl'} ${meta.textClass}`}>
+                    {meta.headline}
                   </h2>
                 </div>
                 <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] sm:text-xs ${meta.badgeBg}`}>
@@ -467,7 +530,7 @@ export function TvTradeSetupCard({
         <div className="flex items-center justify-between bg-[#0D1525] p-4">
           <div>
             <div className="text-[11px] font-semibold text-sky-400 uppercase tracking-wider">
-              {signal.signalType === 'HOLD' ? 'Watch Trigger' : 'Entry Price'}
+              {meta.entryFieldLabel}
             </div>
             <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-bold text-white tabular-nums">
               {signal.entryPrice}
@@ -696,7 +759,7 @@ export function TvTradeSetupCard({
       <TvConfirmDialog
         open={showReanalyzeConfirm}
         title="Re-Analyze Live Chart?"
-        description={`This will capture a new screenshot of your TradingView screen and recalculate institutional setups, key levels, and risk-reward targets, replacing the current ${signal.signalType} setup for ${signal.detectedPair}.`}
+        description={`This will capture a new screenshot of your TradingView screen and recalculate institutional setups, key levels, and risk-reward targets, replacing the current ${meta.headline} setup for ${signal.detectedPair}.`}
         confirmLabel="Re-Analyze"
         cancelLabel="Keep Current Setup"
         variant="primary"
@@ -712,7 +775,7 @@ export function TvTradeSetupCard({
       <TvConfirmDialog
         open={showDismissConfirm}
         title="Dismiss Trade Setup Card?"
-        description={`Are you sure you want to dismiss the ${signal.signalType} setup card for ${signal.detectedPair}? You can generate a new trade setup at any time by clicking Analyze Chart.`}
+        description={`Are you sure you want to dismiss the ${meta.headline} setup card for ${signal.detectedPair}? You can generate a new trade setup at any time by clicking Analyze Chart.`}
         confirmLabel="Dismiss Card"
         cancelLabel="Keep Card"
         variant="danger"

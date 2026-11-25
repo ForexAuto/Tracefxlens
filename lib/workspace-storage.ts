@@ -5,6 +5,10 @@ import {
   SignalType,
   TradingSignalResponse,
 } from './trading-data';
+import {
+  deriveExecutionCategory,
+  normalizeOrderType,
+} from './signal-sanitizer';
 
 const DB_NAME = 'tracefx_lens_persistence';
 const DB_VERSION = 2;
@@ -148,11 +152,17 @@ function sanitizePersistedSignal(
   if (upper.startsWith('BUY')) signalType = 'BUY';
   else if (upper.startsWith('SELL')) signalType = 'SELL';
 
+  const orderType = normalizeOrderType(
+    rawSignal.orderType ?? rawSignal.executionCategory,
+    signalType,
+    rawSignal.signalType
+  );
+
   return {
     ...rawSignal,
     signalType,
-    executionCategory:
-      signalType === 'HOLD' ? 'Stand Aside' : 'Market Execution',
+    orderType,
+    executionCategory: deriveExecutionCategory(signalType, orderType),
   };
 }
 

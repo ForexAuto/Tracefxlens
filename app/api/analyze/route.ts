@@ -1,4 +1,14 @@
-import { createOpenAIResponseStream, OPENAI_TRADING_MODEL } from '@/lib/openai';
+import {
+  createOpenAIResponseStream,
+  hasAnyAiProviderKey,
+  hasOpenAIApiKey,
+  OPENAI_TRADING_MODEL,
+} from '@/lib/openai';
+import {
+  createGeminiFallbackStream,
+  GEMINI_FALLBACK_MODEL,
+  hasGeminiApiKey,
+} from '@/lib/gemini';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   type AnalysisMode,
@@ -22,8 +32,8 @@ import {
   fetchMacroCorrelationFeed,
 } from '@/lib/macro-correlation';
 import {
-  deriveExecutionCategory,
   enforceTopDownCrtDominance,
+  normalizeAndValidateOrderType,
   normalizeKeyLevelRole,
   normalizeSignalType,
   parseNumPrice,
@@ -31,16 +41,45 @@ import {
 } from '@/lib/signal-sanitizer';
 
 interface ModelCandidate {
+  provider: 'openai' | 'gemini';
   model: string;
   label: string;
   firstChunkTimeoutMs: number;
   stallTimeoutMs: number;
 }
 
-const MODEL_CANDIDATES: ModelCandidate[] = [
-  { model: OPENAI_TRADING_MODEL, label: OPENAI_TRADING_MODEL, firstChunkTimeoutMs: 30000, stallTimeoutMs: 45000 },
-  { model: OPENAI_TRADING_MODEL, label: `${OPENAI_TRADING_MODEL} (retry)`, firstChunkTimeoutMs: 35000, stallTimeoutMs: 45000 },
-];
+function buildModelCandidates(): ModelCandidate[] {
+  const candidates: ModelCandidate[] = [];
+  const hasGemini = hasGeminiApiKey();
+  if (hasOpenAIApiKey()) {
+    candidates.push({
+      provider: 'openai',
+      model: OPENAI_TRADING_MODEL,
+      label: OPENAI_TRADING_MODEL,
+      firstChunkTimeoutMs: hasGemini ? 22000 : 35000,
+      stallTimeoutMs: 45000,
+    });
+    if (!hasGemini) {
+      candidates.push({
+        provider: 'openai',
+        model: OPENAI_TRADING_MODEL,
+        label: `${OPENAI_TRADING_MODEL} (retry)`,
+        firstChunkTimeoutMs: 35000,
+        stallTimeoutMs: 45000,
+      });
+    }
+  }
+  if (hasGemini) {
+    candidates.push({
+      provider: 'gemini',
+      model: GEMINI_FALLBACK_MODEL,
+      label: `${GEMINI_FALLBACK_MODEL} (fallback)`,
+      firstChunkTimeoutMs: 30000,
+      stallTimeoutMs: 45000,
+    });
+  }
+  return candidates;
+}
 
 function isRetryableModelError(err: unknown): boolean {
   const raw = err instanceof Error ? `${err.name} ${err.message}` : String(err);
@@ -339,15 +378,16 @@ async function nextChunkWithTimeout<T>(
 }
 
 export async function POST(req: NextRequest) {
-  if (!process.env.OPENAI_API_KEY) {
+  if (!hasAnyAiProviderKey()) {
     return NextResponse.json(
       {
         error:
-          'OPENAI_API_KEY is not configured on the server. Add OPENAI_API_KEY in Vercel Settings > Environment Variables.',
+          'Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured on the server. Configure an API key in Settings > Secrets.',
       },
       { status: 500 }
     );
   }
+  const MODEL_CANDIDATES = buildModelCandidates();
 
   let imageDataUrl = '';
   let macroImageDataUrl = '';
@@ -661,23 +701,28 @@ Line 2 (Step 2 Full Left-to-Right Market Structure & Swing Mapping):
 Line 3 (Step 3 Institutional Zones, Order Blocks, FVGs & Liquidity Scan):
 {"event":"step","step":3,"finding":"<1 specific sentence naming all major Supply/Demand zones, Order Blocks, Fair Value Gaps (FVG), Support/Resistance, and Liquidity pools/sweeps (EQH/EQL/BSL/SSL) across the chart>"}
 
-Line 4 (Step 4 Directional Signal Classification):
-{"event":"step","step":4,"finding":"<1 specific sentence explaining why BUY, SELL, or HOLD is selected at the current market price>"}
+Line 4 (Step 4 Directional Signal & Order Type Classification):
+{"event":"step","step":4,"finding":"<1 specific sentence explaining why BUY, SELL, or HOLD and MARKET vs LIMIT/STOP orderType is selected relative to current market price>"}
 
 Line 5 (Step 5 Entry, Stop-Loss & TP1-TP3 Validation):
 {"event":"step","step":5,"finding":"<1 specific sentence confirming exact Entry, SL, and TP1-TP3 price ordering invariants and calculated R:R ratio>"}
 
 Line 6 (Final Validated Trading Signal — market analysis and trade levels only):
-{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"<string>","currentMarketPrice":"<exact price>","entryPrice":"<exact price>","entryTriggerNote":"<1 concise sentence>","stopLoss":"<exact price>","takeProfit1":"<exact price>","takeProfit2":"<exact price>","takeProfit3":"<exact price>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise structure-based reason>","riskRewardRatio":"<1 : X.X>","marketStructure":"<short label>","confidenceSummary":"<short confluence label>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"technicalRationale":["<observation 1>","<observation 2>","<observation 3>","<observation 4>"],"keyLevels":[{"label":"<zone/OB/FVG/liquidity name>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise invalidation sentence>"}
+{"event":"result","signalType":"<BUY|SELL|HOLD>","orderType":"<MARKET|BUY_LIMIT|SELL_LIMIT|BUY_STOP|SELL_STOP|NONE>","detectedPair":"<string>","detectedTimeframe":"<string>","currentMarketPrice":"<exact price>","entryPrice":"<exact price>","entryTriggerNote":"<1 concise sentence>","stopLoss":"<exact price>","takeProfit1":"<exact price>","takeProfit2":"<exact price>","takeProfit3":"<exact price>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise structure-based reason>","riskRewardRatio":"<1 : X.X>","marketStructure":"<short label>","confidenceSummary":"<short confluence label>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"technicalRationale":["<observation 1>","<observation 2>","<observation 3>","<observation 4>"],"keyLevels":[{"label":"<zone/OB/FVG/liquidity name>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise invalidation sentence>"}
 
-MARKET ANALYSIS ONLY:
+MARKET ANALYSIS & ORDER TYPE RULES (CRITICAL — DO NOT DEFAULT TO PENDING ORDERS):
 - Do not generate chartMarkup, macroChartMarkup, pixel coordinates, drawing instructions, or visual annotations. Focus the response on interpreting price action, market structure, liquidity, macro context, entry quality, invalidation, and the three take-profit targets.
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
-  - For BUY: entryPrice equals currentMarketPrice, and stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
-  - For SELL: entryPrice equals currentMarketPrice, and stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
-  - For HOLD: select HOLD if price is choppy, mid-range, or lacks immediate market entry confluence; set entryPrice to the key breakout/rejection level to watch.
-  - Keep TP1 (conservative partial), TP2 (structural), and TP3 (extended runner) intact, then independently choose preferredTakeProfit as exactly 1, 2, or 3 based on visible structure, opposing liquidity/support-resistance, momentum, and available room. Never default automatically to TP2.
-  - Explain the selection in preferredTakeProfitReason in one concise sentence. Calculate riskRewardRatio against the selected preferred target, not automatically TP2, formatted as "1 : X.X".`;
+- Choose "orderType" strictly from price location relative to the trigger:
+  1. "MARKET" (DEFAULT when setup is actionable NOW): Use MARKET whenever price has ALREADY tapped/swept the POI or printed a confirmed CHoCH/BOS/displacement candle, OR when entryPrice is within immediate proximity (~0.15%) of currentMarketPrice. Set entryPrice = currentMarketPrice. NEVER invent a Limit order just to artificially inflate R:R when price is already at the execution trigger!
+  2. "BUY_LIMIT" (entryPrice strictly < currentMarketPrice) or "SELL_LIMIT" (entryPrice strictly > currentMarketPrice): Use ONLY when directional structure is already confirmed AND current price has displaced away from an unmitigated FVG or Order Block (> 0.2% away) such that waiting for the pullback provides the structural invalidation point.
+  3. "BUY_STOP" (entryPrice strictly > currentMarketPrice) or "SELL_STOP" (entryPrice strictly < currentMarketPrice): Use ONLY when price is coiled against a clear swing high/low or range boundary and requires a decisive breakout trigger.
+  4. "HOLD" with "orderType":"NONE": Select HOLD if price is choppy, mid-range, or lacks clean immediate OR pending confluence; set entryPrice to the key breakout/rejection level to watch. Never force a speculative pending order on an unclear chart.
+- Price Ordering Invariants:
+  - For BUY (MARKET, BUY_LIMIT, or BUY_STOP): stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
+  - For SELL (MARKET, SELL_LIMIT, or SELL_STOP): stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
+- Keep TP1 (conservative partial), TP2 (structural), and TP3 (extended runner) intact, then independently choose preferredTakeProfit as exactly 1, 2, or 3 based on visible structure, opposing liquidity/support-resistance, momentum, and available room. Never default automatically to TP2.
+- Explain the selection in preferredTakeProfitReason in one concise sentence. Calculate riskRewardRatio against the selected preferred target, not automatically TP2, formatted as "1 : X.X".`;
 
   const topDownCrtSystemInstruction = `You are an institutional Candle Range Theory (CRT) + Smart Money Concepts (SMC) multi-timeframe execution strategist for TraceFX Lens.
 You MUST stream your real-time dual-chart inspection as a sequence of standalone single-line JSON objects (NDJSON), one JSON object per line, with NO markdown code fences and NO prose outside the JSON objects.
@@ -714,14 +759,18 @@ Line 5 (Step 5 ${macroTf} Target Projection & ${executionTf} Tight Risk Validati
 {"event":"step","step":5,"finding":"<1 specific sentence confirming ${executionTf} tight Stop-Loss compression vs ${macroTf} macro TP1-TP3 targets and resulting amplified R:R ratio>"}
 
 Line 6 (Final Validated Top-Down CRT Signal Ticket — market analysis only, no chart drawings):
-{"event":"result","signalType":"<BUY|SELL|HOLD>","detectedPair":"<string>","detectedTimeframe":"${topDownLabel}","currentMarketPrice":"<exact ${executionTf} current price>","entryPrice":"<exact ${executionTf} entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking ${macroTf} CRT bias + ${executionTf} trigger>","stopLoss":"<exact tight ${executionTf} invalidation price>","takeProfit1":"<${macroTf} CRT 50% EQ or first ${macroTf} internal target>","takeProfit2":"<Opposing ${macroTf} CRT Range High/Low draw on liquidity>","takeProfit3":"<External ${macroTf} swing/expansion liquidity target>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise reason grounded in macro liquidity and execution structure>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. ${macroTf} Bullish CRT + ${executionTf} CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or ${macroTf} Veto · Stand Aside>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"crtContext":{"macroTimeframe":"${macroTf}","executionTimeframe":"${executionTf}","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact ${macroTf} CRT High price>","crtRangeLow":"<exact ${macroTf} CRT Low price>","crtEquilibrium":"<exact ${macroTf} 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on ${macroTf} CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on ${executionTf} CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing ${macroTf} dominance + ${executionTf} execution outcome>"},"technicalRationale":["<${macroTf} CRT range & purge observation>","<${macroTf} draw-on-liquidity target rationale>","<${executionTf} execution CHoCH/FVG & noise filter observation>","<Risk compression: tight ${executionTf} SL vs ${macroTf} reward math>"],"keyLevels":[{"label":"<e.g. ${macroTf} CRT High / ${macroTf} CRT Low / ${macroTf} 50% EQ / ${executionTf} Bullish OB / ${executionTf} FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact ${executionTf} SL breach & ${macroTf} CRT invalidation>"}
+{"event":"result","signalType":"<BUY|SELL|HOLD>","orderType":"<MARKET|BUY_LIMIT|SELL_LIMIT|BUY_STOP|SELL_STOP|NONE>","detectedPair":"<string>","detectedTimeframe":"${topDownLabel}","currentMarketPrice":"<exact ${executionTf} current price>","entryPrice":"<exact ${executionTf} entry or watch trigger>","entryTriggerNote":"<1 concise sentence linking ${macroTf} CRT bias + ${executionTf} trigger>","stopLoss":"<exact tight ${executionTf} invalidation price>","takeProfit1":"<${macroTf} CRT 50% EQ or first ${macroTf} internal target>","takeProfit2":"<Opposing ${macroTf} CRT Range High/Low draw on liquidity>","takeProfit3":"<External ${macroTf} swing/expansion liquidity target>","preferredTakeProfit":<1|2|3>,"preferredTakeProfitReason":"<one concise reason grounded in macro liquidity and execution structure>","riskRewardRatio":"<1 : X.X>","marketStructure":"<e.g. ${macroTf} Bullish CRT + ${executionTf} CHoCH>","confidenceSummary":"<e.g. Top-Down CRT Aligned or ${macroTf} Veto · Stand Aside>","signalConfidence":<integer 1-99 estimating setup quality, not win probability>,"crtContext":{"macroTimeframe":"${macroTf}","executionTimeframe":"${executionTf}","h1CrtValid":true,"h1Bias":"<BULLISH|BEARISH|NEUTRAL>","crtRangeHigh":"<exact ${macroTf} CRT High price>","crtRangeLow":"<exact ${macroTf} CRT Low price>","crtEquilibrium":"<exact ${macroTf} 50% midpoint price>","crtSweepStatus":"<1 crisp phrase on ${macroTf} CRT purge/rejection or why invalid>","m5ExecutionTrigger":"<1 crisp phrase on ${executionTf} CHoCH/FVG trigger & tight SL>","alignmentVerdict":"<1 crisp phrase summarizing ${macroTf} dominance + ${executionTf} execution outcome>"},"technicalRationale":["<${macroTf} CRT range & purge observation>","<${macroTf} draw-on-liquidity target rationale>","<${executionTf} execution CHoCH/FVG & noise filter observation>","<Risk compression: tight ${executionTf} SL vs ${macroTf} reward math>"],"keyLevels":[{"label":"<e.g. ${macroTf} CRT High / ${macroTf} CRT Low / ${macroTf} 50% EQ / ${executionTf} Bullish OB / ${executionTf} FVG>","price":"<exact price>","role":"<Support|Resistance|Supply Zone|Demand Zone|Bullish OB|Bearish OB|Fair Value Gap|Liquidity|Structure Break>"}],"invalidationCondition":"<1 concise sentence stating exact ${executionTf} SL breach & ${macroTf} CRT invalidation>"}
 
-TOP-DOWN MARKET ANALYSIS:
+TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
 - Analyse the macro chart for directional bias, CRT range, sweep status and higher-timeframe liquidity. Analyse the execution chart for confirmation, entry quality and invalidation. Do not return drawing coordinates or markup objects.
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
+- Choose "orderType" carefully (DO NOT default to pending orders):
+  - "MARKET" (DEFAULT when ${executionTf} trigger is ALREADY active): Use MARKET whenever ${macroTf} CRT is valid AND ${executionTf} has already swept/retested its CHoCH/FVG/OB at current price (or entryPrice is within ~0.15% of currentMarketPrice), setting entryPrice = currentMarketPrice.
+  - "BUY_LIMIT" (entryPrice < currentMarketPrice) or "SELL_LIMIT" (entryPrice > currentMarketPrice): Use ONLY when ${macroTf} CRT is valid AND ${executionTf} has ALREADY printed its CHoCH/MSS displacement away from an unmitigated ${executionTf} FVG/OB (> 0.2% away), so waiting for that exact pullback preserves tight ${executionTf} risk.
+  - "BUY_STOP" (entryPrice > currentMarketPrice) or "SELL_STOP" (entryPrice < currentMarketPrice): Use ONLY when ${macroTf} CRT is valid and ${executionTf} is coiled just beneath/above the decisive CHoCH trigger swing.
+  - Whenever h1CrtValid is false OR ${executionTf} has NOT confirmed in ${macroTf}'s direction yet, output "signalType":"HOLD" and "orderType":"NONE" (never replace a HOLD veto with a speculative pending order).
 - For BUY: stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
 - For SELL: stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
-- For HOLD: whenever h1CrtValid is false OR ${executionTf} has not triggered in ${macroTf}'s direction, output HOLD and set entryPrice to the exact ${executionTf} CHoCH or ${macroTf} CRT level required to arm a valid setup.
 - Preserve all three targets and choose preferredTakeProfit as 1, 2, or 3 based on the most realistic macro draw on liquidity and execution structure. Explain briefly in preferredTakeProfitReason and calculate R:R against that selected target.`;
 
   const systemInstruction = isTopDownCrt
@@ -1161,6 +1210,21 @@ TOP-DOWN MARKET ANALYSIS:
           }
 
           const rawTriggerNote = String(rawSignalObj.entryTriggerNote || '');
+          const rawCurrentMarketPrice = String(rawSignalObj.currentMarketPrice || '—');
+          const rawEntryPrice = String(rawSignalObj.entryPrice || '—');
+          const rawStopLoss = String(rawSignalObj.stopLoss || '—');
+          const rawTakeProfit1 = String(rawSignalObj.takeProfit1 || '—');
+
+          const validatedOrder = normalizeAndValidateOrderType({
+            signalType,
+            rawOrderType: rawSignalObj.orderType,
+            rawSignalType: rawSignalObj.signalType,
+            currentMarketPrice: rawCurrentMarketPrice,
+            entryPrice: rawEntryPrice,
+            stopLoss: rawStopLoss,
+            takeProfit1: rawTakeProfit1,
+            atrRaw: activeRefOhlc?.atr14,
+          });
 
           const signalResult: TradingSignalResponse = {
             isValidChart: true,
@@ -1169,18 +1233,19 @@ TOP-DOWN MARKET ANALYSIS:
             crtContext,
             macroContext: finalizedMacroContext,
             signalType,
-            executionCategory: deriveExecutionCategory(signalType),
+            orderType: validatedOrder.orderType,
+            executionCategory: validatedOrder.executionCategory,
             detectedPair: detPairResolved,
             detectedTimeframe: isTopDownCrt
               ? topDownLabel
               : String(rawSignalObj.detectedTimeframe || selectedTimeframe),
-            currentMarketPrice: String(rawSignalObj.currentMarketPrice || '—'),
-            entryPrice: String(rawSignalObj.entryPrice || '—'),
+            currentMarketPrice: rawCurrentMarketPrice,
+            entryPrice: validatedOrder.entryPrice,
             entryTriggerNote: vetoReason
               ? `${vetoReason}${rawTriggerNote ? ` (${rawTriggerNote})` : ''}`
               : rawTriggerNote,
-            stopLoss: String(rawSignalObj.stopLoss || '—'),
-            takeProfit1: String(rawSignalObj.takeProfit1 || '—'),
+            stopLoss: rawStopLoss,
+            takeProfit1: rawTakeProfit1,
             takeProfit2: String(rawSignalObj.takeProfit2 || '—'),
             takeProfit3: String(rawSignalObj.takeProfit3 || '—'),
             preferredTakeProfit: [1, 2, 3].includes(Number(rawSignalObj.preferredTakeProfit))
@@ -1251,14 +1316,24 @@ TOP-DOWN MARKET ANALYSIS:
               }));
               multimodalParts.push({ type: 'input_text', text: promptText });
 
+              const streamPromise =
+                candidate.provider === 'gemini'
+                  ? createGeminiFallbackStream({
+                      instructions: systemInstruction,
+                      input: [{ role: 'user', content: multimodalParts }],
+                      signal: attemptController.signal,
+                    })
+                  : createOpenAIResponseStream({
+                      instructions: systemInstruction,
+                      input: [{ role: 'user', content: multimodalParts }],
+                      reasoningEffort: 'medium',
+                      maxOutputTokens: 12000,
+                      signal: attemptController.signal,
+                      gptTimeoutMs: candidate.firstChunkTimeoutMs,
+                    });
+
               const responseStream = await Promise.race([
-                createOpenAIResponseStream({
-                  instructions: systemInstruction,
-                  input: [{ role: 'user', content: multimodalParts }],
-                  reasoningEffort: 'medium',
-                  maxOutputTokens: 12000,
-                  signal: attemptController.signal,
-                }),
+                streamPromise,
                 new Promise<never>((_, reject) => {
                   connectTimer = setTimeout(() => {
                     attemptController.abort();
@@ -1274,8 +1349,14 @@ TOP-DOWN MARKET ANALYSIS:
               });
 
               for await (const chunk of responseStream) {
-                if (chunk?.text) {
-                  yield chunk.text;
+                const textChunk =
+                  typeof chunk === 'string'
+                    ? chunk
+                    : chunk && typeof (chunk as { text?: unknown }).text === 'string'
+                    ? (chunk as { text: string }).text
+                    : '';
+                if (textChunk) {
+                  yield textChunk;
                 }
               }
             })()[Symbol.asyncIterator]();

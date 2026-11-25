@@ -40,11 +40,12 @@ import {
   syncHistoryWithServer,
 } from '@/lib/history-storage';
 import { loadWorkspaceState } from '@/lib/workspace-storage';
-import type {
-  SignalHistoryRecord,
-  SignalType,
-  TradeOutcome,
-  TradingSignalResponse,
+import {
+  resolveOrderTypeDisplay,
+  type SignalHistoryRecord,
+  type SignalType,
+  type TradeOutcome,
+  type TradingSignalResponse,
 } from '@/lib/trading-data';
 
 type OutcomeFilter = 'ALL' | 'PENDING' | 'WON' | 'LOST';
@@ -89,7 +90,10 @@ function toSignalResponse(rec: SignalHistoryRecord): TradingSignalResponse {
     isValidChart: true,
     analysisMode: rec.analysisMode,
     crtContext: rec.crtContext,
+    macroContext: rec.macroContext,
     signalType: rec.signalType,
+    orderType: rec.orderType,
+    signalConfidence: rec.signalConfidence,
     executionCategory: rec.executionCategory,
     detectedPair: rec.pair,
     detectedTimeframe: rec.timeframe,
@@ -100,6 +104,8 @@ function toSignalResponse(rec: SignalHistoryRecord): TradingSignalResponse {
     takeProfit1: rec.takeProfit1,
     takeProfit2: rec.takeProfit2,
     takeProfit3: rec.takeProfit3,
+    preferredTakeProfit: rec.preferredTakeProfit,
+    preferredTakeProfitReason: rec.preferredTakeProfitReason,
     riskRewardRatio: rec.riskRewardRatio,
     marketStructure: rec.marketStructure,
     confidenceSummary: rec.confidenceSummary,
@@ -214,7 +220,12 @@ export function HistoryWorkspace() {
         return false;
       }
       if (q) {
-        const hay = `${rec.pair} ${rec.timeframe} ${rec.signalType} ${rec.marketStructure}`.toUpperCase();
+        const orderDisplay = resolveOrderTypeDisplay(
+          rec.signalType,
+          rec.orderType,
+          rec.executionCategory
+        );
+        const hay = `${rec.pair} ${rec.timeframe} ${rec.signalType} ${orderDisplay.label} ${rec.executionCategory} ${rec.marketStructure}`.toUpperCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -281,11 +292,23 @@ export function HistoryWorkspace() {
     const outcomeLine = rec.outcome
       ? `Outcome: ${rec.outcome} (Locked)`
       : 'Outcome: Awaiting Settlement';
+    const orderDisplay = resolveOrderTypeDisplay(
+      rec.signalType,
+      rec.orderType,
+      rec.executionCategory
+    );
+    const entryLabel = orderDisplay.isLimit
+      ? 'Limit Entry'
+      : orderDisplay.isStop
+      ? 'Stop Entry'
+      : rec.signalType === 'HOLD'
+      ? 'Watch Level'
+      : 'Entry';
     const text = [
       `TRACEFX LENS — ${rec.pair} (${rec.timeframe})`,
-      `Signal: ${rec.signalType} (${rec.executionCategory})`,
+      `Signal: ${orderDisplay.label} (${rec.executionCategory})`,
       outcomeLine,
-      `Entry: ${rec.entryPrice}`,
+      `${entryLabel}: ${rec.entryPrice}`,
       `Stop Loss: ${rec.stopLoss}`,
       `TP1: ${rec.takeProfit1} | TP2: ${rec.takeProfit2} | TP3: ${rec.takeProfit3}`,
       ...(rec.preferredTakeProfit ? [`AI Recommended Main Target: TP${rec.preferredTakeProfit}`, `Reason: ${rec.preferredTakeProfitReason || 'Selected by model'}`] : []),
@@ -534,6 +557,11 @@ export function HistoryWorkspace() {
             {filteredRecords.map((rec) => {
               const dirMeta = getDirectionVisual(rec.signalType);
               const DirIcon = dirMeta.Icon;
+              const orderDisplay = resolveOrderTypeDisplay(
+                rec.signalType,
+                rec.orderType,
+                rec.executionCategory
+              );
               const isLocked = rec.outcome === 'WON' || rec.outcome === 'LOST';
               const isExpanded = Boolean(expandedIds[rec.id]);
 
@@ -573,7 +601,7 @@ export function HistoryWorkspace() {
                           <h2
                             className={`font-[family-name:var(--font-display)] text-xl sm:text-2xl font-bold tracking-tight ${dirMeta.textClass}`}
                           >
-                            {rec.signalType}
+                            {orderDisplay.label}
                           </h2>
                           <span className="text-xs text-slate-400">
                             {rec.marketStructure || rec.executionCategory}
@@ -658,7 +686,13 @@ export function HistoryWorkspace() {
                   <div className="grid grid-cols-2 divide-y divide-slate-800/75 border-t border-slate-800/80 sm:grid-cols-5 sm:divide-x sm:divide-y-0">
                     <div className="p-3.5 sm:px-4">
                       <div className="text-[11px] font-medium text-sky-400">
-                        {rec.signalType === 'HOLD' ? 'Watch Level' : 'Entry Price'}
+                        {orderDisplay.isLimit
+                          ? 'Limit Entry'
+                          : orderDisplay.isStop
+                          ? 'Stop Entry'
+                          : rec.signalType === 'HOLD'
+                          ? 'Watch Level'
+                          : 'Entry Price'}
                       </div>
                       <div className="mt-0.5 font-[family-name:var(--font-mono)] text-sm font-semibold text-white tabular-nums">
                         {rec.entryPrice}
@@ -894,7 +928,11 @@ export function HistoryWorkspace() {
                 </span>
                 <span aria-hidden="true">·</span>
                 <span className="font-semibold text-sky-400">
-                  {inspectedRecord.signalType}
+                  {resolveOrderTypeDisplay(
+                    inspectedRecord.signalType,
+                    inspectedRecord.orderType,
+                    inspectedRecord.executionCategory
+                  ).label}
                 </span>
                 {inspectedRecord.outcome && (
                   <>

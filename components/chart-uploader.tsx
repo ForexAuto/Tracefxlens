@@ -13,7 +13,10 @@ import {
   Layers,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { TradingSignalResponse } from '@/lib/trading-data';
+import {
+  resolveOrderTypeDisplay,
+  type TradingSignalResponse,
+} from '@/lib/trading-data';
 import {
   exportMarkedChartPng,
   getStructureLayerCounts,
@@ -642,7 +645,11 @@ export function ChartUploader({
                   <>
                     <span aria-hidden="true">·</span>
                     <span className="font-semibold text-sky-400">
-                      {signal.signalType}
+                      {resolveOrderTypeDisplay(
+                        signal.signalType,
+                        signal.orderType,
+                        signal.executionCategory
+                      ).label}
                     </span>
                   </>
                 )}

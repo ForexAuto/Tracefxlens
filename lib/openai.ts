@@ -1,4 +1,11 @@
+import {
+  createGeminiFallbackResponse,
+  createGeminiFallbackStream,
+  hasGeminiApiKey,
+} from '@/lib/gemini';
+
 export const OPENAI_TRADING_MODEL = 'gpt-6.1-sol';
+const DEFAULT_GPT_FALLBACK_TIMEOUT_MS = 28000;
 
 type OpenAIRequestOptions = {
   input: unknown;
@@ -8,11 +15,23 @@ type OpenAIRequestOptions = {
   maxOutputTokens?: number;
   responseFormat?: 'json_object';
   tools?: unknown[];
+  gptTimeoutMs?: number;
 };
 
+export function hasOpenAIApiKey(): boolean {
+  const key = (process.env.OPENAI_API_KEY || '').trim();
+  return Boolean(key && key !== 'MY_OPENAI_API_KEY');
+}
+
+export function hasAnyAiProviderKey(): boolean {
+  return hasOpenAIApiKey() || hasGeminiApiKey();
+}
+
 function apiKey(): string {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY is not configured on the server.');
+  const key = (process.env.OPENAI_API_KEY || '').trim();
+  if (!key || key === 'MY_OPENAI_API_KEY') {
+    throw new Error('OPENAI_API_KEY is not configured on the server.');
+  }
   return key;
 }
 
@@ -83,16 +102,81 @@ function requestBody(options: OpenAIRequestOptions) {
   };
 }
 
+function createLinkedSignal(
+  parentSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined
+): { signal: AbortSignal; cleanup: () => void } {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const onParentAbort = () => controller.abort(parentSignal?.reason);
+  if (parentSignal) {
+    if (parentSignal.aborted) {
+      controller.abort(parentSignal.reason);
+    } else {
+      parentSignal.addEventListener('abort', onParentAbort, { once: true });
+    }
+  }
+
+  if (timeoutMs && timeoutMs > 0) {
+    timer = setTimeout(() => {
+      controller.abort(new Error(`GPT request timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      if (timer) clearTimeout(timer);
+      if (parentSignal) {
+        parentSignal.removeEventListener('abort', onParentAbort);
+      }
+    },
+  };
+}
+
 export async function createOpenAIResponse(options: OpenAIRequestOptions): Promise<any> {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey()}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(requestBody(options)),
-    signal: options.signal,
-    cache: 'no-store',
-  });
-  if (!response.ok) throw await upstreamError(response);
-  return response.json();
+  const canFallbackToGemini = hasGeminiApiKey();
+
+  if (!hasOpenAIApiKey()) {
+    if (canFallbackToGemini) {
+      return createGeminiFallbackResponse(options);
+    }
+    throw new Error('Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured on the server.');
+  }
+
+  const timeoutMs = canFallbackToGemini
+    ? (options.gptTimeoutMs ?? DEFAULT_GPT_FALLBACK_TIMEOUT_MS)
+    : options.gptTimeoutMs;
+  const linked = createLinkedSignal(options.signal, timeoutMs);
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey()}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody(options)),
+      signal: linked.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) throw await upstreamError(response);
+    const json = await response.json();
+    const hasOutputText = Boolean(extractOpenAIOutputText(json).trim());
+    const hasToolCalls =
+      Array.isArray(json?.output) &&
+      json.output.some((item: any) => item?.type === 'function_call');
+    if (!hasOutputText && !hasToolCalls) {
+      throw new Error('OpenAI returned an empty response.');
+    }
+    return json;
+  } catch (err) {
+    if (options.signal?.aborted || !canFallbackToGemini) {
+      throw err;
+    }
+    console.warn('[AI Fallback] OpenAI request failed, falling back to gemini-3.1-flash-lite:', err instanceof Error ? err.message : err);
+    return createGeminiFallbackResponse(options);
+  } finally {
+    linked.cleanup();
+  }
 }
 
 export function extractOpenAIOutputText(response: any): string {
@@ -108,23 +192,51 @@ export function extractOpenAIOutputText(response: any): string {
 }
 
 export async function createOpenAIResponseStream(options: OpenAIRequestOptions): Promise<AsyncIterable<string>> {
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey()}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({ ...requestBody(options), stream: true }),
-    signal: options.signal,
-    cache: 'no-store',
-  });
-  if (!response.ok) throw await upstreamError(response);
-  if (!response.body) throw new Error('OpenAI returned an empty streaming response.');
+  const canFallbackToGemini = hasGeminiApiKey();
+
+  if (!hasOpenAIApiKey()) {
+    if (canFallbackToGemini) {
+      return createGeminiFallbackStream(options);
+    }
+    throw new Error('Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured on the server.');
+  }
+
+  const connectTimeoutMs = canFallbackToGemini
+    ? (options.gptTimeoutMs ?? 20000)
+    : options.gptTimeoutMs;
+  const linked = createLinkedSignal(options.signal, connectTimeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey()}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify({ ...requestBody(options), stream: true }),
+      signal: linked.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) throw await upstreamError(response);
+    if (!response.body) throw new Error('OpenAI returned an empty streaming response.');
+  } catch (err) {
+    linked.cleanup();
+    if (options.signal?.aborted || !canFallbackToGemini) {
+      throw err;
+    }
+    console.warn('[AI Fallback] OpenAI stream connection failed, falling back to gemini-3.1-flash-lite:', err instanceof Error ? err.message : err);
+    return createGeminiFallbackStream(options);
+  }
+
+  // Connection succeeded; clear connect timer once first chunk arrives or stream ends
   return (async function* () {
     const reader = response.body!.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let yieldedAnyText = false;
     try {
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
+        linked.cleanup();
         buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
         let split = buffer.indexOf('\n\n');
         while (split >= 0) {
@@ -133,7 +245,10 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
           const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
           if (data && data !== '[DONE]') {
             const event = JSON.parse(data);
-            if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') yield event.delta;
+            if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+              yieldedAnyText = true;
+              yield event.delta;
+            }
             if (event.type === 'error' || event.type === 'response.failed') {
               throw new Error(event.error?.message || event.response?.error?.message || 'OpenAI analysis failed.');
             }
@@ -144,6 +259,22 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
           split = buffer.indexOf('\n\n');
         }
       }
-    } finally { reader.releaseLock(); }
+      if (!yieldedAnyText) {
+        throw new Error('OpenAI stream ended without generating text.');
+      }
+    } catch (streamErr) {
+      if (!yieldedAnyText && !options.signal?.aborted && canFallbackToGemini) {
+        console.warn('[AI Fallback] OpenAI stream produced no output, falling back to gemini-3.1-flash-lite:', streamErr instanceof Error ? streamErr.message : streamErr);
+        const fallbackStream = await createGeminiFallbackStream(options);
+        for await (const chunk of fallbackStream) {
+          yield chunk;
+        }
+        return;
+      }
+      throw streamErr;
+    } finally {
+      linked.cleanup();
+      reader.releaseLock();
+    }
   })();
 }

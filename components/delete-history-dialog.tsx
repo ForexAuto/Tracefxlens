@@ -3,7 +3,10 @@
 import React, { useEffect } from 'react';
 import { Trash2, Lock } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { SignalHistoryRecord } from '@/lib/trading-data';
+import {
+  resolveOrderTypeDisplay,
+  type SignalHistoryRecord,
+} from '@/lib/trading-data';
 
 interface DeleteHistoryDialogProps {
   open: boolean;
@@ -93,7 +96,11 @@ export function DeleteHistoryDialog({
                       : 'text-amber-400'
                   }`}
                 >
-                  {record.signalType}
+                  {resolveOrderTypeDisplay(
+                    record.signalType,
+                    record.orderType,
+                    record.executionCategory
+                  ).label}
                 </span>
               </div>
 

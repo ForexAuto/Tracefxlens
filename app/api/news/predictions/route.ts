@@ -1,4 +1,8 @@
-import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
+import {
+  createOpenAIResponse,
+  extractOpenAIOutputText,
+  hasAnyAiProviderKey,
+} from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import { fetchNormalizedMacroCalendar } from '@/lib/forex-factory-adapter';
 import { fetchMacroCorrelationFeed } from '@/lib/macro-correlation';
@@ -140,9 +144,8 @@ export async function POST(req: NextRequest) {
     }
 
     const fingerprint = `${getNewsEventFingerprint(event)}:${selectedPair}`;
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json({ error: 'OPENAI_API_KEY is not configured.' }, { status: 503 });
+    if (!hasAnyAiProviderKey()) {
+      return NextResponse.json({ error: 'Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured.' }, { status: 503 });
     }
 
     // Reuse the app's existing live macro and instrument OHLC feeds. All fetches

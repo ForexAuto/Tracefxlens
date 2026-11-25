@@ -1,5 +1,14 @@
-import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
+import {
+  createOpenAIResponse,
+  extractOpenAIOutputText,
+  hasAnyAiProviderKey,
+} from '@/lib/openai';
 import { NextRequest } from 'next/server';
+import { resolveOrderTypeDisplay } from '@/lib/trading-data';
+import {
+  normalizeAndValidateOrderType,
+  normalizeSignalType,
+} from '@/lib/signal-sanitizer';
 import type {
   TvAgentStep,
   TvAgentStreamEvent,
@@ -323,6 +332,11 @@ const TV_AGENT_TOOLS: Array<{ name: string; description: string; parameters: Rec
           type: 'string',
           description: '"BUY", "SELL", or "HOLD".',
         },
+        orderType: {
+          type: 'string',
+          description:
+            '"MARKET" (default when trigger is already active at current price), "BUY_LIMIT", "SELL_LIMIT", "BUY_STOP", "SELL_STOP", or "NONE" (for HOLD).',
+        },
         pair: {
           type: 'string',
           description: 'Symbol, e.g. "XAUUSD" or "EURUSD".',
@@ -424,6 +438,14 @@ TAKE-PROFIT PRIORITY:
 - Choose the one target most realistically supported by visible market structure, opposing liquidity/support-resistance, momentum, and available price room. Do not automatically select TP2.
 - Explain the choice briefly in preferredTakeProfitReason. Calculate riskRewardRatio against the preferred target, not automatically TP2.
 - If none of the targets is justified, return HOLD rather than inventing a target.
+
+ORDER TYPE SELECTION (MARKET vs. PENDING — DO NOT DEFAULT TO PENDING ORDERS):
+- Always specify "orderType" in generate_trade_setup:
+  - "MARKET" (DEFAULT when actionable NOW): Use MARKET whenever price is ALREADY at/inside the POI or has just printed a confirmed CHoCH/BOS/engulfing candle, OR when entryPrice is within ~0.15% of currentPrice. Set entryPrice = currentPrice. Never invent a Limit order merely to inflate R:R!
+  - "BUY_LIMIT" (entryPrice < currentPrice) or "SELL_LIMIT" (entryPrice > currentPrice): Use ONLY when bias/structure is already confirmed and price is clearly separated (> 0.2% away) from an unmitigated pullback FVG/Order Block.
+  - "BUY_STOP" (entryPrice > currentPrice) or "SELL_STOP" (entryPrice < currentPrice): Use ONLY when price is coiled against a key swing high/low awaiting a breakout trigger.
+  - "HOLD" with orderType "NONE": When choppy or unconfirmed; never force a speculative pending order.
+
 You have full visual and interactive control over a live 1440x900 desktop TradingView Supercharts browser session via Playwright tools.
 
 COORDINATE SYSTEM:
@@ -449,11 +471,13 @@ OPERATING RULES:
    - When the user asks you to analyze the chart, find a trade setup, suggest an entry/SL/TP, evaluate market bias, or give a signal: ALWAYS call "generate_trade_setup" so the ready-to-trade setup card appears directly below the chart terminal!
    - You can also draw the corresponding support/resistance, trendline, or horizontal lines on the chart before or after calling generate_trade_setup.
 3. Use click_at, drag_mouse, type_text, press_shortcut, and scroll_at whenever interacting with dialogs, custom indicator settings, watchlists, alerts, Pine Editor, Trading Panel, or fine-tuning drawings.
-4. Dismiss obstructing popups/modals (via press_shortcut("Escape") or click_at on the close X) before drawing on the chart.
-5. ORDER EXECUTION RULE: Never click a final Buy/Sell order execution button via click_at without FIRST calling open_or_submit_order with action="submit_order" so the user's Order Safety Lock is respected.
-6. After every action, inspect the updated screenshot carefully to verify your action succeeded before moving to the next step or finishing.
-7. CHART PERSISTENCE & AUTO-SAVE MANDATE: Whenever any modifications are made to the chart (adding or removing indicators, drawing trendlines, rays, horizontal levels, rectangles, or switching symbols/timeframes), ALWAYS ensure the chart layout is saved (via save_chart_layout or Ctrl+S) so all user work and drawings persist permanently.
-8. When the user's instruction is fully satisfied, stop calling tools and provide a concise, clear summary of everything you performed and any key chart observations (use clean prose, no filler).`;
+4. PENDING ORDERS IN TRADINGVIEW ORDER TICKET:
+   - When opening or configuring a Limit or Stop pending order on TradingView, first open the Order Ticket (via open_or_submit_order action="open_ticket"), then visually inspect the screenshot to click the "Limit" or "Stop" tab inside the TradingView Order Panel, click the Price field and type the exact Limit/Stop entry price, and configure Stop Loss and Take Profit before calling open_or_submit_order action="submit_order".
+5. Dismiss obstructing popups/modals (via press_shortcut("Escape") or click_at on the close X) before drawing on the chart.
+6. ORDER EXECUTION RULE: Never click a final Buy/Sell order execution button via click_at without FIRST calling open_or_submit_order with action="submit_order" so the user's Order Safety Lock is respected.
+7. After every action, inspect the updated screenshot carefully to verify your action succeeded before moving to the next step or finishing.
+8. CHART PERSISTENCE & AUTO-SAVE MANDATE: Whenever any modifications are made to the chart (adding or removing indicators, drawing trendlines, rays, horizontal levels, rectangles, or switching symbols/timeframes), ALWAYS ensure the chart layout is saved (via save_chart_layout or Ctrl+S) so all user work and drawings persist permanently.
+9. When the user's instruction is fully satisfied, stop calling tools and provide a concise, clear summary of everything you performed and any key chart observations (use clean prose, no filler).`;
 
 /**
  * Strips heavy base64 images from older user turns so multi-step loops stay fast and lean,
@@ -471,10 +495,9 @@ function pruneOlderScreenshots(input: any[]): void {
 }
 
 export async function POST(req: NextRequest) {
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
+  if (!hasAnyAiProviderKey()) {
     return new Response(
-      JSON.stringify({ error: 'OPENAI_API_KEY is not configured on the server.' }),
+      JSON.stringify({ error: 'Neither OPENAI_API_KEY nor GEMINI_API_KEY is configured on the server.' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
@@ -641,13 +664,30 @@ export async function POST(req: NextRequest) {
 
             // Handle publishing ready-to-trade setup card
             if (toolName === 'generate_trade_setup') {
-              const signalTypeRaw = String(callArgs.signalType || 'HOLD').toUpperCase();
-              const validSignalType: 'BUY' | 'SELL' | 'HOLD' =
-                signalTypeRaw === 'BUY'
-                  ? 'BUY'
-                  : signalTypeRaw === 'SELL'
-                  ? 'SELL'
-                  : 'HOLD';
+              const validSignalType = normalizeSignalType(callArgs.signalType);
+              const rawCurrentPrice = String(
+                callArgs.currentPrice || callArgs.entryPrice || '—'
+              );
+              const rawEntryPrice = String(callArgs.entryPrice || '—');
+              const rawStopLoss = String(callArgs.stopLoss || '—');
+              const rawTakeProfit1 = String(callArgs.takeProfit1 || '—');
+
+              const validatedOrder = normalizeAndValidateOrderType({
+                signalType: validSignalType,
+                rawOrderType: callArgs.orderType,
+                rawSignalType: callArgs.signalType,
+                currentMarketPrice: rawCurrentPrice,
+                entryPrice: rawEntryPrice,
+                stopLoss: rawStopLoss,
+                takeProfit1: rawTakeProfit1,
+              });
+
+              const displayMeta = resolveOrderTypeDisplay(
+                validSignalType,
+                validatedOrder.orderType,
+                validatedOrder.executionCategory
+              );
+
               const detectedPair =
                 String(callArgs.pair || '').trim() ||
                 initialSnap.pageTitle
@@ -661,18 +701,14 @@ export async function POST(req: NextRequest) {
               const generatedSignal: import('@/lib/trading-data').TradingSignalResponse = {
                 isValidChart: true,
                 signalType: validSignalType,
-                executionCategory:
-                  validSignalType === 'HOLD'
-                    ? 'Stand Aside'
-                    : 'Market Execution',
+                orderType: validatedOrder.orderType,
+                executionCategory: validatedOrder.executionCategory,
                 detectedPair,
                 detectedTimeframe,
-                currentMarketPrice: String(
-                  callArgs.currentPrice || callArgs.entryPrice || '—'
-                ),
-                entryPrice: String(callArgs.entryPrice || '—'),
-                stopLoss: String(callArgs.stopLoss || '—'),
-                takeProfit1: String(callArgs.takeProfit1 || '—'),
+                currentMarketPrice: rawCurrentPrice,
+                entryPrice: validatedOrder.entryPrice,
+                stopLoss: rawStopLoss,
+                takeProfit1: rawTakeProfit1,
                 takeProfit2: String(callArgs.takeProfit2 || '—'),
                 takeProfit3: String(callArgs.takeProfit3 || '—'),
                 preferredTakeProfit: [1, 2, 3].includes(Number(callArgs.preferredTakeProfit))
@@ -712,9 +748,9 @@ export async function POST(req: NextRequest) {
                 invalidationCondition: String(
                   callArgs.invalidationCondition ||
                     (validSignalType === 'BUY'
-                      ? `Break below Stop Loss at ${callArgs.stopLoss}`
+                      ? `Break below Stop Loss at ${rawStopLoss}`
                       : validSignalType === 'SELL'
-                      ? `Break above Stop Loss at ${callArgs.stopLoss}`
+                      ? `Break above Stop Loss at ${rawStopLoss}`
                       : 'Price breaks out of consolidation range.')
                 ),
                 auditTrail: [
@@ -741,12 +777,12 @@ export async function POST(req: NextRequest) {
                   {
                     step: 4,
                     title: 'Execution Coordinates',
-                    finding: `Entry ${callArgs.entryPrice} · SL ${callArgs.stopLoss} · TP1 ${callArgs.takeProfit1} · TP2 ${callArgs.takeProfit2}`,
+                    finding: `${displayMeta.label} (${validatedOrder.executionCategory}) · Entry ${validatedOrder.entryPrice} · SL ${rawStopLoss} · TP1 ${rawTakeProfit1}`,
                   },
                   {
                     step: 5,
                     title: 'Ready-to-Trade Setup',
-                    finding: `${validSignalType} setup published below terminal with R:R ${callArgs.riskRewardRatio}.`,
+                    finding: `${displayMeta.label} setup published below terminal with R:R ${callArgs.riskRewardRatio}.`,
                   },
                 ],
               };
@@ -761,7 +797,7 @@ export async function POST(req: NextRequest) {
                   id: `step-${Date.now()}-${stepsExecuted}`,
                   stepNumber: stepsExecuted,
                   toolName,
-                  description: `Generated ready-to-trade ${validSignalType} setup for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}, SL ${generatedSignal.stopLoss}, TP1 ${generatedSignal.takeProfit1})`,
+                  description: `Generated ready-to-trade ${displayMeta.label} setup for ${detectedPair} (${displayMeta.label} @ ${generatedSignal.entryPrice}, SL ${generatedSignal.stopLoss}, TP1 ${generatedSignal.takeProfit1})`,
                   status: 'done',
                   timestamp: Date.now(),
                 },
@@ -772,7 +808,7 @@ export async function POST(req: NextRequest) {
                 call_id: call.call_id,
                 output: JSON.stringify({
                   ok: true,
-                  result: `Successfully published ready-to-trade setup card below the chart terminal for ${detectedPair} (${validSignalType} @ ${generatedSignal.entryPrice}). The user can now inspect the setup card, 1-click mark levels on chart, or execute the order.`,
+                  result: `Successfully published ready-to-trade ${displayMeta.label} setup card below the chart terminal for ${detectedPair} (@ ${generatedSignal.entryPrice}). The user can now inspect the setup card, 1-click mark levels on chart, or execute the order.`,
                 }),
               });
               continue;

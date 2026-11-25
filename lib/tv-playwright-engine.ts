@@ -1271,6 +1271,13 @@ export async function executeTvAgentTool(
     case 'open_or_submit_order': {
       const action = String(args.action || 'open_ticket').trim();
       const side = String(args.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+      const rawOrderType = String(args.orderType || 'Market').trim();
+      const orderTab = /limit/i.test(rawOrderType)
+        ? 'Limit'
+        : /stop/i.test(rawOrderType)
+        ? 'Stop'
+        : 'Market';
+      const priceHint = args.price ? ` at entry ${String(args.price)}` : '';
 
       if (action === 'open_ticket') {
         await page.keyboard.press('Escape').catch(() => {});
@@ -1278,10 +1285,20 @@ export async function executeTvAgentTool(
         await page.mouse.click(normToPxX(480), normToPxY(450));
         await page.keyboard.press('Shift+KeyT');
         await page.waitForTimeout(850);
+
+        if (orderTab !== 'Market') {
+          await page
+            .locator(`button:has-text("${orderTab}"), [role="tab"]:has-text("${orderTab}")`)
+            .first()
+            .click({ timeout: 1200 })
+            .catch(() => {});
+          await page.waitForTimeout(250);
+        }
+
         return {
           ok: true,
-          resultMessage: `Opened TradingView Order Ticket (${side}). Inspect the order panel on the screenshot to set exact price/SL/TP fields or click Paper Trading if not yet connected.`,
-          humanStepSummary: `Opened ${side} Order Ticket`,
+          resultMessage: `Opened TradingView ${orderTab} Order Ticket (${side}${priceHint}). Inspect the order panel on the screenshot to verify the ${orderTab} tab is active and fill exact price/SL/TP fields before submitting.`,
+          humanStepSummary: `Opened ${side} ${orderTab} Order Ticket`,
         };
       }
 
@@ -1290,8 +1307,8 @@ export async function executeTvAgentTool(
       await page.waitForTimeout(600);
       return {
         ok: true,
-        resultMessage: `Order execution unlocked for ${side}. Use click_at on the visible Order Ticket fields and final ${side} submit button on screen to complete placement.`,
-        humanStepSummary: `Unlocked ${side} order placement`,
+        resultMessage: `Order execution unlocked for ${side} ${orderTab}${priceHint}. Use click_at on the visible Order Ticket fields and final ${side} submit button on screen to complete placement.`,
+        humanStepSummary: `Unlocked ${side} ${orderTab} order placement`,
       };
     }
 

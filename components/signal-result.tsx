@@ -18,6 +18,9 @@ import { motion } from 'motion/react';
 import {
   AnalysisMode,
   AnalysisStageItem,
+  ExecutionCategory,
+  OrderType,
+  resolveOrderTypeDisplay,
   resolveTopDownTimeframePair,
   SignalType,
   TradingSignalResponse,
@@ -43,7 +46,42 @@ interface SignalResultProps {
   onRetry: () => void;
 }
 
-function getSignalMeta(signalType: SignalType) {
+function getSignalMeta(
+  signalType: SignalType,
+  orderType?: OrderType,
+  executionCategory?: ExecutionCategory
+) {
+  const resolved = resolveOrderTypeDisplay(signalType, orderType, executionCategory);
+
+  const executionHint = (() => {
+    switch (resolved.orderType) {
+      case 'BUY_LIMIT':
+        return 'Pending Limit · Long on Pullback';
+      case 'SELL_LIMIT':
+        return 'Pending Limit · Short on Rally';
+      case 'BUY_STOP':
+        return 'Pending Stop · Long on Breakout';
+      case 'SELL_STOP':
+        return 'Pending Stop · Short on Breakdown';
+      case 'NONE':
+        return 'Stand Aside · Await Structure Break';
+      default:
+        return signalType === 'BUY'
+          ? 'Market Long Execution'
+          : signalType === 'SELL'
+          ? 'Market Short Execution'
+          : 'Stand Aside · Await Structure Break';
+    }
+  })();
+
+  const entryFieldLabel = resolved.isLimit
+    ? 'Limit Entry'
+    : resolved.isStop
+    ? 'Stop Entry'
+    : signalType === 'HOLD'
+    ? 'Watch Trigger'
+    : 'Entry Price';
+
   switch (signalType) {
     case 'BUY':
       return {
@@ -51,7 +89,10 @@ function getSignalMeta(signalType: SignalType) {
         textClass: 'text-emerald-400',
         iconBgClass: 'bg-emerald-500/12 text-emerald-400 border-emerald-500/25',
         Icon: ArrowUpRight,
-        executionHint: 'Market Long Execution',
+        headline: resolved.label,
+        isPending: resolved.isPending,
+        executionHint,
+        entryFieldLabel,
       };
     case 'SELL':
       return {
@@ -59,7 +100,10 @@ function getSignalMeta(signalType: SignalType) {
         textClass: 'text-rose-400',
         iconBgClass: 'bg-rose-500/12 text-rose-400 border-rose-500/25',
         Icon: ArrowDownRight,
-        executionHint: 'Market Short Execution',
+        headline: resolved.label,
+        isPending: resolved.isPending,
+        executionHint,
+        entryFieldLabel,
       };
     default:
       return {
@@ -67,7 +111,10 @@ function getSignalMeta(signalType: SignalType) {
         textClass: 'text-amber-400',
         iconBgClass: 'bg-amber-500/12 text-amber-400 border-amber-500/25',
         Icon: PauseCircle,
-        executionHint: 'Stand Aside · Await Structure Break',
+        headline: 'HOLD',
+        isPending: false,
+        executionHint,
+        entryFieldLabel,
       };
   }
 }
@@ -106,11 +153,15 @@ export function SignalResult({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [auditOpen, setAuditOpen] = useState<boolean>(false);
   const [showAllLevels, setShowAllLevels] = useState<boolean>(false);
-  const [liveQuote, setLiveQuote] = useState<{ bid: string; ask: string; timestamp: string; source: string; stale: boolean } | null>(null);
-  const [quoteError, setQuoteError] = useState<string | null>(null);
+  const [liveQuoteState, setLiveQuoteState] = useState<{ pair: string; quote: { bid: string; ask: string; timestamp: string; source: string; stale: boolean } } | null>(null);
+  const [quoteErrorState, setQuoteErrorState] = useState<{ pair: string; error: string } | null>(null);
+
+  const activeQuotePair = signal?.detectedPair || selectedPair;
+  const liveQuote = liveQuoteState?.pair === activeQuotePair ? liveQuoteState.quote : null;
+  const quoteError = quoteErrorState?.pair === activeQuotePair ? quoteErrorState.error : null;
 
   useEffect(() => {
-    const pair = signal?.detectedPair || selectedPair;
+    const pair = activeQuotePair;
     if (!pair) return;
     let active = true;
     const loadQuote = async () => {
@@ -119,18 +170,20 @@ export function SignalResult({
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || 'Live quote unavailable');
         if (active) {
-          setLiveQuote({ bid: String(data.bid), ask: String(data.ask), timestamp: String(data.timestamp), source: String(data.source || 'Public market feed'), stale: Boolean(data.stale) });
-          setQuoteError(null);
+          setLiveQuoteState({
+            pair,
+            quote: { bid: String(data.bid), ask: String(data.ask), timestamp: String(data.timestamp), source: String(data.source || 'Public market feed'), stale: Boolean(data.stale) },
+          });
+          setQuoteErrorState(null);
         }
       } catch (error) {
-        if (active) setQuoteError(error instanceof Error ? error.message : 'Live quote unavailable');
+        if (active) setQuoteErrorState({ pair, error: error instanceof Error ? error.message : 'Live quote unavailable' });
       }
     };
-    setLiveQuote(null);
     void loadQuote();
     const timer = window.setInterval(loadQuote, 5000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [signal?.detectedPair, selectedPair]);
+  }, [activeQuotePair]);
 
   const structureCounts = useMemo(
     () => getStructureLayerCounts(signal),
@@ -253,7 +306,7 @@ export function SignalResult({
               <p className="mt-0.5 text-slate-500">
                 {isCrtReadyMode
                   ? 'CRT Range · Bias · TP1–TP3 Targets'
-                  : 'BUY · SELL with Entry, SL & TP1–TP3'}
+                  : 'Market, Limit & Stop Orders · SL & TP1–TP3'}
               </p>
             </div>
             <div>
@@ -297,7 +350,11 @@ export function SignalResult({
   }
 
   // 5. Populated Signal Execution Ticket
-  const meta = getSignalMeta(signal.signalType);
+  const meta = getSignalMeta(
+    signal.signalType,
+    signal.orderType,
+    signal.executionCategory
+  );
   const DirectionIcon = meta.Icon;
   const entryNum = parseNumericPrice(signal.entryPrice);
   const slNum = parseNumericPrice(signal.stopLoss);
@@ -333,9 +390,9 @@ export function SignalResult({
           `Dominance Verdict: ${crt.alignmentVerdict}`,
         ]
       : []),
-    `Order Type: ${signal.signalType} (${signal.executionCategory})`,
+    `Order Type: ${meta.headline} (${signal.executionCategory})`,
     `Current Market: ${signal.currentMarketPrice}`,
-    `Entry Price: ${signal.entryPrice}`,
+    `${meta.entryFieldLabel}: ${signal.entryPrice}`,
     `Stop Loss: ${signal.stopLoss}`,
     `Take Profit 1: ${signal.takeProfit1}`,
     `Take Profit 2: ${signal.takeProfit2}`,
@@ -377,7 +434,7 @@ export function SignalResult({
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="flex items-center gap-2">
                   <DirectionIcon className={`h-7 w-7 sm:h-9 sm:w-9 ${meta.textClass}`} strokeWidth={2.4} />
-                  <h2 className={`font-[family-name:var(--font-display)] text-4xl font-extrabold leading-none tracking-tight sm:text-5xl ${meta.textClass}`}>{signal.signalType}</h2>
+                  <h2 className={`font-[family-name:var(--font-display)] font-extrabold leading-none tracking-tight ${meta.isPending ? 'text-3xl sm:text-4xl' : 'text-4xl sm:text-5xl'} ${meta.textClass}`}>{meta.headline}</h2>
                 </div>
                 <span className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] sm:text-xs ${signal.signalType === 'BUY' ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : signal.signalType === 'SELL' ? 'border-rose-500/30 bg-rose-500/10 text-rose-300' : 'border-amber-500/30 bg-amber-500/10 text-amber-300'}`}>
                   {signal.signalType === 'BUY' ? 'Bullish' : signal.signalType === 'SELL' ? 'Bearish' : 'Neutral'}
@@ -442,8 +499,8 @@ export function SignalResult({
               {signal.signalType === 'HOLD'
                 ? 'Watch Trigger'
                 : isTopDownCrt
-                ? `${execTfLabel} Entry Price`
-                : 'Entry Price'}
+                ? `${execTfLabel} ${meta.entryFieldLabel}`
+                : meta.entryFieldLabel}
             </div>
             <div className="mt-0.5 font-[family-name:var(--font-mono)] text-lg sm:text-xl font-semibold text-white tabular-nums">
               {signal.entryPrice}

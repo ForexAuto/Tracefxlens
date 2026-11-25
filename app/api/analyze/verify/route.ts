@@ -1,4 +1,8 @@
-import { createOpenAIResponse, extractOpenAIOutputText } from '@/lib/openai';
+import {
+  createOpenAIResponse,
+  extractOpenAIOutputText,
+  hasAnyAiProviderKey,
+} from '@/lib/openai';
 import { NextRequest, NextResponse } from 'next/server';
 import type {
   DetectedPlotBounds,
@@ -8,8 +12,8 @@ import type {
   VisionEnhancementPayload,
 } from '@/lib/trading-data';
 import {
-  deriveExecutionCategory,
   enforceTopDownCrtDominance,
+  normalizeAndValidateOrderType,
   normalizeKeyLevelRole,
   normalizeSignalType,
   parseNumPrice,
@@ -110,7 +114,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signal: draftSignal });
   }
 
-  if (!process.env.OPENAI_API_KEY) {
+  if (!hasAnyAiProviderKey()) {
     return NextResponse.json({ signal: draftSignal });
   }
 
@@ -183,6 +187,7 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
 {
   "selfCheckSummary": "<1 concise sentence describing what was verified or tightened in Pass 2>",
   "signalType": "<BUY|SELL|HOLD>",
+  "orderType": "<MARKET|BUY_LIMIT|SELL_LIMIT|BUY_STOP|SELL_STOP|NONE>",
   "currentMarketPrice": "<exact price>",
   "entryPrice": "<exact price>",
   "stopLoss": "<exact price>",
@@ -196,6 +201,8 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
 
   const compactDraftContext = JSON.stringify({
     signalType: draftSignal.signalType,
+    orderType: draftSignal.orderType,
+    executionCategory: draftSignal.executionCategory,
     detectedPair: draftSignal.detectedPair,
     detectedTimeframe: draftSignal.detectedTimeframe,
     crtContext: draftSignal.crtContext,
@@ -365,6 +372,21 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
       }
 
       const finalSignalType = orderingValid ? nextSignalType : draftSignal.signalType;
+      const finalCurrent = orderingValid ? nextCurrent : draftSignal.currentMarketPrice;
+      const finalEntryRaw = orderingValid ? nextEntry : draftSignal.entryPrice;
+      const finalSl = orderingValid ? nextSl : draftSignal.stopLoss;
+      const finalTp1 = orderingValid ? nextTp1 : draftSignal.takeProfit1;
+
+      const validatedOrder = normalizeAndValidateOrderType({
+        signalType: finalSignalType,
+        rawOrderType: rawObj.orderType ?? draftSignal.orderType,
+        rawSignalType: rawObj.signalType ?? draftSignal.signalType,
+        currentMarketPrice: finalCurrent,
+        entryPrice: finalEntryRaw,
+        stopLoss: finalSl,
+        takeProfit1: finalTp1,
+      });
+
       const updatedMacroContext = draftSignal.macroContext
         ? finalSignalType === draftSignal.signalType
           ? draftSignal.macroContext
@@ -381,11 +403,12 @@ Output ONLY a single valid JSON object (no markdown fences, no commentary) with 
         crtContext: nextCrtContext,
         macroContext: updatedMacroContext,
         signalType: finalSignalType,
-        executionCategory: deriveExecutionCategory(finalSignalType),
-        currentMarketPrice: orderingValid ? nextCurrent : draftSignal.currentMarketPrice,
-        entryPrice: orderingValid ? nextEntry : draftSignal.entryPrice,
-        stopLoss: orderingValid ? nextSl : draftSignal.stopLoss,
-        takeProfit1: orderingValid ? nextTp1 : draftSignal.takeProfit1,
+        orderType: validatedOrder.orderType,
+        executionCategory: validatedOrder.executionCategory,
+        currentMarketPrice: finalCurrent,
+        entryPrice: validatedOrder.entryPrice,
+        stopLoss: finalSl,
+        takeProfit1: finalTp1,
         takeProfit2: orderingValid ? nextTp2 : draftSignal.takeProfit2,
         takeProfit3: orderingValid ? nextTp3 : draftSignal.takeProfit3,
         riskRewardRatio: orderingValid

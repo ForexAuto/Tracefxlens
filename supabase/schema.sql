@@ -15,6 +15,7 @@ create table if not exists public.signal_history (
   pair                   text not null,
   timeframe              text not null,
   signal_type            text not null,
+  order_type             text,
   execution_category     text not null default 'Market Execution',
   current_market_price   text not null default '—',
   entry_price            text not null default '—',
@@ -39,8 +40,11 @@ create table if not exists public.signal_history (
   constraint chk_signal_history_signal_type
     check (signal_type in ('BUY', 'SELL', 'HOLD')),
 
+  constraint chk_signal_history_order_type
+    check (order_type is null or order_type in ('MARKET', 'BUY_LIMIT', 'SELL_LIMIT', 'BUY_STOP', 'SELL_STOP', 'NONE')),
+
   constraint chk_signal_history_execution_category
-    check (execution_category in ('Market Execution', 'Stand Aside')),
+    check (execution_category in ('Market Execution', 'Pending Limit', 'Pending Stop', 'Stand Aside')),
 
   constraint chk_signal_history_outcome_values
     check (outcome is null or outcome in ('WON', 'LOST')),

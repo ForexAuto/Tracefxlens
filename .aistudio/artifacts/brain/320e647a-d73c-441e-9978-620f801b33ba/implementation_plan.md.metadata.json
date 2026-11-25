@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for fully automatic pixel-calibrated chart markup alignment across portrait and landscape TradingView Mobile and MT4/MT5 Mobile screenshots using deterministic Y-axis tick locking, RANSAC price-to-pixel regression, candlestick/wick segmentation, and automatic zone/FVG/BOS/swing snapping.",
-  "updatedAt":  "2026-10-29T18:04:58.997793582Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}

@@ -10,6 +10,7 @@ import type {
   CrtTopDownContext,
   DetectedPlotBounds,
   ExecutionCategory,
+  OrderType,
   SignalType,
   ZoneRole,
 } from '@/lib/trading-data';
@@ -29,9 +30,151 @@ export function normalizeSignalType(raw: unknown): SignalType {
   return 'HOLD';
 }
 
-export function deriveExecutionCategory(signal: SignalType): ExecutionCategory {
-  if (signal === 'BUY' || signal === 'SELL') return 'Market Execution';
-  return 'Stand Aside';
+export function normalizeOrderType(
+  rawOrderType: unknown,
+  signalType: SignalType,
+  rawSignalHint?: unknown
+): OrderType {
+  if (signalType === 'HOLD') return 'NONE';
+
+  const primary = String(rawOrderType || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  const hint = String(rawSignalHint || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, '_');
+  const combined = primary || hint;
+
+  if (combined.includes('LIMIT')) {
+    return signalType === 'BUY' ? 'BUY_LIMIT' : 'SELL_LIMIT';
+  }
+  if (combined.includes('STOP')) {
+    return signalType === 'BUY' ? 'BUY_STOP' : 'SELL_STOP';
+  }
+  return 'MARKET';
+}
+
+export function deriveExecutionCategory(
+  signal: SignalType,
+  orderType?: OrderType
+): ExecutionCategory {
+  if (signal === 'HOLD') return 'Stand Aside';
+  if (orderType === 'BUY_LIMIT' || orderType === 'SELL_LIMIT') {
+    return 'Pending Limit';
+  }
+  if (orderType === 'BUY_STOP' || orderType === 'SELL_STOP') {
+    return 'Pending Stop';
+  }
+  return 'Market Execution';
+}
+
+export function normalizeAndValidateOrderType(params: {
+  signalType: SignalType;
+  rawOrderType?: unknown;
+  rawSignalType?: unknown;
+  currentMarketPrice: string;
+  entryPrice: string;
+  stopLoss: string;
+  takeProfit1: string;
+  atrRaw?: string | number | null;
+}): {
+  orderType: OrderType;
+  executionCategory: ExecutionCategory;
+  entryPrice: string;
+} {
+  const {
+    signalType,
+    rawOrderType,
+    rawSignalType,
+    currentMarketPrice,
+    entryPrice,
+    stopLoss,
+    takeProfit1,
+    atrRaw,
+  } = params;
+
+  if (signalType === 'HOLD') {
+    return {
+      orderType: 'NONE',
+      executionCategory: 'Stand Aside',
+      entryPrice,
+    };
+  }
+
+  const requestedOrderType = normalizeOrderType(
+    rawOrderType,
+    signalType,
+    rawSignalType
+  );
+
+  const cur = parseNumPrice(currentMarketPrice);
+  const entry = parseNumPrice(entryPrice);
+  const sl = parseNumPrice(stopLoss);
+  const tp1 = parseNumPrice(takeProfit1);
+  const atrNum = typeof atrRaw === 'number' ? atrRaw : parseNumPrice(atrRaw);
+
+  if (cur === null || entry === null) {
+    return {
+      orderType: requestedOrderType,
+      executionCategory: deriveExecutionCategory(signalType, requestedOrderType),
+      entryPrice,
+    };
+  }
+
+  const risk = sl !== null ? Math.abs(entry - sl) : null;
+  const pctBand = cur * 0.0012;
+  const atrBand = atrNum !== null && atrNum > 0 ? atrNum * 0.22 : 0;
+  const riskBand = risk !== null && risk > 0 ? risk * 0.18 : 0;
+  const snapThreshold = Math.min(
+    cur * 0.0035,
+    Math.max(pctBand, atrBand, riskBand)
+  );
+  const dist = Math.abs(entry - cur);
+
+  const spotFitsOrdering =
+    sl !== null &&
+    tp1 !== null &&
+    (signalType === 'BUY' ? sl < cur && cur < tp1 : sl > cur && cur > tp1);
+
+  // If entry is already within immediate spot/ATR tolerance, snap to Market Execution
+  if (dist <= snapThreshold) {
+    return {
+      orderType: 'MARKET',
+      executionCategory: 'Market Execution',
+      entryPrice: spotFitsOrdering ? currentMarketPrice : entryPrice,
+    };
+  }
+
+  // If model explicitly asked for MARKET and spot still satisfies SL/TP bounds reasonably closely, preserve MARKET
+  if (
+    requestedOrderType === 'MARKET' &&
+    spotFitsOrdering &&
+    dist <= snapThreshold * 2.5
+  ) {
+    return {
+      orderType: 'MARKET',
+      executionCategory: 'Market Execution',
+      entryPrice: currentMarketPrice,
+    };
+  }
+
+  // Otherwise enforce exact broker-valid Limit vs Stop geometry relative to currentMarketPrice
+  const geometricOrderType: OrderType =
+    signalType === 'BUY'
+      ? entry < cur
+        ? 'BUY_LIMIT'
+        : 'BUY_STOP'
+      : entry > cur
+      ? 'SELL_LIMIT'
+      : 'SELL_STOP';
+
+  return {
+    orderType: geometricOrderType,
+    executionCategory: deriveExecutionCategory(signalType, geometricOrderType),
+    entryPrice,
+  };
 }
 
 export function normalizeCrtBias(raw: unknown): CrtMacroBias {

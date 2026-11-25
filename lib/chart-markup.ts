@@ -1,15 +1,16 @@
-import type {
-  ChartMarkupLiquidity,
-  ChartMarkupSwing,
-  ChartMarkupTrendline,
-  ChartMarkupZone,
-  DetectedAxisTickAnchor,
-  DetectedCandleBar,
-  DetectedCandleEnvelope,
-  DetectedFvgCandidate,
-  DetectedPivotAnchor,
-  SignalType,
-  TradingSignalResponse,
+import {
+  resolveOrderTypeDisplay,
+  type ChartMarkupLiquidity,
+  type ChartMarkupSwing,
+  type ChartMarkupTrendline,
+  type ChartMarkupZone,
+  type DetectedAxisTickAnchor,
+  type DetectedCandleBar,
+  type DetectedCandleEnvelope,
+  type DetectedFvgCandidate,
+  type DetectedPivotAnchor,
+  type SignalType,
+  type TradingSignalResponse,
 } from '@/lib/trading-data';
 import { scanChartOpticalGeometry } from '@/lib/chart-optical-scanner';
 
@@ -1300,13 +1301,18 @@ export function computeResolvedChartMarkup(
         dashed: true,
       });
     }
+    const orderDisplay = resolveOrderTypeDisplay(
+      signal.signalType,
+      signal.orderType,
+      signal.executionCategory
+    );
     rawLevels.push({
       id: 'entry',
-      shortTag: signal.signalType,
+      shortTag: orderDisplay.label,
       priceText: signal.entryPrice,
       y: entryY,
       tone: 'entry',
-      dashed: false,
+      dashed: orderDisplay.isPending,
     });
     if (signal.stopLoss && signal.stopLoss !== '—') {
       rawLevels.push({
@@ -2274,7 +2280,12 @@ export function renderMarkedChartToCanvas(
         : layerFilter === 'structure'
         ? 'Structure Map'
         : 'Primary Setup';
-    const stampText = `TraceFX Lens · ${signal.detectedPair} ${signal.detectedTimeframe} · ${signal.signalType} · ${modeLabel}`;
+    const orderDisplay = resolveOrderTypeDisplay(
+      signal.signalType,
+      signal.orderType,
+      signal.executionCategory
+    );
+    const stampText = `TraceFX Lens · ${signal.detectedPair} ${signal.detectedTimeframe} · ${orderDisplay.label} · ${modeLabel}`;
     ctx.font = `600 ${Math.round(10.5 * unit)}px system-ui, -apple-system, sans-serif`;
     const stW = ctx.measureText(stampText).width;
     const boxW = stW + 16 * unit;
@@ -2328,7 +2339,12 @@ export async function exportMarkedChartPng(
   const dataUrl = canvas.toDataURL('image/png');
   const link = document.createElement('a');
   const cleanPair = signal.detectedPair.replace(/[^a-zA-Z0-9]/g, '');
-  const cleanType = signal.signalType.replace(/\s+/g, '-');
+  const orderDisplay = resolveOrderTypeDisplay(
+    signal.signalType,
+    signal.orderType,
+    signal.executionCategory
+  );
+  const cleanType = orderDisplay.label.replace(/\s+/g, '-');
   const modeSuffix =
     layerFilter === 'setup'
       ? '-LevelsOnly'

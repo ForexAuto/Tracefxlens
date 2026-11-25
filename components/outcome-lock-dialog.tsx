@@ -3,7 +3,11 @@
 import React, { useEffect } from 'react';
 import { Lock, Check, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import type { SignalHistoryRecord, TradeOutcome } from '@/lib/trading-data';
+import {
+  resolveOrderTypeDisplay,
+  type SignalHistoryRecord,
+  type TradeOutcome,
+} from '@/lib/trading-data';
 
 interface OutcomeLockDialogProps {
   open: boolean;
@@ -113,7 +117,11 @@ export function OutcomeLockDialog({
                       : 'text-amber-400'
                   }`}
                 >
-                  {record.signalType}
+                  {resolveOrderTypeDisplay(
+                    record.signalType,
+                    record.orderType,
+                    record.executionCategory
+                  ).label}
                 </span>
               </div>
               <span className="font-[family-name:var(--font-mono)] text-slate-400 tabular-nums">

@@ -4,12 +4,16 @@ import os from 'node:os';
 import path from 'node:path';
 import type {
   ChartMarkupData,
-  ExecutionCategory,
   KeyPriceLevel,
+  OrderType,
   SignalHistoryRecord,
   SignalType,
   TradeOutcome,
 } from '@/lib/trading-data';
+import {
+  deriveExecutionCategory,
+  normalizeOrderType,
+} from '@/lib/signal-sanitizer';
 
 const SUPABASE_TABLE = 'signal_history';
 const FALLBACK_FILE_PATH = path.join(os.tmpdir(), 'tracefx-lens-history-v1.json');
@@ -20,6 +24,7 @@ interface SupabaseHistoryRow {
   pair: string;
   timeframe: string;
   signal_type: string;
+  order_type?: string | null;
   execution_category: string;
   current_market_price: string;
   entry_price: string;
@@ -94,8 +99,12 @@ function normalizeOutcome(raw: unknown): TradeOutcome | null {
 
 function rowToRecord(row: SupabaseHistoryRow): SignalHistoryRecord {
   const signalType = normalizeSignalType(row.signal_type);
-  const executionCategory: ExecutionCategory =
-    signalType === 'HOLD' ? 'Stand Aside' : 'Market Execution';
+  const orderType: OrderType = normalizeOrderType(
+    row.order_type ?? row.execution_category,
+    signalType,
+    row.signal_type
+  );
+  const executionCategory = deriveExecutionCategory(signalType, orderType);
 
   return {
     id: String(row.id),
@@ -103,6 +112,7 @@ function rowToRecord(row: SupabaseHistoryRow): SignalHistoryRecord {
     pair: String(row.pair || 'XAU/USD'),
     timeframe: String(row.timeframe || 'H1'),
     signalType,
+    orderType,
     executionCategory,
     currentMarketPrice: String(row.current_market_price || '—'),
     entryPrice: String(row.entry_price || '—'),
@@ -145,6 +155,7 @@ function recordToRow(rec: SignalHistoryRecord): SupabaseHistoryRow {
     pair: rec.pair,
     timeframe: rec.timeframe,
     signal_type: rec.signalType,
+    order_type: rec.orderType ?? null,
     execution_category: rec.executionCategory,
     current_market_price: rec.currentMarketPrice,
     entry_price: rec.entryPrice,
@@ -211,6 +222,7 @@ export function mergeImmutableRecord(
 
   return {
     ...existing,
+    orderType: existing.orderType || incoming.orderType,
     chartImageUrl: existing.chartImageUrl || incoming.chartImageUrl,
     chartMarkup: existing.chartMarkup || incoming.chartMarkup,
     preferredTakeProfit: existing.preferredTakeProfit || incoming.preferredTakeProfit,
@@ -310,12 +322,27 @@ export async function upsertServerHistoryRecords(
   if (supabase && toUpsertSupabase.length > 0) {
     try {
       // Insert new rows first with ignoreDuplicates so locked Supabase rows are never overwritten
-      await supabase
+      const { error: upsertErr } = await supabase
         .from(SUPABASE_TABLE)
         .upsert(toUpsertSupabase.map(recordToRow), {
           onConflict: 'id',
           ignoreDuplicates: true,
         });
+
+      // Fallback for un-migrated Supabase tables lacking order_type column or Pending check constraint
+      if (upsertErr) {
+        const legacyRows = toUpsertSupabase.map((rec) => {
+          const row = recordToRow(rec);
+          delete row.order_type;
+          row.execution_category =
+            rec.signalType === 'HOLD' ? 'Stand Aside' : 'Market Execution';
+          return row;
+        });
+        await supabase.from(SUPABASE_TABLE).upsert(legacyRows, {
+          onConflict: 'id',
+          ignoreDuplicates: true,
+        });
+      }
 
       // If any incoming synced item already had a locked outcome from client, apply conditional lock where outcome IS NULL
       for (const item of toUpsertSupabase) {

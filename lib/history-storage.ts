@@ -58,6 +58,7 @@ export function buildSignalFingerprint(signal: TradingSignalResponse): string {
     signal.detectedPair.trim().toUpperCase(),
     signal.detectedTimeframe.trim().toUpperCase(),
     signal.signalType,
+    signal.orderType || 'MARKET',
     signal.entryPrice.trim(),
     signal.stopLoss.trim(),
     signal.takeProfit1.trim(),
@@ -119,6 +120,7 @@ function mergeClientServerRecord(
 
   return {
     ...a,
+    orderType: a.orderType || b.orderType,
     analysisMode: a.analysisMode || b.analysisMode,
     crtContext: a.crtContext || b.crtContext,
     macroContext: a.macroContext || b.macroContext,
@@ -264,6 +266,7 @@ export async function recordSignalToHistory(
     crtContext: signal.crtContext,
     macroContext: signal.macroContext,
     signalType: signal.signalType,
+    orderType: signal.orderType,
     executionCategory: signal.executionCategory,
     currentMarketPrice: signal.currentMarketPrice,
     entryPrice: signal.entryPrice,

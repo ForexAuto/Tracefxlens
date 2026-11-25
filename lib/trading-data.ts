@@ -24,6 +24,14 @@ export interface TopDownTimeframePair {
 
 export type SignalType = 'BUY' | 'SELL' | 'HOLD';
 
+export type OrderType =
+  | 'MARKET'
+  | 'BUY_LIMIT'
+  | 'SELL_LIMIT'
+  | 'BUY_STOP'
+  | 'SELL_STOP'
+  | 'NONE';
+
 export type AnalysisMode = 'single' | 'top_down_crt';
 
 export type CrtMacroBias = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -41,7 +49,11 @@ export interface CrtTopDownContext {
   alignmentVerdict: string;
 }
 
-export type ExecutionCategory = 'Market Execution' | 'Stand Aside';
+export type ExecutionCategory =
+  | 'Market Execution'
+  | 'Pending Limit'
+  | 'Pending Stop'
+  | 'Stand Aside';
 
 export type ZoneRole =
   | 'Support'
@@ -316,6 +328,7 @@ export interface TradingSignalResponse {
   crtContext?: CrtTopDownContext;
   macroContext?: MacroCorrelationContext;
   signalType: SignalType;
+  orderType?: OrderType;
   signalConfidence?: number;
   executionCategory: ExecutionCategory;
   detectedPair: string;
@@ -388,6 +401,7 @@ export interface SignalHistoryRecord {
   crtContext?: CrtTopDownContext;
   macroContext?: MacroCorrelationContext;
   signalType: SignalType;
+  orderType?: OrderType;
   signalConfidence?: number;
   executionCategory: ExecutionCategory;
   currentMarketPrice: string;
@@ -410,6 +424,50 @@ export interface SignalHistoryRecord {
   outcome: TradeOutcome | null;
   outcomeLockedAt: string | null;
   createdAt: string;
+}
+
+export function resolveOrderTypeDisplay(
+  signalType: SignalType,
+  orderType?: OrderType,
+  executionCategory?: ExecutionCategory
+): {
+  orderType: OrderType;
+  label: string;
+  isPending: boolean;
+  isLimit: boolean;
+  isStop: boolean;
+} {
+  if (signalType === 'HOLD') {
+    return {
+      orderType: 'NONE',
+      label: 'HOLD',
+      isPending: false,
+      isLimit: false,
+      isStop: false,
+    };
+  }
+
+  let resolved: OrderType = orderType || 'MARKET';
+  if (!orderType && executionCategory) {
+    if (executionCategory === 'Pending Limit') {
+      resolved = signalType === 'BUY' ? 'BUY_LIMIT' : 'SELL_LIMIT';
+    } else if (executionCategory === 'Pending Stop') {
+      resolved = signalType === 'BUY' ? 'BUY_STOP' : 'SELL_STOP';
+    }
+  }
+
+  switch (resolved) {
+    case 'BUY_LIMIT':
+      return { orderType: 'BUY_LIMIT', label: 'BUY LIMIT', isPending: true, isLimit: true, isStop: false };
+    case 'SELL_LIMIT':
+      return { orderType: 'SELL_LIMIT', label: 'SELL LIMIT', isPending: true, isLimit: true, isStop: false };
+    case 'BUY_STOP':
+      return { orderType: 'BUY_STOP', label: 'BUY STOP', isPending: true, isLimit: false, isStop: true };
+    case 'SELL_STOP':
+      return { orderType: 'SELL_STOP', label: 'SELL STOP', isPending: true, isLimit: false, isStop: true };
+    default:
+      return { orderType: 'MARKET', label: signalType, isPending: false, isLimit: false, isStop: false };
+  }
 }
 
 export type AnalyzeStreamEvent =
