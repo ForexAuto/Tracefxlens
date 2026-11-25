@@ -93,7 +93,7 @@ export function normalizeAndValidateOrderType(params: {
   }
 
   // The model chooses the execution strategy. This function only validates it.
-  const requested = String(rawOrderType || '').trim().toUpperCase().replace(/[\\s-]+/g, '_');
+  const requested = String(rawOrderType || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   const allowed: OrderType[] = ['MARKET', 'BUY_LIMIT', 'SELL_LIMIT', 'BUY_STOP', 'SELL_STOP'];
   if (!allowed.includes(requested as OrderType)) {
     return {
