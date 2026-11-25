@@ -416,6 +416,7 @@ const TV_AGENT_TOOLS: Array<{ name: string; description: string; parameters: Rec
       },
       required: [
         'signalType',
+        'orderType',
         'currentPrice',
         'entryPrice',
         'stopLoss',
@@ -440,11 +441,11 @@ TAKE-PROFIT PRIORITY:
 - If none of the targets is justified, return HOLD rather than inventing a target.
 
 ORDER TYPE SELECTION (MARKET vs. PENDING — DO NOT DEFAULT TO PENDING ORDERS):
-- Always specify "orderType" in generate_trade_setup:
-  - "MARKET" (DEFAULT when actionable NOW): Use MARKET whenever price is ALREADY at/inside the POI or has just printed a confirmed CHoCH/BOS/engulfing candle, OR when entryPrice is within ~0.15% of currentPrice. Set entryPrice = currentPrice. Never invent a Limit order merely to inflate R:R!
-  - "BUY_LIMIT" (entryPrice < currentPrice) or "SELL_LIMIT" (entryPrice > currentPrice): Use ONLY when bias/structure is already confirmed and price is clearly separated (> 0.2% away) from an unmitigated pullback FVG/Order Block.
-  - "BUY_STOP" (entryPrice > currentPrice) or "SELL_STOP" (entryPrice < currentPrice): Use ONLY when price is coiled against a key swing high/low awaiting a breakout trigger.
-  - "HOLD" with orderType "NONE": When choppy or unconfirmed; never force a speculative pending order.
+- You choose "orderType" from the live market conditions. The server-side validator checks geometry only and never changes your choice.
+  - MARKET only when the trigger is active now; entryPrice must equal currentPrice.
+  - BUY_LIMIT entry must be strictly below currentPrice; SELL_LIMIT strictly above, and only for a structurally justified pullback/retest.
+  - BUY_STOP entry must be strictly above currentPrice; SELL_STOP strictly below, and only for a structurally justified breakout trigger.
+  - HOLD must use orderType "NONE". Always explicitly provide orderType for BUY/SELL. Never rely on the validator to infer or repair your decision.
 
 You have full visual and interactive control over a live 1440x900 desktop TradingView Supercharts browser session via Playwright tools.
 
@@ -671,6 +672,8 @@ export async function POST(req: NextRequest) {
               const rawEntryPrice = String(callArgs.entryPrice || '—');
               const rawStopLoss = String(callArgs.stopLoss || '—');
               const rawTakeProfit1 = String(callArgs.takeProfit1 || '—');
+              const rawTakeProfit2 = String(callArgs.takeProfit2 || '—');
+              const rawTakeProfit3 = String(callArgs.takeProfit3 || '—');
 
               const validatedOrder = normalizeAndValidateOrderType({
                 signalType: validSignalType,
@@ -680,7 +683,22 @@ export async function POST(req: NextRequest) {
                 entryPrice: rawEntryPrice,
                 stopLoss: rawStopLoss,
                 takeProfit1: rawTakeProfit1,
+                takeProfit2: rawTakeProfit2,
+                takeProfit3: rawTakeProfit3,
               });
+
+              if (!validatedOrder.valid) {
+                toolOutputs.push({
+                  type: 'function_call_output',
+                  call_id: call.call_id,
+                  output: JSON.stringify({
+                    ok: false,
+                    error: validatedOrder.error,
+                    instruction: 'Do not publish a setup. Reassess the chart, choose the execution strategy yourself, and call generate_trade_setup again with corrected order geometry.',
+                  }),
+                });
+                continue;
+              }
 
               const displayMeta = resolveOrderTypeDisplay(
                 validSignalType,
@@ -709,8 +727,8 @@ export async function POST(req: NextRequest) {
                 entryPrice: validatedOrder.entryPrice,
                 stopLoss: rawStopLoss,
                 takeProfit1: rawTakeProfit1,
-                takeProfit2: String(callArgs.takeProfit2 || '—'),
-                takeProfit3: String(callArgs.takeProfit3 || '—'),
+                takeProfit2: rawTakeProfit2,
+                takeProfit3: rawTakeProfit3,
                 preferredTakeProfit: [1, 2, 3].includes(Number(callArgs.preferredTakeProfit))
                   ? (Number(callArgs.preferredTakeProfit) as 1 | 2 | 3)
                   : undefined,
