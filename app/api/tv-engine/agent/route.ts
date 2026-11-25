@@ -717,6 +717,7 @@ export async function POST(req: NextRequest) {
 
               const generatedSignal: import('@/lib/trading-data').TradingSignalResponse = {
                 isValidChart: true,
+                modelRoute: 'PR',
                 signalType: validSignalType,
                 orderType: validatedOrder.orderType,
                 executionCategory: validatedOrder.executionCategory,
