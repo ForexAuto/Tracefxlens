@@ -765,11 +765,12 @@ Line 6 (Final Validated Top-Down CRT Signal Ticket — market analysis only, no 
 TOP-DOWN MARKET ANALYSIS & ORDER TYPE RULES:
 - Analyse the macro chart for directional bias, CRT range, sweep status and higher-timeframe liquidity. Analyse the execution chart for confirmation, entry quality and invalidation. Do not return drawing coordinates or markup objects.
 - Do NOT use double quotes inside finding strings; use single quotes if quoting text.
-- Choose "orderType" carefully (DO NOT default to pending orders):
-  - "MARKET" (DEFAULT when ${executionTf} trigger is ALREADY active): Use MARKET whenever ${macroTf} CRT is valid AND ${executionTf} has already swept/retested its CHoCH/FVG/OB at current price (or entryPrice is within ~0.15% of currentMarketPrice), setting entryPrice = currentMarketPrice.
-  - "BUY_LIMIT" (entryPrice < currentMarketPrice) or "SELL_LIMIT" (entryPrice > currentMarketPrice): Use ONLY when ${macroTf} CRT is valid AND ${executionTf} has ALREADY printed its CHoCH/MSS displacement away from an unmitigated ${executionTf} FVG/OB (> 0.2% away), so waiting for that exact pullback preserves tight ${executionTf} risk.
-  - "BUY_STOP" (entryPrice > currentMarketPrice) or "SELL_STOP" (entryPrice < currentMarketPrice): Use ONLY when ${macroTf} CRT is valid and ${executionTf} is coiled just beneath/above the decisive CHoCH trigger swing.
-  - Whenever h1CrtValid is false OR ${executionTf} has NOT confirmed in ${macroTf}'s direction yet, output "signalType":"HOLD" and "orderType":"NONE" (never replace a HOLD veto with a speculative pending order).
+- You choose "orderType" from the actual ${macroTf}/${executionTf} market conditions. The server validates geometry only and never changes your choice:
+  - MARKET only when the ${executionTf} trigger is active now; entryPrice must equal currentMarketPrice.
+  - BUY_LIMIT entry must be strictly below currentMarketPrice; SELL_LIMIT strictly above, and only for a justified pullback/retest at a confirmed unmitigated ${executionTf} POI.
+  - BUY_STOP entry must be strictly above currentMarketPrice; SELL_STOP strictly below, and only for a justified breakout trigger.
+  - Whenever h1CrtValid is false OR ${executionTf} has NOT confirmed in ${macroTf}'s direction yet, output signalType HOLD and orderType NONE.
+  - Always explicitly provide orderType for BUY/SELL. If your selected type does not match entry geometry, correct your own output rather than relying on the validator.
 - For BUY: stopLoss < entryPrice < takeProfit1 < takeProfit2 < takeProfit3.
 - For SELL: stopLoss > entryPrice > takeProfit1 > takeProfit2 > takeProfit3.
 - Preserve all three targets and choose preferredTakeProfit as 1, 2, or 3 based on the most realistic macro draw on liquidity and execution structure. Explain briefly in preferredTakeProfitReason and calculate R:R against that selected target.`;
