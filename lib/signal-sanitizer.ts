@@ -73,106 +73,119 @@ export function deriveExecutionCategory(
 export function normalizeAndValidateOrderType(params: {
   signalType: SignalType;
   rawOrderType?: unknown;
-  rawSignalType?: unknown;
   currentMarketPrice: string;
   entryPrice: string;
   stopLoss: string;
   takeProfit1: string;
-  atrRaw?: string | number | null;
+  takeProfit2?: string;
+  takeProfit3?: string;
 }): {
+  valid: boolean;
+  error?: string;
   orderType: OrderType;
   executionCategory: ExecutionCategory;
   entryPrice: string;
 } {
-  const {
-    signalType,
-    rawOrderType,
-    rawSignalType,
-    currentMarketPrice,
-    entryPrice,
-    stopLoss,
-    takeProfit1,
-    atrRaw,
-  } = params;
+  const { signalType, rawOrderType, currentMarketPrice, entryPrice, stopLoss, takeProfit1, takeProfit2, takeProfit3 } = params;
 
   if (signalType === 'HOLD') {
+    return { valid: true, orderType: 'NONE', executionCategory: 'Stand Aside', entryPrice };
+  }
+
+  // The model chooses the execution strategy. This function only validates it.
+  const requested = String(rawOrderType || '').trim().toUpperCase().replace(/[\\s-]+/g, '_');
+  const allowed: OrderType[] = ['MARKET', 'BUY_LIMIT', 'SELL_LIMIT', 'BUY_STOP', 'SELL_STOP'];
+  if (!allowed.includes(requested as OrderType)) {
     return {
+      valid: false,
+      error: 'The model did not provide a valid explicit orderType. Re-run the analysis; no execution strategy was inferred.',
       orderType: 'NONE',
       executionCategory: 'Stand Aside',
       entryPrice,
     };
   }
 
-  const requestedOrderType = normalizeOrderType(
-    rawOrderType,
-    signalType,
-    rawSignalType
-  );
-
-  const cur = parseNumPrice(currentMarketPrice);
-  const entry = parseNumPrice(entryPrice);
-  const sl = parseNumPrice(stopLoss);
-  const tp1 = parseNumPrice(takeProfit1);
-  const atrNum = typeof atrRaw === 'number' ? atrRaw : parseNumPrice(atrRaw);
-
-  if (cur === null || entry === null) {
+  const orderType = requested as OrderType;
+  const sideMatches =
+    (signalType === 'BUY' && ['MARKET', 'BUY_LIMIT', 'BUY_STOP'].includes(orderType)) ||
+    (signalType === 'SELL' && ['MARKET', 'SELL_LIMIT', 'SELL_STOP'].includes(orderType));
+  if (!sideMatches) {
     return {
-      orderType: requestedOrderType,
-      executionCategory: deriveExecutionCategory(signalType, requestedOrderType),
+      valid: false,
+      error: `Model selected ${orderType} for a ${signalType} signal. The order side does not match the signal direction.`,
+      orderType: 'NONE',
+      executionCategory: 'Stand Aside',
       entryPrice,
     };
   }
 
-  const risk = sl !== null ? Math.abs(entry - sl) : null;
-  const pctBand = cur * 0.0012;
-  const atrBand = atrNum !== null && atrNum > 0 ? atrNum * 0.22 : 0;
-  const riskBand = risk !== null && risk > 0 ? risk * 0.18 : 0;
-  const snapThreshold = Math.min(
-    cur * 0.0035,
-    Math.max(pctBand, atrBand, riskBand)
-  );
-  const dist = Math.abs(entry - cur);
-
-  const spotFitsOrdering =
-    sl !== null &&
-    tp1 !== null &&
-    (signalType === 'BUY' ? sl < cur && cur < tp1 : sl > cur && cur > tp1);
-
-  // If entry is already within immediate spot/ATR tolerance, snap to Market Execution
-  if (dist <= snapThreshold) {
+  const current = parseNumPrice(currentMarketPrice);
+  const entry = parseNumPrice(entryPrice);
+  const sl = parseNumPrice(stopLoss);
+  const tp1 = parseNumPrice(takeProfit1);
+  const tp2 = parseNumPrice(takeProfit2);
+  const tp3 = parseNumPrice(takeProfit3);
+  if ([current, entry, sl, tp1, tp2, tp3].some((value) => value === null)) {
     return {
-      orderType: 'MARKET',
-      executionCategory: 'Market Execution',
-      entryPrice: spotFitsOrdering ? currentMarketPrice : entryPrice,
+      valid: false,
+      error: 'Cannot validate execution geometry: current price, entry, stop loss, TP1, TP2 and TP3 must all be valid positive numbers.',
+      orderType: 'NONE',
+      executionCategory: 'Stand Aside',
+      entryPrice,
     };
   }
 
-  // If model explicitly asked for MARKET and spot still satisfies SL/TP bounds reasonably closely, preserve MARKET
-  if (
-    requestedOrderType === 'MARKET' &&
-    spotFitsOrdering &&
-    dist <= snapThreshold * 2.5
-  ) {
+  const cur = current as number;
+  const ent = entry as number;
+  const stop = sl as number;
+  const targets = [tp1 as number, tp2 as number, tp3 as number];
+
+  if (orderType === 'MARKET') {
+    // Allow only a tiny quote/rounding difference. Never snap or rewrite the model's entry.
+    const tolerance = Math.max(cur * 0.00005, 1e-8);
+    if (Math.abs(ent - cur) > tolerance) {
+      return {
+        valid: false,
+        error: `MARKET entry must match current market price (within 0.005%). Received entry ${entryPrice}, current price ${currentMarketPrice}. The entry was not changed.`,
+        orderType: 'NONE',
+        executionCategory: 'Stand Aside',
+        entryPrice,
+      };
+    }
+  } else if (orderType === 'BUY_LIMIT' && !(ent < cur)) {
+    return invalidGeometry(orderType, entryPrice, currentMarketPrice, 'BUY_LIMIT entry must be strictly below current market price.');
+  } else if (orderType === 'BUY_STOP' && !(ent > cur)) {
+    return invalidGeometry(orderType, entryPrice, currentMarketPrice, 'BUY_STOP entry must be strictly above current market price.');
+  } else if (orderType === 'SELL_LIMIT' && !(ent > cur)) {
+    return invalidGeometry(orderType, entryPrice, currentMarketPrice, 'SELL_LIMIT entry must be strictly above current market price.');
+  } else if (orderType === 'SELL_STOP' && !(ent < cur)) {
+    return invalidGeometry(orderType, entryPrice, currentMarketPrice, 'SELL_STOP entry must be strictly below current market price.');
+  }
+
+  const levelsValid = signalType === 'BUY'
+    ? stop < ent && ent < targets[0] && targets[0] < targets[1] && targets[1] < targets[2]
+    : stop > ent && ent > targets[0] && targets[0] > targets[1] && targets[1] > targets[2];
+  if (!levelsValid) {
     return {
-      orderType: 'MARKET',
-      executionCategory: 'Market Execution',
-      entryPrice: currentMarketPrice,
+      valid: false,
+      error: signalType === 'BUY'
+        ? 'Invalid BUY price ordering. Required: stopLoss < entryPrice < TP1 < TP2 < TP3.'
+        : 'Invalid SELL price ordering. Required: stopLoss > entryPrice > TP1 > TP2 > TP3.',
+      orderType: 'NONE',
+      executionCategory: 'Stand Aside',
+      entryPrice,
     };
   }
 
-  // Otherwise enforce exact broker-valid Limit vs Stop geometry relative to currentMarketPrice
-  const geometricOrderType: OrderType =
-    signalType === 'BUY'
-      ? entry < cur
-        ? 'BUY_LIMIT'
-        : 'BUY_STOP'
-      : entry > cur
-      ? 'SELL_LIMIT'
-      : 'SELL_STOP';
+  return { valid: true, orderType, executionCategory: deriveExecutionCategory(signalType, orderType), entryPrice };
+}
 
+function invalidGeometry(orderType: OrderType, entryPrice: string, currentMarketPrice: string, reason: string) {
   return {
-    orderType: geometricOrderType,
-    executionCategory: deriveExecutionCategory(signalType, geometricOrderType),
+    valid: false,
+    error: `${reason} Model selected ${orderType} with entry ${entryPrice} and current price ${currentMarketPrice}. The selected strategy was not replaced.`,
+    orderType: 'NONE' as const,
+    executionCategory: 'Stand Aside' as const,
     entryPrice,
   };
 }
