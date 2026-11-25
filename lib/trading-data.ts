@@ -323,6 +323,7 @@ export interface VisionVerificationMeta {
 
 export interface TradingSignalResponse {
   isValidChart: boolean;
+  modelRoute?: 'PR' | 'FB';
   validationMessage?: string;
   analysisMode?: AnalysisMode;
   crtContext?: CrtTopDownContext;
