@@ -31,6 +31,7 @@ function sanitizeIncomingRecord(raw: unknown): SignalHistoryRecord | null {
     fingerprint: String(r.fingerprint || '').slice(0, 240),
     pair: String(r.pair || 'XAU/USD').slice(0, 32),
     timeframe: String(r.timeframe || 'H1').slice(0, 16),
+    modelRoute: r.modelRoute === 'PR' || r.modelRoute === 'FB' ? r.modelRoute : undefined,
     signalType,
     executionCategory,
     currentMarketPrice: String(r.currentMarketPrice || '—').slice(0, 40),
