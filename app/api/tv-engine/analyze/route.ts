@@ -65,10 +65,11 @@ RULES:
    - SELL: Clear bearish market structure, rejection/sweep of buy-side liquidity, bearish FVG/Order Block tap or confirmed bearish breakdown.
    - HOLD: Indecisive chop, midpoint of range without liquidity draw, or unconfirmed structure. Set orderType = "NONE".
 3. ORDER TYPE SELECTION (DO NOT DEFAULT TO PENDING ORDERS):
-   - "MARKET" (DEFAULT when actionable NOW): Use MARKET whenever price is ALREADY at/inside the POI or has just printed a confirmed CHoCH/BOS/engulfing candle, OR when entryPrice is within ~0.15% of currentMarketPrice. Set entryPrice = currentMarketPrice. Never invent a Limit order merely to squeeze a few extra pips of R:R!
-   - "BUY_LIMIT" (entryPrice strictly < currentMarketPrice) or "SELL_LIMIT" (entryPrice strictly > currentMarketPrice): Use ONLY when structure/bias is already confirmed and current price is clearly separated (> 0.2% away) from an unmitigated pullback FVG/Order Block.
-   - "BUY_STOP" (entryPrice strictly > currentMarketPrice) or "SELL_STOP" (entryPrice strictly < currentMarketPrice): Use ONLY when price is coiled against a key structural swing high/low waiting for a breakout trigger.
-   - If HOLD, set orderType = "NONE" and never force a speculative pending order.
+   - You choose the execution strategy from the chart conditions; the server validates geometry but never changes your choice.
+   - MARKET only when the trigger is active now; entryPrice must equal currentMarketPrice.
+   - BUY_LIMIT entry must be strictly below currentMarketPrice; SELL_LIMIT strictly above, and only for a justified pullback/retest.
+   - BUY_STOP entry must be strictly above currentMarketPrice; SELL_STOP strictly below, and only for a justified breakout trigger.
+   - HOLD must use orderType "NONE". Always provide an explicit valid orderType for BUY/SELL; never expect the validator to infer or repair it.
 4. If BUY or SELL:
    - currentMarketPrice: The exact live market price visible on the right-hand axis or last candle close.
    - entryPrice: Exact recommended entry level (equals currentMarketPrice for MARKET, or exact Limit/Stop trigger level for pending orders).
@@ -172,7 +173,16 @@ export async function POST(req: NextRequest) {
       entryPrice: rawEntryPrice,
       stopLoss: rawStopLoss,
       takeProfit1: rawTakeProfit1,
+      takeProfit2: String(parsed.takeProfit2 || '—'),
+      takeProfit3: String(parsed.takeProfit3 || '—'),
     });
+
+    if (!validatedOrder.valid) {
+      return NextResponse.json(
+        { error: `Execution recommendation rejected: ${validatedOrder.error}` },
+        { status: 422 }
+      );
+    }
 
     const displayMeta = resolveOrderTypeDisplay(
       signalType,
