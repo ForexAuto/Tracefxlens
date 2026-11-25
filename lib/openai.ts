@@ -226,12 +226,12 @@ export async function createOpenAIResponseStream(options: OpenAIRequestOptions):
         const { value, done } = await reader.read();
         if (done) break;
         linked.cleanup();
-        buffer += decoder.decode(value, { stream: true }).replace(/\\r\\n/g, '\\n');
-        let split = buffer.indexOf('\\n\\n');
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        let split = buffer.indexOf('\n\n');
         while (split >= 0) {
           const block = buffer.slice(0, split);
           buffer = buffer.slice(split + 2);
-          const data = block.split('\\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\\n');
+          const data = block.split('\n').filter(line => line.startsWith('data:')).map(line => line.slice(5).trim()).join('\n');
           if (data && data !== '[DONE]') {
             const event = JSON.parse(data);
             if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
