@@ -121,6 +121,7 @@ function mergeClientServerRecord(
   return {
     ...a,
     orderType: a.orderType || b.orderType,
+    modelRoute: a.modelRoute || b.modelRoute,
     analysisMode: a.analysisMode || b.analysisMode,
     crtContext: a.crtContext || b.crtContext,
     macroContext: a.macroContext || b.macroContext,
@@ -260,6 +261,7 @@ export async function recordSignalToHistory(
   const newRecord: SignalHistoryRecord = {
     id,
     fingerprint,
+    modelRoute: signal.modelRoute,
     pair: signal.detectedPair,
     timeframe: signal.detectedTimeframe,
     analysisMode: signal.analysisMode,
